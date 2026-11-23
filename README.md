@@ -2,7 +2,7 @@
 
 英語論文（arXiv の HTML 版）を読むための Web アプリです。左ペインに論文本文を表示し、選択した単語・英文を右ペイン（egui / wasm）に表示します。
 
-- 現在の実装範囲: **フェーズ1**（論文表示と選択の取得）
+- 現在の実装範囲: **フェーズ2**（論文表示と選択の取得、ローカル辞書による単語訳）
 - 設計とルール: [CLAUDE.md](CLAUDE.md)
 
 ## 構成
@@ -10,9 +10,10 @@
 | パス | 内容 |
 | --- | --- |
 | `crates/shared` | API の型（server と web で共有） |
-| `crates/server` | axum サーバー（静的配信、`/api/paper`、`/api/health`） |
+| `crates/server` | axum サーバー（静的配信、`/api/paper`、`/api/dict`、`/api/health`） |
 | `crates/web` | eframe アプリ（wasm32-unknown-unknown）、`index.html`、`Trunk.toml`、`assets/` |
-| `data/` | SQLite ファイルなど（git 管理外） |
+| `scripts/import_dict` | 辞書データを SQLite に投入するツール |
+| `data/` | 辞書の元データ、SQLite ファイル（git 管理外） |
 
 ## 必要なもの
 
@@ -31,6 +32,26 @@
   ```
 
   trunk は対応する `wasm-bindgen` CLI を自動でダウンロードします。
+
+## 辞書データ（EJDict-hand）
+
+単語訳には [EJDict-hand](https://github.com/kujirahand/EJDict)（くじらはんど）を使います。
+**パブリックドメイン（CC0 1.0）** の英和辞書で、約 4.6 万語を収録しています。データはリポジトリに含めていないので、各自で入手してください。
+
+```sh
+# どちらか一方
+git clone --depth 1 https://github.com/kujirahand/EJDict data/EJDict        # → data/EJDict/src/*.txt
+# または https://kujirahand.com/web-tools/EJDictFreeDL.php から
+#   テキスト版をダウンロードし、data/ejdict-hand-utf8.txt として置く
+
+# SQLite（DATABASE_URL、既定は data/app.db）の dict テーブルへ投入
+cargo run -p import-dict --release
+# パスを明示する場合: cargo run -p import-dict --release -- path/to/file_or_dir ...
+```
+
+- 形式は「見出し語\t訳」のタブ区切りです。`A,a,an` のようにカンマで並んだ見出し語は、それぞれの語として登録します
+- 見出し語は小文字化します。`ACT`（略語）と `act` のように大文字小文字だけが違う項目は 1 つにまとめ、元から小文字の項目の訳を先に並べます
+- 再実行すると dict テーブルを入れ替えます（サーバーを動かしたままでも実行できます）
 
 ## 開発時の起動
 
@@ -69,13 +90,20 @@ cargo run -p paper-reader-server   # http://127.0.0.1:8080 で UI も配信
 | `STATIC_DIR` | `crates/web/dist` | `trunk build` の出力先 |
 | `ALLOWED_HOSTS` | `arxiv.org,www.arxiv.org` | 論文取得を許可するホスト（https のみ） |
 
-## API（フェーズ1）
+## API
 
 - `GET /api/health` → `{ "server": true, "llm": false }`
 - `GET /api/paper?url=<arXiv URL>` → `{ id, title, html, source_url }`
   - abs / pdf / html の URL から論文 ID を取り出し、`https://arxiv.org/html/<id>` を取得します
   - HTML 版が無い場合は 404 と `{ "error": "..." }`
   - 結果は SQLite の `paper_cache` に論文 ID をキーとして保存します
+- `GET /api/dict?word=<単語>` → `{ query, headword, meanings: [string], related: [{ headword, meanings }] }`
+  - 前後の記号と所有格の 's を除いて小文字化し、完全一致で検索します
+  - 見つからなければ語形変化を還元して順に試します（-ies→-y, -s, -es, -ves→-f/-fe, -ied→-y, -ed/-ing→e/なし,
+    子音重ね（running→run）, -ier/-iest→-y, -er/-est）
+  - 入力した語そのものが見出し語にある場合（running, used など）も、動詞の原形（run, use）を `related` に入れます。
+    辞書の「goの過去」「childの複数形」のような記述からも原形（go, child）を取り出します
+  - 見つからない場合は `headword: null`。辞書が未投入なら 503
 
 ## テストと静的解析
 

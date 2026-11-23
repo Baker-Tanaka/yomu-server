@@ -16,6 +16,8 @@ pub enum AppError {
     Upstream(String),
     #[error("{0}")]
     UpstreamTimeout(String),
+    #[error("{0}")]
+    ServiceUnavailable(String),
     #[error("サーバー内部でエラーが発生しました")]
     Internal(#[from] anyhow::Error),
 }
@@ -27,6 +29,7 @@ impl AppError {
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Upstream(_) => StatusCode::BAD_GATEWAY,
             AppError::UpstreamTimeout(_) => StatusCode::GATEWAY_TIMEOUT,
+            AppError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use eframe::egui;
-use paper_reader_shared::Mode;
+use paper_reader_shared::{DictEntry, DictResponse, Mode};
 
 use crate::dom::{self, SelectionInfo};
 
@@ -23,11 +23,63 @@ enum PaperStatus {
     Error(String),
 }
 
+/// 辞書の検索状態。
+#[derive(Debug, Clone, Default)]
+enum DictStatus {
+    /// 単語が選択されていない
+    #[default]
+    Idle,
+    Loading,
+    Loaded(DictResponse),
+    Error(String),
+}
+
 /// DOM のイベントや非同期処理と共有する状態。
 #[derive(Default)]
 struct Shared {
     paper: PaperStatus,
     selection: Option<SelectionInfo>,
+    dict: DictStatus,
+    /// 選択ごとに増える番号。古い選択に対する応答を捨てるために使う
+    selection_seq: u64,
+}
+
+impl Shared {
+    /// 新しい選択を反映し、単語なら辞書を引き始める。
+    fn on_select(this: &Rc<RefCell<Self>>, ctx: &egui::Context, info: SelectionInfo) {
+        let (seq, word) = {
+            let mut s = this.borrow_mut();
+            s.selection_seq += 1;
+            let word = (info.mode == Mode::Word).then(|| info.text.clone());
+            s.dict = if word.is_some() {
+                DictStatus::Loading
+            } else {
+                DictStatus::Idle
+            };
+            s.selection = Some(info);
+            (s.selection_seq, word)
+        };
+        ctx.request_repaint();
+
+        let Some(word) = word else {
+            return;
+        };
+        let this = this.clone();
+        let ctx = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = crate::api::fetch_dict(&word).await;
+            let mut s = this.borrow_mut();
+            // 応答待ちの間に別の選択が来ていたら、この結果は捨てる
+            if s.selection_seq != seq {
+                return;
+            }
+            s.dict = match result {
+                Ok(r) => DictStatus::Loaded(r),
+                Err(e) => DictStatus::Error(e),
+            };
+            ctx.request_repaint();
+        });
+    }
 }
 
 pub struct PaperReaderApp {
@@ -53,8 +105,7 @@ impl PaperReaderApp {
         let ctx = cc.egui_ctx.clone();
         let shared_for_dom = shared.clone();
         if let Err(e) = dom::watch_selection(move |info| {
-            shared_for_dom.borrow_mut().selection = Some(info);
-            ctx.request_repaint();
+            Shared::on_select(&shared_for_dom, &ctx, info);
         }) {
             log::error!("選択の監視を開始できません: {e}");
         }
@@ -80,6 +131,8 @@ impl PaperReaderApp {
                 Ok(paper) => {
                     dom::set_paper_html(&paper.html, &paper.title);
                     shared.selection = None;
+                    shared.dict = DictStatus::Idle;
+                    shared.selection_seq += 1;
                     shared.paper = PaperStatus::Loaded {
                         id: paper.id,
                         title: paper.title,
@@ -154,6 +207,13 @@ impl PaperReaderApp {
             return;
         };
 
+        if sel.mode == Mode::Word {
+            dict_view(ui, &shared.dict);
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+        }
+
         ui.horizontal(|ui| {
             ui.heading("選択中のテキスト");
             let (label, color) = match sel.mode {
@@ -196,6 +256,110 @@ impl eframe::App for PaperReaderApp {
                 .show(ui, |ui| self.selection_view(ui));
         });
     }
+}
+
+/// 辞書の結果（見出し語と訳のリスト）。
+fn dict_view(ui: &mut egui::Ui, status: &DictStatus) {
+    match status {
+        DictStatus::Idle => {}
+        DictStatus::Loading => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak("辞書を検索中…");
+            });
+        }
+        DictStatus::Error(e) => {
+            ui.colored_label(ui.visuals().error_fg_color, format!("辞書: {e}"));
+        }
+        DictStatus::Loaded(r) => match &r.headword {
+            None => {
+                ui.weak(format!("「{}」は辞書に見つかりませんでした。", r.query));
+            }
+            Some(headword) => {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new(headword)
+                            .size(24.0)
+                            .strong()
+                            .color(ui.visuals().strong_text_color()),
+                    );
+                    if *headword != r.query {
+                        ui.weak(format!("（{} の原形）", r.query));
+                    }
+                });
+                ui.add_space(2.0);
+                meanings_list(ui, &r.meanings);
+                for entry in &r.related {
+                    related_view(ui, entry);
+                }
+            }
+        },
+    }
+}
+
+fn related_view(ui: &mut egui::Ui, entry: &DictEntry) {
+    ui.add_space(8.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.weak("原形の候補:");
+        ui.label(
+            egui::RichText::new(&entry.headword)
+                .size(18.0)
+                .strong()
+                .color(ui.visuals().strong_text_color()),
+        );
+    });
+    meanings_list(ui, &entry.meanings);
+}
+
+/// 訳を番号付きで並べる。元データの『』で囲まれた重要な訳は強調色で表示する。
+fn meanings_list(ui: &mut egui::Ui, meanings: &[String]) {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let normal = ui.visuals().text_color();
+    let strong = ui.visuals().strong_text_color();
+    let accent = ui.visuals().hyperlink_color;
+    for (i, meaning) in meanings.iter().enumerate() {
+        let mut job = egui::text::LayoutJob::default();
+        job.append(
+            &format!("{}. ", i + 1),
+            0.0,
+            egui::TextFormat::simple(font.clone(), accent),
+        );
+        for (text, emphasized) in split_emphasis(meaning) {
+            let color = if emphasized { strong } else { normal };
+            let mut format = egui::TextFormat::simple(font.clone(), color);
+            if emphasized {
+                format.underline = egui::Stroke::new(1.0, accent);
+            }
+            job.append(text, 0.0, format);
+        }
+        ui.label(job);
+    }
+}
+
+/// "『走る』,駆ける" → [("走る", true), (",駆ける", false)]
+fn split_emphasis(s: &str) -> Vec<(&str, bool)> {
+    let mut out = Vec::new();
+    let mut rest = s;
+    while let Some(start) = rest.find('『') {
+        if start > 0 {
+            out.push((&rest[..start], false));
+        }
+        let after = &rest[start + '『'.len_utf8()..];
+        match after.find('』') {
+            Some(end) => {
+                out.push((&after[..end], true));
+                rest = &after[end + '』'.len_utf8()..];
+            }
+            None => {
+                rest = after;
+                break;
+            }
+        }
+    }
+    if !rest.is_empty() {
+        out.push((rest, false));
+    }
+    out
 }
 
 /// Noto Sans JP を追加して日本語を表示できるようにする。

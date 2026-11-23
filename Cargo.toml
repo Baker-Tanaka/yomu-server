@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/shared", "crates/server", "crates/web"]
-default-members = ["crates/shared", "crates/server"]
+members = ["crates/shared", "crates/server", "crates/web", "scripts/import_dict"]
+default-members = ["crates/shared", "crates/server", "scripts/import_dict"]
 
 [workspace.package]
 version = "0.1.0"

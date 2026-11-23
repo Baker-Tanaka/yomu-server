@@ -1,6 +1,6 @@
 //! サーバー API の呼び出し（fetch）。
 
-use paper_reader_shared::{ErrorResponse, PaperResponse};
+use paper_reader_shared::{DictResponse, ErrorResponse, PaperResponse};
 use serde::de::DeserializeOwned;
 use wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_futures::JsFuture;
@@ -9,6 +9,11 @@ use web_sys::Response;
 pub async fn fetch_paper(url: &str) -> Result<PaperResponse, String> {
     let encoded = String::from(js_sys::encode_uri_component(url));
     get_json(&format!("/api/paper?url={encoded}")).await
+}
+
+pub async fn fetch_dict(word: &str) -> Result<DictResponse, String> {
+    let encoded = String::from(js_sys::encode_uri_component(word));
+    get_json(&format!("/api/dict?word={encoded}")).await
 }
 
 async fn get_json<T: DeserializeOwned>(path: &str) -> Result<T, String> {

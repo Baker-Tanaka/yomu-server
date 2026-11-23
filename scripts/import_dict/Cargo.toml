@@ -1,0 +1,12 @@
+[package]
+name = "import-dict"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow = "1.0.105"
+dotenvy = "0.15.7"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros"] }
+sqlx = { version = "0.9.1", default-features = false, features = ["sqlite", "runtime-tokio", "migrate", "macros"] }

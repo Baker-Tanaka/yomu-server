@@ -33,6 +33,32 @@ pub struct HealthResponse {
     pub llm: Option<bool>,
 }
 
+/// `GET /api/dict?word=` のクエリ。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DictQuery {
+    pub word: String,
+}
+
+/// 辞書の 1 項目。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DictEntry {
+    pub headword: String,
+    /// 元データの " / " 区切りで分割した訳。`『』` は重要な訳を示す（元データの記法）
+    pub meanings: Vec<String>,
+}
+
+/// `GET /api/dict` の応答。見つからなければ `headword` は `None`、`meanings` は空。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DictResponse {
+    /// 正規化（記号除去・小文字化）した検索語
+    pub query: String,
+    pub headword: Option<String>,
+    pub meanings: Vec<String>,
+    /// 関連する見出し語（"running" に対する "run"、"went" に対する "go" など）
+    #[serde(default)]
+    pub related: Vec<DictEntry>,
+}
+
 /// 解説のモード。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]

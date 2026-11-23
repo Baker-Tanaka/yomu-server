@@ -1,6 +1,7 @@
 mod arxiv;
 mod config;
 mod db;
+mod dict;
 mod error;
 mod paper;
 mod sanitize;
@@ -75,6 +76,7 @@ fn router(state: AppState, config: &Config) -> Router {
     let api = Router::new()
         .route("/health", get(health))
         .route("/paper", get(paper::get_paper))
+        .route("/dict", get(dict::get_dict))
         .fallback(|| async { AppError::NotFound("API が見つかりません".into()) });
 
     let index = config.static_dir.join("index.html");

@@ -1,0 +1,6 @@
+/target
+/crates/web/dist
+/data/*
+!/data/.gitkeep
+.env
+.DS_Store

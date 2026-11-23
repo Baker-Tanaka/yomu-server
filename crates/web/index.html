@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>論文リーダー</title>
+  <link data-trunk rel="rust" href="Cargo.toml" data-bin="paper-reader-web" data-wasm-opt="z" />
+  <link data-trunk rel="css" href="assets/paper.css" />
+</head>
+<body>
+  <div id="layout">
+    <main id="paper" lang="en">
+      <div class="paper-placeholder" lang="ja">
+        <h1>論文リーダー</h1>
+        <p>右のパネルに arXiv の論文 URL（abs / pdf / html いずれも可）を入力して「開く」を押してください。</p>
+        <p>本文の単語をダブルクリックするか、英文をドラッグして選択すると、右のパネルに表示されます。</p>
+      </div>
+    </main>
+    <aside id="explain-pane">
+      <canvas id="egui_canvas"></canvas>
+    </aside>
+  </div>
+</body>
+</html>

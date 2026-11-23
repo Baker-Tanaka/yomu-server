@@ -1,0 +1,74 @@
+# プロジェクト概要
+英語論文を読むための Web アプリ「paper-reader」を作る。
+- 論文本文はブラウザの DOM で表示し、ユーザーが選択した単語・英文を取得する
+- 単語はローカル辞書で即座に和訳し、英文はローカル LLM で「和訳・文構造・文法解説」を日本語でストリーミング表示する
+- 解説 UI は egui（eframe）を wasm にビルドして表示する
+- サーバー・LLM・DB はすべて 1 台の MacBook Air（M2, 16GB）で動かす
+
+# アーキテクチャ
+ブラウザ
+  ├─ 左ペイン: <div id="paper">  … サーバーが無害化した論文 HTML を表示（DOM）
+  └─ 右ペイン: <canvas id="egui_canvas"> … egui の解説 UI
+        │  HTTPS（tailscale serve が 127.0.0.1:8080 へ転送）
+MacBook Air
+  ├─ Rust サーバー（axum, 127.0.0.1:8080）… 静的配信 / 論文取得 / 辞書 / LLM 中継
+  ├─ LLM ランタイム（Ollama または llama.cpp の llama-server, 127.0.0.1 のみ）
+  └─ SQLite（辞書・解説キャッシュ・論文キャッシュ）
+外部: arxiv.org（サーバーからのみアクセス）
+
+すべて同一オリジンで配信するため CORS 設定は不要。LLM ランタイムを外部に公開してはいけない。
+
+# リポジトリ構成（Cargo workspace）
+paper-reader/（このリポジトリのルート）
+├─ Cargo.toml            # workspace
+├─ crates/
+│  ├─ shared/            # API の型（serde）。server と web の両方から使う
+│  ├─ server/            # axum サーバー
+│  └─ web/               # eframe アプリ（wasm32-unknown-unknown）
+│     ├─ index.html      # 2 ペインのレイアウト、#paper と #egui_canvas
+│     ├─ Trunk.toml      # 開発時 /api を 127.0.0.1:8080 へ proxy
+│     └─ assets/         # 日本語フォント（Noto Sans JP サブセット）, paper.css
+├─ data/                 # 辞書の元データ, SQLite ファイル（git 管理外）
+├─ scripts/              # 辞書インポートなど
+└─ deploy/               # launchd plist, 起動スクリプト
+
+# 主要ライブラリ
+server: axum, tokio, tower-http (ServeDir, compression, trace), reqwest (rustls), ammonia, scraper,
+        sqlx (sqlite, runtime-tokio), serde, serde_json, tracing, tracing-subscriber, anyhow, thiserror, sha2
+web:    eframe（egui）, egui_commonmark, wasm-bindgen, wasm-bindgen-futures, web-sys, js-sys, serde, serde_json
+ツール: trunk, wasm-opt, sqlx-cli（必要なら）
+クレートのバージョンは実装時点の最新安定版を使い、eframe の Web 起動 API などはそのバージョンのドキュメントに合わせること。
+
+# API（型は crates/shared に定義）
+GET  /                          … trunk build の成果物（dist/）を配信
+GET  /api/paper?url=<arxiv URL> … 論文を取得し、無害化した本文 HTML とメタ情報を JSON で返す
+GET  /api/dict?word=<word>      … ローカル辞書で引いた結果を返す（見出し語、訳のリスト）
+POST /api/explain               … body: { mode: "word" | "sentence", text, context }
+                                   レスポンスは text/event-stream（SSE 形式）で解説を逐次送る
+GET  /api/health                … サーバーと LLM ランタイムの疎通確認
+
+# 設定（環境変数, .env 可）
+BIND_ADDR=127.0.0.1:8080
+LLM_BASE_URL=http://127.0.0.1:11434/v1   # OpenAI 互換 API（Ollama / llama-server 共通）
+LLM_MODEL=<モデル名>
+DATABASE_URL=sqlite://data/app.db
+STATIC_DIR=crates/web/dist
+ALLOWED_HOSTS=arxiv.org,www.arxiv.org
+
+# 守るべきルール
+- セキュリティ
+  - /api/paper は SSRF 対策として ALLOWED_HOSTS のホストへの https のみ許可する。リダイレクト先も検証する
+  - 取得した HTML は必ず ammonia で無害化してから返す。script, style 属性, on* 属性, iframe, form は除去する。
+    MathML（math, mi, mo, mn, msup, msub, mfrac, mrow, msqrt, mtext, semantics, annotation など）と、
+    表・図・見出し・段落・リストは残す。相対 URL の img src は絶対 URL に書き換える
+  - LLM への入力文字数に上限を設ける（例: text 2,000 文字、context 4,000 文字）
+- 信頼性
+  - LLM への同時リクエストは tokio::sync::Semaphore で 1 件に制限し、待機中は SSE で「順番待ち」を送る
+  - クライアントが切断したら LLM へのストリームも中断する
+  - reqwest にタイムアウトを設定する
+  - サーバーのハンドラ内で unwrap / expect を使わず、エラーは JSON（{ error: string }）と適切なステータスで返す
+- 品質
+  - cargo fmt, cargo clippy -- -D warnings を通す
+  - server の純粋なロジック（URL 検証、HTML 無害化、辞書の語形処理、キャッシュキー生成）には単体テストを書く
+  - web クレートは wasm 専用。clippy は `cargo clippy -p paper-reader-web --target wasm32-unknown-unknown -- -D warnings` でも確認する
+- UI の文言は日本語

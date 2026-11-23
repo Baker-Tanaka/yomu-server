@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["crates/shared", "crates/server", "crates/web"]
+default-members = ["crates/shared", "crates/server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+paper-reader-shared = { path = "crates/shared" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+# wasm のサイズを抑える
+[profile.release.package.paper-reader-web]
+opt-level = "z"

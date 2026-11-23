@@ -1,0 +1,178 @@
+/* レイアウト: 左 60% 論文 / 右 40% egui。各ペインは独立スクロール */
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+#layout {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+}
+
+#paper {
+  flex: 0 0 60%;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 2rem 2.5rem 6rem;
+  border-right: 1px solid #d0d0d0;
+  background: #fff;
+  color: #1a1a1a;
+  font-family: "Charter", "Georgia", "Times New Roman", "Hiragino Mincho ProN", serif;
+  font-size: 17px;
+  line-height: 1.7;
+  -webkit-text-size-adjust: 100%;
+}
+
+#explain-pane {
+  flex: 1 1 40%;
+  min-width: 0;
+  position: relative;
+}
+
+#egui_canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+}
+
+/* 本文 */
+#paper > * {
+  max-width: 46rem;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+#paper h1, #paper h2, #paper h3, #paper h4 {
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Hiragino Sans", sans-serif;
+  line-height: 1.3;
+  margin: 1.6em 0 0.6em;
+}
+#paper h1 { font-size: 1.7em; }
+#paper h2 { font-size: 1.35em; }
+#paper h3 { font-size: 1.15em; }
+
+#paper p { margin: 0 0 1em; }
+#paper a { color: #1a5fb4; text-decoration: none; }
+#paper a:hover { text-decoration: underline; }
+
+#paper ::selection { background: #ffe08a; }
+
+/* 図・表 */
+#paper img {
+  max-width: 100%;
+  height: auto;
+}
+#paper figure {
+  margin: 1.5em 0;
+  text-align: center;
+  overflow-x: auto;
+}
+#paper figcaption {
+  font-size: 0.9em;
+  text-align: left;
+  margin-top: 0.5em;
+  color: #333;
+}
+#paper table {
+  border-collapse: collapse;
+  margin: 0 auto;
+  font-size: 0.92em;
+}
+#paper td, #paper th {
+  padding: 0.2em 0.5em;
+}
+#paper .ltx_border_t { border-top: 1px solid #666; }
+#paper .ltx_border_b { border-bottom: 1px solid #666; }
+#paper .ltx_border_tt { border-top: 2px solid #333; }
+#paper .ltx_border_bb { border-bottom: 2px solid #333; }
+#paper .ltx_border_r { border-right: 1px solid #666; }
+#paper .ltx_border_l { border-left: 1px solid #666; }
+
+/* 数式（MathML） */
+#paper math {
+  font-family: "STIX Two Math", "Latin Modern Math", "Cambria Math", math;
+  font-size: 1.05em;
+}
+#paper math[display="block"] {
+  display: block math;
+  margin: 0.8em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+#paper .ltx_equation, #paper .ltx_equationgroup {
+  width: 100%;
+  overflow-x: auto;
+  margin: 1em 0;
+}
+#paper .ltx_eqn_cell { padding: 0; }
+#paper .ltx_eqn_center_padleft, #paper .ltx_eqn_center_padright { width: 50%; }
+#paper .ltx_tag_equation { font-size: 0.9em; color: #444; }
+#paper annotation, #paper annotation-xml { display: none; }
+
+/* LaTeXML の脚注・著者注はホバー時だけ表示 */
+#paper .ltx_note { position: relative; }
+#paper .ltx_note_outer { display: none; }
+#paper .ltx_note:hover .ltx_note_outer {
+  display: block;
+  position: absolute;
+  z-index: 10;
+  left: 0;
+  top: 1.4em;
+  width: 22rem;
+  max-width: 70vw;
+  padding: 0.6em 0.8em;
+  font-size: 0.85em;
+  line-height: 1.5;
+  background: #fffbe6;
+  border: 1px solid #d8c88a;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+#paper .ltx_note_mark { color: #1a5fb4; }
+
+#paper .ltx_authors { font-size: 0.92em; color: #333; margin-bottom: 1.5em; }
+#paper .ltx_abstract { font-size: 0.96em; margin: 1.5em 0 2em; }
+#paper .ltx_bibliography { font-size: 0.9em; }
+#paper .ltx_bibitem { margin-bottom: 0.6em; }
+#paper .ltx_centering, #paper .ltx_align_center { text-align: center; }
+#paper .ltx_font_bold { font-weight: bold; }
+#paper .ltx_font_italic { font-style: italic; }
+#paper .ltx_font_typewriter { font-family: ui-monospace, Menlo, monospace; }
+#paper .ltx_ERROR { color: #b00; }
+
+#paper pre, #paper code {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.88em;
+}
+#paper pre { overflow-x: auto; }
+
+/* プレースホルダーとエラー */
+.paper-placeholder {
+  color: #555;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+  margin-top: 4rem !important;
+}
+.fatal-error {
+  background: #fdecea;
+  color: #8a1c1c;
+  border: 1px solid #f5c2bd;
+  padding: 0.8em 1em;
+  border-radius: 4px;
+  margin-bottom: 1em;
+}
+
+/* 狭い画面（iPhone など）では上下に並べる */
+@media (max-width: 800px) {
+  #layout { flex-direction: column; }
+  #paper {
+    flex: 0 0 60%;
+    border-right: none;
+    border-bottom: 1px solid #d0d0d0;
+    padding: 1rem 1rem 4rem;
+    font-size: 16px;
+  }
+  #explain-pane { flex: 1 1 40%; min-height: 0; }
+}

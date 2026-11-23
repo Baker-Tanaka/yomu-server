@@ -1,0 +1,13 @@
+[build]
+target = "index.html"
+dist = "dist"
+
+[serve]
+# サーバー（8080）と衝突しないポート
+addresses = ["127.0.0.1"]
+port = 8000
+open = false
+
+# 開発時は /api/ を Rust サーバーへ転送する
+[[proxy]]
+backend = "http://127.0.0.1:8080/api/"

@@ -8,7 +8,7 @@ use axum::extract::rejection::QueryRejection;
 use axum::extract::{Query, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use paper_reader_shared::{DeletePaperQuery, RecentPapersResponse};
+use paper_reader_shared::{DeletePaperQuery, RecentPaper, RecentPapersResponse};
 use serde::Deserialize;
 use url::Url;
 
@@ -25,9 +25,11 @@ const MAX_ASSET_BYTES: usize = 15 * 1024 * 1024;
 pub const ASSET_PATH: &str = "/api/paper-asset";
 
 pub async fn get_papers(State(state): State<AppState>) -> AppResult<Json<RecentPapersResponse>> {
-    let papers = db::list_visits(&state.db, LIST_LIMIT)
+    let papers = db::list_visits(&state.db, LIST_LIMIT * 2)
         .await
         .map_err(|e| AppError::Internal(e.into()))?;
+    let mut papers = merge_versions(papers);
+    papers.truncate(LIST_LIMIT as usize);
     let cache = db::cache_stats(&state.db)
         .await
         .map_err(|e| AppError::Internal(e.into()))?;
@@ -40,7 +42,12 @@ pub async fn delete_paper(
 ) -> AppResult<StatusCode> {
     let Query(q) = query.map_err(|_| AppError::BadRequest("id を指定してください".into()))?;
     let id = q.id.trim();
-    if id.is_empty() || id.len() > 64 {
+    let valid = !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'/'));
+    if !valid {
         return Err(AppError::BadRequest("論文 ID が不正です".into()));
     }
     let deleted = db::delete_visit(&state.db, id, q.purge)
@@ -51,6 +58,27 @@ pub async fn delete_paper(
     } else {
         Err(AppError::NotFound("その論文は一覧にありません".into()))
     }
+}
+
+/// 同じ論文の版違い（`2509.19480` と `2509.19480v1`）を 1 件にまとめる。
+///
+/// 入力は最後に開いた順。まとめた行は、最も最近開いた版の ID・タイトル・キャッシュの有無を使い、
+/// 開いた回数と単語・英文の数は合計する。
+pub fn merge_versions(papers: Vec<RecentPaper>) -> Vec<RecentPaper> {
+    let mut out: Vec<RecentPaper> = Vec::with_capacity(papers.len());
+    for p in papers {
+        let base = arxiv::base_id(&p.id).to_string();
+        match out.iter_mut().find(|q| arxiv::base_id(&q.id) == base) {
+            Some(q) => {
+                q.open_count += p.open_count;
+                q.word_count += p.word_count;
+                q.sentence_count += p.sentence_count;
+                q.cached |= p.cached && q.id == p.id;
+            }
+            None => out.push(p),
+        }
+    }
+    out
 }
 
 #[derive(Debug, Deserialize)]
@@ -248,6 +276,38 @@ mod tests {
         assert!(out.starts_with("<p>a</p>") && out.ends_with("tail"));
         // img が無ければ変わらない
         assert_eq!(proxy_images("<p>x</p>", &hosts()), "<p>x</p>");
+    }
+
+    fn paper(id: &str, t: i64, words: i64) -> RecentPaper {
+        RecentPaper {
+            id: id.into(),
+            title: format!("title {id}"),
+            source_url: String::new(),
+            last_opened_at: t,
+            open_count: 1,
+            word_count: words,
+            sentence_count: 1,
+            cached: true,
+        }
+    }
+
+    #[test]
+    fn versions_are_merged() {
+        let merged = merge_versions(vec![
+            paper("2509.19480", 30, 25),
+            paper("1706.03762", 20, 1),
+            paper("2509.19480v1", 10, 11),
+        ]);
+        let ids: Vec<_> = merged.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["2509.19480", "1706.03762"]);
+        assert_eq!(
+            (
+                merged[0].open_count,
+                merged[0].word_count,
+                merged[0].sentence_count
+            ),
+            (2, 36, 2)
+        );
     }
 
     #[test]

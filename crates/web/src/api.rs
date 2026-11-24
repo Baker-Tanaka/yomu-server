@@ -90,6 +90,21 @@ async fn post_json<T: DeserializeOwned, B: Serialize>(
     }
 }
 
+pub async fn fetch_papers() -> Result<paper_reader_shared::RecentPapersResponse, String> {
+    get_json("/api/papers").await
+}
+
+/// 見た論文から外す。`purge` なら本文と図のキャッシュも消す。
+pub async fn delete_paper(id: &str, purge: bool) -> Result<(), String> {
+    let encoded = String::from(js_sys::encode_uri_component(id));
+    send_without_body(
+        "DELETE",
+        &format!("/api/papers?id={encoded}&purge={purge}"),
+        None,
+    )
+    .await
+}
+
 pub async fn fetch_grammar_map() -> Result<GrammarMapResponse, String> {
     get_json("/api/grammar-map").await
 }

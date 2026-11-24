@@ -241,23 +241,29 @@ pub async fn list_visits(pool: &SqlitePool, limit: i64) -> sqlx::Result<Vec<Rece
         .collect())
 }
 
-/// 見た論文から外す。`purge` なら本文と図のキャッシュも消す（単語・英文の履歴は残す）。消えたら true。
+/// 見た論文から外す（版違い `<id>v1` なども含めて）。`purge` なら本文と図のキャッシュも消す
+/// （単語・英文の履歴は残す）。消えたら true。
 pub async fn delete_visit(pool: &SqlitePool, id: &str, purge: bool) -> sqlx::Result<bool> {
+    let base = crate::arxiv::base_id(id);
+    // LIKE の特殊文字（% _）は論文 ID に含まれない（呼び出し側で検証済み）
+    let versions = format!("{base}v%");
     let mut tx = pool.begin().await?;
-    let removed = sqlx::query("DELETE FROM paper_visits WHERE paper_id = ?")
-        .bind(id)
+    let removed = sqlx::query("DELETE FROM paper_visits WHERE paper_id = ? OR paper_id LIKE ?")
+        .bind(base)
+        .bind(&versions)
         .execute(&mut *tx)
         .await?
         .rows_affected();
     let mut purged = 0;
     if purge {
-        purged += sqlx::query("DELETE FROM paper_cache WHERE id = ?")
-            .bind(id)
+        purged += sqlx::query("DELETE FROM paper_cache WHERE id = ? OR id LIKE ?")
+            .bind(base)
+            .bind(&versions)
             .execute(&mut *tx)
             .await?
             .rows_affected();
         sqlx::query("DELETE FROM paper_assets WHERE paper_id = ?")
-            .bind(crate::arxiv::base_id(id))
+            .bind(base)
             .execute(&mut *tx)
             .await?;
     }

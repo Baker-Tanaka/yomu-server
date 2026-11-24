@@ -15,7 +15,7 @@ use paper_reader_shared::{
 use crate::dom;
 use crate::state::{
     self, DictStatus, ExplainPhase, FeedbackStage, GrammarOrder, GrammarStatus, HealthStatus,
-    HistoryScope, HistoryStatus, PaperStatus, Shared, SharedRef, Tab,
+    HistoryScope, HistoryStatus, PaperStatus, PapersStatus, Shared, SharedRef, Tab,
 };
 use crate::theme::{self, Palette};
 
@@ -362,6 +362,11 @@ impl PaperReaderApp {
         };
         let Some(sel) = sel else {
             empty_explain(ui, &p, has_paper, self.is_mobile());
+            if !has_paper {
+                // 論文を開く前は、最近見た論文からすぐ開けるようにする
+                ui.add_space(10.0);
+                self.recent_papers(ui, &p, Some(5));
+            }
             return;
         };
 
@@ -783,6 +788,82 @@ impl PaperReaderApp {
 
     // ───────────── 履歴タブ ─────────────
 
+    /// 見た論文の一覧（最後に開いた順）。`limit` があればその件数だけ出す（使用量や管理の操作は出さない）。
+    fn recent_papers(&mut self, ui: &mut egui::Ui, p: &Palette, limit: Option<usize>) {
+        let ctx = ui.ctx().clone();
+        if self.shared.borrow().papers_stale {
+            state::refresh_papers(&self.shared, &ctx);
+        }
+        let status = self.shared.borrow().papers.clone();
+        let resp = match status {
+            PapersStatus::NotLoaded | PapersStatus::Loading => {
+                if limit.is_none() {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(RichText::new("見た論文を読み込み中…").color(p.weak));
+                    });
+                }
+                return;
+            }
+            PapersStatus::Error(e) => {
+                if limit.is_none() {
+                    notice(ui, p, &format!("見た論文: {e}"));
+                }
+                return;
+            }
+            PapersStatus::Loaded(r) => r,
+        };
+        if resp.papers.is_empty() {
+            if limit.is_none() {
+                ui.label(
+                    RichText::new(
+                        "まだ論文を開いていません。開いた論文はここに残り、次からはここから開けます。",
+                    )
+                    .color(p.weak),
+                );
+            }
+            return;
+        }
+
+        if limit.is_some() {
+            theme::section_title(ui, "最近見た論文");
+        } else {
+            let c = &resp.cache;
+            ui.label(
+                RichText::new(format!(
+                    "{} 本 · Mac に保存: 本文 {} 本（{}）・図 {} 枚（{}）",
+                    resp.papers.len(),
+                    c.papers,
+                    format_bytes(c.html_bytes),
+                    c.assets,
+                    format_bytes(c.asset_bytes)
+                ))
+                .size(12.0)
+                .color(p.weak),
+            );
+        }
+        ui.add_space(4.0);
+
+        let current = self.shared.borrow().paper_ref().map(|(id, _)| id);
+        let mut action = None;
+        for paper in resp.papers.iter().take(limit.unwrap_or(usize::MAX)) {
+            let is_open = current.as_deref() == Some(paper.id.as_str());
+            if let Some(a) = paper_row(ui, p, paper, is_open, limit.is_none()) {
+                action = Some(a);
+            }
+            ui.add_space(6.0);
+        }
+        match action {
+            Some(PaperAction::Open(id)) => {
+                state::open_paper(&self.shared, &ctx, format!("https://arxiv.org/abs/{id}"));
+            }
+            Some(PaperAction::Remove { id, purge }) => {
+                state::delete_recent_paper(&self.shared, &ctx, id, purge);
+            }
+            None => {}
+        }
+    }
+
     fn history_tab(&mut self, ui: &mut egui::Ui) {
         let p = theme::palette(ui.ctx());
         let ctx = ui.ctx().clone();
@@ -800,13 +881,16 @@ impl PaperReaderApp {
                 ui,
                 &mut new_scope,
                 &[
+                    (HistoryScope::Papers, "見た論文"),
                     (HistoryScope::ThisPaper, "この論文"),
                     (HistoryScope::AllPapers, "すべて"),
                 ],
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if theme::subtle_button(ui, "↻ 更新").clicked() {
-                    self.shared.borrow_mut().history_stale = true;
+                    let mut s = self.shared.borrow_mut();
+                    s.history_stale = true;
+                    s.papers_stale = true;
                 }
             });
         });
@@ -816,6 +900,10 @@ impl PaperReaderApp {
             s.history_stale = true;
         }
         ui.add_space(8.0);
+        if new_scope == HistoryScope::Papers {
+            self.recent_papers(ui, &p, None);
+            return;
+        }
 
         let status = self.shared.borrow().history.clone();
         let entries = match status {
@@ -1999,5 +2087,121 @@ fn grammar_tag_row(
                 course_short,
             );
         });
+    }
+}
+
+enum PaperAction {
+    Open(String),
+    Remove { id: String, purge: bool },
+}
+
+/// 見た論文 1 件。タイトルか「開く」で開く。`manage` なら一覧から外す操作も出す。
+fn paper_row(
+    ui: &mut egui::Ui,
+    p: &Palette,
+    paper: &paper_reader_shared::RecentPaper,
+    is_open: bool,
+    manage: bool,
+) -> Option<PaperAction> {
+    let mut action = None;
+    theme::card(ui, |ui| {
+        let title = ui
+            .add(
+                egui::Label::new(
+                    RichText::new(&paper.title)
+                        .size(15.0)
+                        .strong()
+                        .color(p.strong),
+                )
+                .sense(egui::Sense::click()),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if title.clicked() && !is_open {
+            action = Some(PaperAction::Open(paper.id.clone()));
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new(format!("arXiv:{}", paper.id))
+                    .size(12.0)
+                    .color(p.weak),
+            );
+            ui.label(
+                RichText::new(format!(
+                    "{} · {} 回",
+                    format_time(paper.last_opened_at),
+                    paper.open_count
+                ))
+                .size(12.0)
+                .color(p.weak),
+            );
+            if paper.word_count > 0 {
+                theme::chip(
+                    ui,
+                    &format!("単語 {}", paper.word_count),
+                    p.word,
+                    p.word_soft,
+                );
+            }
+            if paper.sentence_count > 0 {
+                theme::chip(
+                    ui,
+                    &format!("英文 {}", paper.sentence_count),
+                    p.sentence,
+                    p.sentence_soft,
+                );
+            }
+        });
+        ui.horizontal(|ui| {
+            if is_open {
+                theme::chip(ui, "表示中", p.ok, p.ok.gamma_multiply(0.15));
+            } else if theme::primary_button(ui, "開く", true).clicked() {
+                action = Some(PaperAction::Open(paper.id.clone()));
+            }
+            if paper.cached {
+                ui.label(RichText::new("✓ Mac に保存済み").size(12.0).color(p.ok))
+                    .on_hover_text("arXiv にアクセスせずに開けます（図は一度表示したものを保存）");
+            }
+            if manage {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.menu_button(RichText::new("…").color(p.weak), |ui| {
+                        if ui.button("一覧から外す").clicked() {
+                            action = Some(PaperAction::Remove {
+                                id: paper.id.clone(),
+                                purge: false,
+                            });
+                            ui.close();
+                        }
+                        if ui
+                            .button("一覧から外して、保存した本文と図も削除")
+                            .clicked()
+                        {
+                            action = Some(PaperAction::Remove {
+                                id: paper.id.clone(),
+                                purge: true,
+                            });
+                            ui.close();
+                        }
+                        ui.label(
+                            RichText::new("調べた単語・英文の履歴は残ります")
+                                .size(11.5)
+                                .color(p.weak),
+                        );
+                    });
+                });
+            }
+        });
+    });
+    action
+}
+
+/// 1234567 → "1.2 MB"
+fn format_bytes(n: i64) -> String {
+    let n = n.max(0) as f64;
+    if n >= 1024.0 * 1024.0 {
+        format!("{:.1} MB", n / 1024.0 / 1024.0)
+    } else if n >= 1024.0 {
+        format!("{:.0} KB", n / 1024.0)
+    } else {
+        format!("{n:.0} B")
     }
 }

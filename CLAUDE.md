@@ -42,6 +42,9 @@ web:    eframe（egui）, egui_commonmark, wasm-bindgen, wasm-bindgen-futures, w
 # API（型は crates/shared に定義）
 GET  /                          … trunk build の成果物（dist/）を配信
 GET  /api/paper?url=<arxiv URL> … 論文を取得し、無害化した本文 HTML とメタ情報を JSON で返す
+GET  /api/papers                … 見た論文の一覧（最後に開いた順、版違いはまとめる）とキャッシュの使用量
+DELETE /api/papers?id=&purge=   … 見た論文から外す（purge なら保存した本文と図も消す）
+GET  /api/paper-asset?url=      … 論文の図をサーバー経由で配信し SQLite に保存する（ALLOWED_HOSTS の https で /html/ 以下の画像のみ）
 GET  /api/dict?word=<word>      … ローカル辞書で引いた結果を返す（見出し語、訳のリスト）
 POST /api/explain               … body: { mode: "word" | "sentence", text, context }
                                    レスポンスは text/event-stream（SSE 形式）で解説を逐次送る

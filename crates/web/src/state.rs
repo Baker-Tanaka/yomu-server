@@ -221,10 +221,23 @@ impl Search {
 /// 履歴タブで表示する範囲。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum HistoryScope {
-    /// 表示中の論文だけ
+    /// 見た論文の一覧
     #[default]
+    Papers,
+    /// 表示中の論文の単語・英文
     ThisPaper,
+    /// すべての論文の単語・英文
     AllPapers,
+}
+
+/// 見た論文の一覧の状態。
+#[derive(Debug, Clone, Default)]
+pub enum PapersStatus {
+    #[default]
+    NotLoaded,
+    Loading,
+    Loaded(paper_reader_shared::RecentPapersResponse),
+    Error(String),
 }
 
 /// LLM の疎通状態。
@@ -256,6 +269,9 @@ pub struct Shared {
     pub history_stale: bool,
     /// 履歴の読み込みごとに増える番号（古い応答を捨てる）
     history_seq: u64,
+    pub papers: PapersStatus,
+    /// 見た論文の一覧を読み直す
+    pub papers_stale: bool,
     pub grammar: GrammarStatus,
     pub grammar_order: GrammarOrder,
     /// 出現回数などが変わったので、次に文法項目タブを表示するときに読み直す
@@ -270,6 +286,7 @@ impl Shared {
         Self {
             show_course: dom::load_bool(SHOW_COURSE_KEY, true),
             grammar_stale: true,
+            papers_stale: true,
             ..Self::default()
         }
     }
@@ -636,6 +653,7 @@ pub fn open_paper(this: &SharedRef, ctx: &egui::Context, url: String) {
                 s.selection_seq += 1;
                 s.explain.reset();
                 s.history_stale = true;
+                s.papers_stale = true;
                 s.tab = Tab::Explain;
                 // スマホでは本文を広く見せる
                 if dom::is_mobile() {
@@ -690,6 +708,11 @@ pub fn refresh_history(this: &SharedRef, ctx: &egui::Context) {
         s.history_stale = false;
         s.history_seq += 1;
         let paper = match s.history_scope {
+            // 見た論文の一覧は refresh_papers で読む
+            HistoryScope::Papers => {
+                s.papers_stale = true;
+                return;
+            }
             HistoryScope::ThisPaper => match s.paper_ref() {
                 Some((id, _)) => Some(id),
                 None => {
@@ -960,5 +983,43 @@ pub fn retry_feedback(this: &SharedRef, ctx: &egui::Context, id: i64) {
             }
         }
         refresh_feedback_list(&this, &ctx);
+    });
+}
+
+/// 見た論文の一覧を読み込む。
+pub fn refresh_papers(this: &SharedRef, ctx: &egui::Context) {
+    {
+        let mut s = this.borrow_mut();
+        s.papers_stale = false;
+        if !matches!(s.papers, PapersStatus::Loaded(_)) {
+            s.papers = PapersStatus::Loading;
+        }
+    }
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::fetch_papers().await;
+        this.borrow_mut().papers = match result {
+            Ok(r) => PapersStatus::Loaded(r),
+            Err(e) => PapersStatus::Error(e),
+        };
+        ctx.request_repaint();
+    });
+}
+
+/// 見た論文から外す（`purge` なら保存した本文と図も消す）。
+pub fn delete_recent_paper(this: &SharedRef, ctx: &egui::Context, id: String, purge: bool) {
+    if let PapersStatus::Loaded(r) = &mut this.borrow_mut().papers {
+        r.papers.retain(|p| p.id != id);
+    }
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Err(e) = crate::api::delete_paper(&id, purge).await {
+            log::warn!("論文を一覧から外せません: {e}");
+        }
+        // キャッシュの使用量も変わるので読み直す
+        this.borrow_mut().papers_stale = true;
+        ctx.request_repaint();
     });
 }

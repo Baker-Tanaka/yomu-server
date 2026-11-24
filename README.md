@@ -112,6 +112,9 @@ trunk serve
     カテゴリ → 項目 → レッスンの一覧と、解説した英文での出現回数（よく出る順）を見られます
   - 右上の ⚙ で「講座の案内を表示する」をオフにすると、チップは文法項目の名前だけになります
 
+- **見た論文**: 開いた論文は「履歴」タブの「見た論文」に残り（最後に開いた順・開いた回数・調べた単語と英文の数）、そこから開けます。
+  論文を開く前の「解説」タブにも最近の 5 本が出ます。「…」から一覧から外す（保存した本文と図も消すこともできる）
+- **論文の保存**: 開いた論文の本文と図は Mac（SQLite）に保存され、2 回目からは arXiv にアクセスせずに表示します
 - **論文を開く・探す**: 解説ペイン上部の欄に、arXiv の URL・ID（`1706.03762`、`arXiv:2301.12345v2` など）を入れると「開く」、
   それ以外の語を入れると「検索」になります。検索結果は「検索」タブに並び、「読む」かタイトルで開きます
   - 題名をそのまま入れると題名で探します（`attention is all you need`）。`"..."` で語句、`ti:` `au:` `abs:` `cat:` で欄を指定できます
@@ -359,6 +362,12 @@ tailscale serve status
   - 最後まで生成できた解説は `explain_cache` に保存します。キーは `sha256(LLM_MODEL, mode, text, context, プロンプトのバージョン)`。
     次に同じ解説を頼まれたら LLM を呼ばずに `event: cached` → `event: token`（全文）→ `event: done` を返します。
     `regenerate: true` ならキャッシュを使わずに生成し、結果で上書きします
+- `GET /api/papers` → `{ papers: [{ id, title, source_url, last_opened_at, open_count, word_count, sentence_count, cached }], cache: { papers, html_bytes, assets, asset_bytes } }`
+  - 開いた論文の記録（paper_visits）。同じ論文の版違い（`2509.19480` と `2509.19480v1`）は 1 件にまとめる
+- `DELETE /api/papers?id=<論文 ID>&purge=<true|false>` → 204（版違いも含めて外す。purge なら本文と図のキャッシュも消す。単語・英文の履歴は残す）
+- `GET /api/paper-asset?url=<図の URL>` → 画像
+  - `/api/paper` が返す HTML の `<img src>` はこの経路に書き換えてある。初回だけ arXiv から取得して SQLite（paper_assets）に保存する
+  - 取得先は ALLOWED_HOSTS の https で `/html/` 以下、画像（image/*）だけ、1 枚 15MB まで。`Content-Security-Policy: sandbox` と `nosniff` を付ける
 - `GET /api/search?q=<検索語>&start=<0〜>&sort=relevance|newest` → `{ total, start, items: [{ id, title, authors, summary, published, primary_category }] }`
   - arXiv API（`https://export.arxiv.org/api/query`）で 20 件ずつ検索します。宛先は固定で、クエリはサーバーで組み立てます
   - 語はすべて含む（AND）。is / of などのストップワードは除きます（arXiv では AND に入れると 0 件になるため）。

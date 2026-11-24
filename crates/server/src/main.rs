@@ -11,6 +11,7 @@ mod grammar_api;
 mod history;
 mod llm;
 mod paper;
+mod papers;
 mod prompts;
 mod sanitize;
 mod search;
@@ -161,6 +162,11 @@ fn router(state: AppState, config: &Config) -> Router {
     let api = Router::new()
         .route("/health", get(health))
         .route("/paper", get(paper::get_paper))
+        .route(
+            "/papers",
+            get(papers::get_papers).delete(papers::delete_paper),
+        )
+        .route("/paper-asset", get(papers::get_asset))
         .route("/dict", get(dict::get_dict))
         .route("/search", get(search::get_search))
         .route("/explain", post(explain::post_explain))

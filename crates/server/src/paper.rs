@@ -50,7 +50,7 @@ pub async fn get_paper(
 
     if let Some(cached) = crate::db::get_paper(&state.db, &id).await? {
         tracing::debug!(%id, "paper cache hit");
-        return Ok(Json(cached));
+        return Ok(Json(respond(&state, cached).await));
     }
 
     let source = arxiv::html_url(&id);
@@ -85,7 +85,16 @@ pub async fn get_paper(
         // キャッシュの失敗は応答を妨げない
         tracing::warn!(error = %e, "failed to cache paper");
     }
-    Ok(Json(paper))
+    Ok(Json(respond(&state, paper).await))
+}
+
+/// 見た論文として記録し、図をサーバー経由（キャッシュ）に書き換えて返す。
+async fn respond(state: &AppState, mut paper: PaperResponse) -> PaperResponse {
+    if let Err(e) = crate::db::record_visit(&state.db, &paper).await {
+        tracing::warn!(error = %e, "failed to record paper visit");
+    }
+    paper.html = crate::papers::proxy_images(&paper.html, &state.config.allowed_hosts);
+    paper
 }
 
 async fn fetch_html(client: &reqwest::Client, url: Url) -> AppResult<(Url, String)> {

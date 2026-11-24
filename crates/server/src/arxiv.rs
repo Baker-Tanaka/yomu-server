@@ -112,6 +112,16 @@ fn version_ok(v: Option<&str>) -> bool {
     }
 }
 
+/// バージョンを除いた論文 ID（`2301.00001v2` → `2301.00001`、`hep-th/9901001v1` → `hep-th/9901001`）。
+pub fn base_id(id: &str) -> &str {
+    let (body, version) = split_version(id);
+    if version.is_some() && version_ok(version) && !body.is_empty() {
+        body
+    } else {
+        id
+    }
+}
+
 /// 論文 ID から HTML 版の URL を作る。
 pub fn html_url(id: &str) -> String {
     format!("https://arxiv.org/html/{id}")

@@ -4,19 +4,22 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use eframe::egui;
+use eframe::egui::{self, Margin, RichText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
-use paper_reader_shared::{DictEntry, HistoryEntry, Mode};
+use paper_reader_shared::{
+    DictEntry, HistoryEntry, Mode, SearchItem, SearchSort, paper_url_from_input,
+};
 
 use crate::dom;
 use crate::state::{
     self, DictStatus, ExplainPhase, HealthStatus, HistoryScope, HistoryStatus, PaperStatus, Shared,
     SharedRef, Tab,
 };
+use crate::theme::{self, Palette};
 
 pub struct PaperReaderApp {
     shared: SharedRef,
-    url_input: String,
+    input: String,
     markdown_cache: CommonMarkCache,
     theme: dom::ThemeChoice,
 }
@@ -24,15 +27,7 @@ pub struct PaperReaderApp {
 impl PaperReaderApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         install_fonts(&cc.egui_ctx);
-        cc.egui_ctx.all_styles_mut(|style| {
-            for (text_style, font) in style.text_styles.iter_mut() {
-                font.size = match text_style {
-                    egui::TextStyle::Heading => 20.0,
-                    egui::TextStyle::Small => 11.0,
-                    _ => 15.0,
-                };
-            }
-        });
+        theme::install(&cc.egui_ctx);
 
         let shared: SharedRef = Rc::new(RefCell::new(Shared::default()));
 
@@ -60,48 +55,157 @@ impl PaperReaderApp {
 
         Self {
             shared,
-            url_input: String::new(),
+            input: String::new(),
             markdown_cache: CommonMarkCache::default(),
             theme,
         }
     }
 
-    fn url_bar(&mut self, ui: &mut egui::Ui) {
+    // ───────────── ヘッダー ─────────────
+
+    fn header(&mut self, ui: &mut egui::Ui) {
+        let p = theme::palette(ui.ctx());
+        ui.horizontal(|ui| {
+            logo(ui, &p);
+            ui.label(
+                RichText::new("論文リーダー")
+                    .size(17.0)
+                    .strong()
+                    .color(p.strong),
+            );
+            ui.label(RichText::new("for arXiv").size(11.5).color(p.weak));
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (label, next, tip) = match self.theme {
+                    dom::ThemeChoice::System => (
+                        "◐ 自動",
+                        dom::ThemeChoice::Light,
+                        "OS の設定に合わせています。クリックでライトに",
+                    ),
+                    dom::ThemeChoice::Light => {
+                        ("☀ ライト", dom::ThemeChoice::Dark, "クリックでダークに")
+                    }
+                    dom::ThemeChoice::Dark => (
+                        "☾ ダーク",
+                        dom::ThemeChoice::System,
+                        "クリックで自動（OS の設定）に",
+                    ),
+                };
+                if theme::subtle_button(ui, label).on_hover_text(tip).clicked() {
+                    self.theme = next;
+                    dom::apply_theme(next);
+                    set_theme(ui.ctx(), next);
+                }
+                self.llm_status(ui, &p);
+            });
+        });
+    }
+
+    /// LLM の状態（丸と短い文言。詳しくはホバーで、クリックで再確認）。
+    fn llm_status(&self, ui: &mut egui::Ui, p: &Palette) {
+        let (color, text, detail) = match &self.shared.borrow().health {
+            HealthStatus::Checking => (
+                p.weak,
+                "確認中".to_string(),
+                "LLM の状態を確認しています".to_string(),
+            ),
+            HealthStatus::Error(e) => (
+                p.error,
+                "接続エラー".into(),
+                format!("サーバーに接続できません: {e}"),
+            ),
+            HealthStatus::Ok(h) => match (h.llm, h.model_available) {
+                (Some(true), Some(true)) => {
+                    (p.ok, "LLM 準備完了".into(), format!("モデル: {}", h.model))
+                }
+                (Some(true), _) => (
+                    p.error,
+                    "モデルなし".into(),
+                    format!(
+                        "LLM は起動していますが、モデル「{}」がありません（ollama pull {}）",
+                        h.model, h.model
+                    ),
+                ),
+                _ => (
+                    p.error,
+                    "LLM 停止中".into(),
+                    "LLM ランタイムに接続できません（Ollama が起動しているか確認してください）"
+                        .into(),
+                ),
+            },
+        };
+        // 丸 + 文言の角丸ラベルを、内容の大きさぴったりに描く
+        let galley = ui
+            .painter()
+            .layout_no_wrap(text, theme::body_font(12.0), p.text);
+        let size = egui::vec2(9.0 + 8.0 + 5.0 + galley.size().x + 10.0, 24.0);
+        let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+        let painter = ui.painter();
+        painter.rect_filled(rect, 12.0, color.gamma_multiply(0.14));
+        painter.circle_filled(egui::pos2(rect.left() + 13.0, rect.center().y), 4.0, color);
+        painter.galley(
+            egui::pos2(rect.left() + 22.0, rect.center().y - galley.size().y / 2.0),
+            galley,
+            p.text,
+        );
+        let resp = resp
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(format!("{detail}\nクリックで再確認"));
+        if resp.clicked() {
+            state::refresh_health(&self.shared, ui.ctx());
+        }
+    }
+
+    // ───────────── 入力欄と論文 ─────────────
+
+    fn input_bar(&mut self, ui: &mut egui::Ui) {
         let loading = matches!(self.shared.borrow().paper, PaperStatus::Loading);
+        let is_paper = paper_url_from_input(&self.input).is_some();
+        let label = if is_paper { "開く" } else { "検索" };
         let mut submit = false;
         ui.horizontal(|ui| {
-            let button_width = 56.0;
+            let button_width = 64.0;
             let edit = ui.add_sized(
-                [ui.available_width() - button_width - 8.0, 28.0],
-                egui::TextEdit::singleline(&mut self.url_input)
-                    .hint_text("arXiv の URL（例: https://arxiv.org/abs/1706.03762）"),
+                [ui.available_width() - button_width - 8.0, 34.0],
+                egui::TextEdit::singleline(&mut self.input)
+                    .hint_text("arXiv の URL・ID、またはキーワードで検索")
+                    .margin(Margin::symmetric(10, 8)),
             );
             if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 submit = true;
             }
-            if ui
-                .add_enabled(
-                    !loading,
-                    egui::Button::new("開く").min_size([button_width, 28.0].into()),
-                )
-                .clicked()
-            {
-                submit = true;
-            }
+            ui.scope(|ui| {
+                ui.set_min_size(egui::vec2(button_width, 34.0));
+                let enabled = !self.input.trim().is_empty() && !(is_paper && loading);
+                if theme::primary_button(ui, label, enabled)
+                    .on_hover_text(if is_paper {
+                        "この論文を開きます"
+                    } else {
+                        "arXiv で論文を検索します"
+                    })
+                    .clicked()
+                {
+                    submit = true;
+                }
+            });
         });
-        let url = self.url_input.trim().to_string();
-        if submit && !loading && !url.is_empty() {
-            state::open_paper(&self.shared, ui.ctx(), url);
+        if submit && !(is_paper && loading) {
+            state::submit_input(&self.shared, ui.ctx(), &self.input);
         }
+    }
 
-        match &self.shared.borrow().paper {
-            PaperStatus::Empty => {
-                ui.weak("論文の URL を入力して「開く」を押してください。");
-            }
+    fn paper_card(&mut self, ui: &mut egui::Ui) {
+        let p = theme::palette(ui.ctx());
+        let paper = self.shared.borrow().paper.clone();
+        match paper {
+            PaperStatus::Empty => {}
             PaperStatus::Loading => {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("論文を読み込み中…");
+                ui.add_space(8.0);
+                theme::card(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(RichText::new("論文を読み込み中…").color(p.weak));
+                    });
                 });
             }
             PaperStatus::Loaded {
@@ -109,215 +213,46 @@ impl PaperReaderApp {
                 title,
                 source_url,
             } => {
-                ui.label(egui::RichText::new(title).strong());
-                ui.horizontal_wrapped(|ui| {
-                    ui.weak(format!("arXiv:{id}"));
-                    ui.hyperlink_to("原文", source_url);
+                ui.add_space(8.0);
+                theme::card(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        theme::chip(ui, &format!("arXiv:{id}"), p.accent, p.accent_soft);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.hyperlink_to(RichText::new("原文 ↗").size(12.5), source_url);
+                        });
+                    });
+                    ui.add_space(2.0);
+                    ui.label(RichText::new(title).size(15.5).strong().color(p.strong));
                 });
             }
             PaperStatus::Error(e) => {
-                ui.colored_label(ui.visuals().error_fg_color, e);
+                ui.add_space(8.0);
+                notice(ui, &p, &e);
             }
         }
     }
 
-    /// LLM の疎通状態（1 行）。
-    fn status_line(&self, ui: &mut egui::Ui) {
-        let mut recheck = false;
-        ui.horizontal_wrapped(|ui| {
-            let ok = egui::Color32::from_rgb(0x2e, 0x9d, 0x4a);
-            let bad = ui.visuals().error_fg_color;
-            match &self.shared.borrow().health {
-                HealthStatus::Checking => {
-                    ui.spinner();
-                    ui.weak("LLM の状態を確認中…");
-                }
-                HealthStatus::Error(e) => {
-                    ui.colored_label(bad, "●");
-                    ui.weak(format!("サーバーに接続できません: {e}"));
-                }
-                HealthStatus::Ok(h) => match (h.llm, h.model_available) {
-                    (Some(true), Some(true)) => {
-                        ui.colored_label(ok, "●");
-                        ui.weak(format!("LLM: {}", h.model));
-                    }
-                    (Some(true), _) => {
-                        ui.colored_label(bad, "●");
-                        ui.weak(format!(
-                            "LLM は起動していますが、モデル「{}」がありません",
-                            h.model
-                        ));
-                    }
-                    _ => {
-                        ui.colored_label(bad, "●");
-                        ui.weak("LLM ランタイムに接続できません（Ollama が起動しているか確認してください）");
-                    }
-                },
-            }
-            if ui.small_button("再確認").clicked() {
-                recheck = true;
-            }
-        });
-        if recheck {
-            state::refresh_health(&self.shared, ui.ctx());
-        }
-    }
-
-    fn selection_view(&mut self, ui: &mut egui::Ui) {
-        let Some(sel) = self.shared.borrow().selection.clone() else {
-            ui.weak("本文の単語をダブルクリックするか、英文をドラッグして選択してください（iPhone などでは長押しで選択）。");
-            ui.add_space(6.0);
-            ui.weak("ショートカット: E で解説、Esc で選択解除");
-            return;
-        };
-
-        ui.horizontal(|ui| {
-            ui.heading("選択中のテキスト");
-            let (label, color) = match sel.mode {
-                Mode::Word => ("単語（word）", egui::Color32::from_rgb(0x2e, 0x7d, 0x32)),
-                Mode::Sentence => (
-                    "英文（sentence）",
-                    egui::Color32::from_rgb(0x15, 0x65, 0xc0),
-                ),
-            };
-            ui.label(
-                egui::RichText::new(label)
-                    .small()
-                    .color(egui::Color32::WHITE)
-                    .background_color(color),
-            );
-        });
-        ui.add_space(4.0);
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new(&sel.text).size(16.0));
-        });
-
-        if sel.mode == Mode::Word {
-            ui.add_space(8.0);
-            dict_view(ui, &self.shared.borrow().dict);
-        }
-
-        ui.add_space(8.0);
-        ui.separator();
-        self.explain_view(ui);
-
-        ui.add_space(12.0);
-        egui::CollapsingHeader::new("段落（文脈）")
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.label(&sel.context);
-            });
-    }
-
-    fn explain_view(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
-        let (phase, running, from_cache) = {
-            let s = self.shared.borrow();
-            (
-                s.explain.phase.clone(),
-                s.explain.phase.is_running(),
-                s.explain.from_cache,
-            )
-        };
-
-        ui.horizontal_wrapped(|ui| {
-            ui.heading("解説");
-            if ui
-                .add_enabled(!running, egui::Button::new("解説する"))
-                .on_hover_text("選択中のテキストを LLM で解説します（E キー）")
-                .clicked()
-            {
-                state::start_explain(&self.shared, &ctx, false);
-            }
-            if phase == ExplainPhase::Done
-                && ui
-                    .button("再生成")
-                    .on_hover_text("キャッシュを使わずに解説を作り直します")
-                    .clicked()
-            {
-                state::start_explain(&self.shared, &ctx, true);
-            }
-            if running && ui.button("停止").clicked() {
-                state::stop_explain(&self.shared);
-            }
-            let mut auto = self.shared.borrow().auto_explain;
-            if ui.checkbox(&mut auto, "選択したら自動で解説").changed() {
-                self.shared.borrow_mut().auto_explain = auto;
-            }
-        });
-
-        match &phase {
-            ExplainPhase::Idle => {
-                ui.weak("「解説する」を押すと、和訳や文法の解説を表示します。");
-            }
-            ExplainPhase::Connecting => {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.weak("解説を準備中…");
-                });
-            }
-            ExplainPhase::Queued => {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.weak("順番待ち中…（ほかの解説を生成しています）");
-                });
-            }
-            ExplainPhase::Done if from_cache => {
-                ui.label(
-                    egui::RichText::new("キャッシュから表示")
-                        .small()
-                        .color(ui.visuals().weak_text_color()),
-                );
-            }
-            ExplainPhase::Streaming | ExplainPhase::Done => {}
-            ExplainPhase::Error(msg) => {
-                ui.horizontal_wrapped(|ui| {
-                    ui.colored_label(ui.visuals().error_fg_color, msg);
-                    if ui.button("再試行").clicked() {
-                        state::start_explain(&self.shared, &ctx, false);
-                    }
-                });
-            }
-        }
-
-        let markdown = self.shared.borrow().explain.markdown.clone();
-        if !markdown.is_empty() {
-            ui.add_space(4.0);
-            CommonMarkViewer::new().show(ui, &mut self.markdown_cache, &markdown);
-            if phase == ExplainPhase::Streaming {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.weak("生成中…");
-                });
-            }
-        }
-    }
-}
-
-impl PaperReaderApp {
     fn tabs(&mut self, ui: &mut egui::Ui) {
         let mut tab = self.shared.borrow().tab;
-        let mut theme = self.theme;
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut tab, Tab::Explain, "解説");
-            ui.selectable_value(&mut tab, Tab::History, "履歴");
-            // 配色（論文ペインと解説ペインの両方）
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.selectable_value(&mut theme, dom::ThemeChoice::Dark, "ダーク");
-                ui.selectable_value(&mut theme, dom::ThemeChoice::Light, "ライト");
-                ui.selectable_value(&mut theme, dom::ThemeChoice::System, "自動")
-                    .on_hover_text("OS の設定（ライト / ダーク）に合わせます");
-                ui.weak("表示:");
-            });
-        });
-        if theme != self.theme {
-            self.theme = theme;
-            dom::apply_theme(theme);
-            set_theme(ui.ctx(), theme);
-        }
-        let mut s = self.shared.borrow_mut();
-        if s.tab != tab {
+        let search_label = {
+            let s = self.shared.borrow();
+            if s.search.items.is_empty() {
+                "検索".to_string()
+            } else {
+                format!("検索 {}", s.search.items.len())
+            }
+        };
+        let changed = theme::segmented(
+            ui,
+            &mut tab,
+            &[
+                (Tab::Explain, "解説"),
+                (Tab::Search, search_label.as_str()),
+                (Tab::History, "履歴"),
+            ],
+        );
+        if changed {
+            let mut s = self.shared.borrow_mut();
             s.tab = tab;
             if tab == Tab::History {
                 s.history_stale = true;
@@ -325,7 +260,251 @@ impl PaperReaderApp {
         }
     }
 
-    fn history_view(&mut self, ui: &mut egui::Ui) {
+    // ───────────── 解説タブ ─────────────
+
+    fn explain_tab(&mut self, ui: &mut egui::Ui) {
+        let p = theme::palette(ui.ctx());
+        let (sel, has_paper) = {
+            let s = self.shared.borrow();
+            (s.selection.clone(), s.paper_ref().is_some())
+        };
+        let Some(sel) = sel else {
+            empty_explain(ui, &p, has_paper);
+            return;
+        };
+
+        // 選択中のテキスト
+        theme::card(ui, |ui| {
+            ui.horizontal(|ui| {
+                match sel.mode {
+                    Mode::Word => theme::chip(ui, "単語", p.word, p.word_soft),
+                    Mode::Sentence => theme::chip(ui, "英文", p.sentence, p.sentence_soft),
+                };
+                ui.label(RichText::new("選択中").size(12.0).color(p.weak));
+            });
+            ui.add_space(2.0);
+            match sel.mode {
+                Mode::Word => {
+                    ui.label(RichText::new(&sel.text).size(22.0).strong().color(p.strong));
+                }
+                Mode::Sentence => {
+                    ui.label(RichText::new(&sel.text).size(15.5).color(p.strong));
+                }
+            }
+            if sel.context != sel.text {
+                ui.add_space(2.0);
+                egui::CollapsingHeader::new(RichText::new("段落（文脈）").size(12.5).color(p.weak))
+                    .id_salt("context")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(&sel.context).size(13.5).color(p.text));
+                    });
+            }
+        });
+
+        // 辞書
+        if sel.mode == Mode::Word {
+            ui.add_space(10.0);
+            theme::card(ui, |ui| {
+                theme::section_title(ui, "辞書");
+                dict_view(ui, &p, &self.shared.borrow().dict);
+            });
+        }
+
+        ui.add_space(10.0);
+        self.explain_card(ui, &p);
+    }
+
+    fn explain_card(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let ctx = ui.ctx().clone();
+        let (phase, running, from_cache, markdown) = {
+            let s = self.shared.borrow();
+            (
+                s.explain.phase.clone(),
+                s.explain.phase.is_running(),
+                s.explain.from_cache,
+                s.explain.markdown.clone(),
+            )
+        };
+
+        theme::card(ui, |ui| {
+            ui.horizontal(|ui| {
+                theme::section_title(ui, "AI 解説");
+                if from_cache && phase == ExplainPhase::Done {
+                    theme::chip(ui, "キャッシュ", p.weak, p.card_stroke)
+                        .on_hover_text("保存済みの解説を表示しています");
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if running {
+                        if theme::subtle_button(ui, "停止").clicked() {
+                            state::stop_explain(&self.shared);
+                        }
+                    } else if phase == ExplainPhase::Done {
+                        if theme::subtle_button(ui, "↻ 再生成")
+                            .on_hover_text("キャッシュを使わずに解説を作り直します")
+                            .clicked()
+                        {
+                            state::start_explain(&self.shared, &ctx, true);
+                        }
+                    } else if theme::primary_button(ui, "解説する  E", true)
+                        .on_hover_text("和訳・文構造・文法を解説します（E キー）")
+                        .clicked()
+                    {
+                        state::start_explain(&self.shared, &ctx, false);
+                    }
+                });
+            });
+
+            match &phase {
+                ExplainPhase::Idle => {
+                    ui.label(
+                        RichText::new("「解説する」を押すと、和訳や文法の解説がここに流れます。")
+                            .size(13.5)
+                            .color(p.weak),
+                    );
+                }
+                ExplainPhase::Connecting => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(RichText::new("解説を準備中…").color(p.weak));
+                    });
+                }
+                ExplainPhase::Queued => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(
+                            RichText::new("順番待ち中…（ほかの解説を生成しています）")
+                                .color(p.weak),
+                        );
+                    });
+                }
+                ExplainPhase::Streaming | ExplainPhase::Done => {}
+                ExplainPhase::Error(msg) => {
+                    notice(ui, p, msg);
+                    if theme::subtle_button(ui, "再試行").clicked() {
+                        state::start_explain(&self.shared, &ctx, false);
+                    }
+                }
+            }
+
+            if !markdown.is_empty() {
+                ui.add_space(2.0);
+                CommonMarkViewer::new().show(ui, &mut self.markdown_cache, &markdown);
+                if phase == ExplainPhase::Streaming {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(RichText::new("生成中…").size(12.5).color(p.weak));
+                    });
+                }
+            }
+
+            ui.add_space(4.0);
+            ui.separator();
+            let mut auto = self.shared.borrow().auto_explain;
+            if ui
+                .checkbox(&mut auto, RichText::new("選択したら自動で解説").size(13.0))
+                .changed()
+            {
+                self.shared.borrow_mut().auto_explain = auto;
+            }
+        });
+    }
+
+    // ───────────── 検索タブ ─────────────
+
+    fn search_tab(&mut self, ui: &mut egui::Ui) {
+        let p = theme::palette(ui.ctx());
+        let ctx = ui.ctx().clone();
+        let search = self.shared.borrow().search.clone();
+
+        if search.query.is_empty() {
+            empty_search(ui, &p);
+            return;
+        }
+
+        ui.horizontal(|ui| {
+            let count = if search.loading && search.items.is_empty() {
+                "検索中…".to_string()
+            } else {
+                format!("約 {} 件", group_digits(search.total))
+            };
+            ui.label(
+                RichText::new(format!("「{}」", search.query))
+                    .strong()
+                    .color(p.strong),
+            );
+            ui.label(RichText::new(count).size(12.5).color(p.weak));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mut sort = search.sort;
+                if theme::segmented(
+                    ui,
+                    &mut sort,
+                    &[
+                        (SearchSort::Newest, "新着"),
+                        (SearchSort::Relevance, "関連度"),
+                    ],
+                ) {
+                    state::search(&self.shared, &ctx, search.query.clone(), sort);
+                }
+            });
+        });
+        ui.add_space(6.0);
+
+        if let Some(e) = &search.error {
+            notice(ui, &p, e);
+            if theme::subtle_button(ui, "再試行").clicked() {
+                if search.items.is_empty() {
+                    state::search(&self.shared, &ctx, search.query.clone(), search.sort);
+                } else {
+                    state::search_more(&self.shared, &ctx);
+                }
+            }
+            ui.add_space(6.0);
+        }
+
+        if search.items.is_empty() {
+            if search.loading {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(RichText::new("arXiv を検索しています…").color(p.weak));
+                });
+            } else if search.error.is_none() {
+                ui.label(
+                    RichText::new(
+                        "見つかりませんでした。語を減らすか、英語で入力してみてください。",
+                    )
+                    .color(p.weak),
+                );
+            }
+            return;
+        }
+
+        let current = self.shared.borrow().paper_ref().map(|(id, _)| id);
+        let mut open = None;
+        for item in &search.items {
+            if let Some(id) = search_result(ui, &p, item, current.as_deref() == Some(&item.id)) {
+                open = Some(id);
+            }
+            ui.add_space(8.0);
+        }
+        if search.has_more() {
+            ui.vertical_centered(|ui| {
+                if search.loading {
+                    ui.spinner();
+                } else if theme::subtle_button(ui, "さらに表示").clicked() {
+                    state::search_more(&self.shared, &ctx);
+                }
+            });
+        }
+        if let Some(id) = open {
+            state::open_paper(&self.shared, &ctx, format!("https://arxiv.org/abs/{id}"));
+        }
+    }
+
+    // ───────────── 履歴タブ ─────────────
+
+    fn history_tab(&mut self, ui: &mut egui::Ui) {
+        let p = theme::palette(ui.ctx());
         let ctx = ui.ctx().clone();
         let (scope, has_paper, stale) = {
             let s = self.shared.borrow();
@@ -337,41 +516,52 @@ impl PaperReaderApp {
 
         let mut new_scope = scope;
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut new_scope, HistoryScope::ThisPaper, "この論文");
-            ui.selectable_value(&mut new_scope, HistoryScope::AllPapers, "すべての論文");
-            if ui.small_button("更新").clicked() {
-                self.shared.borrow_mut().history_stale = true;
-            }
+            theme::segmented(
+                ui,
+                &mut new_scope,
+                &[
+                    (HistoryScope::ThisPaper, "この論文"),
+                    (HistoryScope::AllPapers, "すべて"),
+                ],
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if theme::subtle_button(ui, "↻ 更新").clicked() {
+                    self.shared.borrow_mut().history_stale = true;
+                }
+            });
         });
         if new_scope != scope {
             let mut s = self.shared.borrow_mut();
             s.history_scope = new_scope;
             s.history_stale = true;
         }
-        ui.add_space(4.0);
+        ui.add_space(8.0);
 
         let status = self.shared.borrow().history.clone();
         let entries = match status {
             HistoryStatus::NotLoaded | HistoryStatus::Loading => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.weak("履歴を読み込み中…");
+                    ui.label(RichText::new("履歴を読み込み中…").color(p.weak));
                 });
                 return;
             }
             HistoryStatus::Error(e) => {
-                ui.colored_label(ui.visuals().error_fg_color, format!("履歴: {e}"));
+                notice(ui, &p, &format!("履歴: {e}"));
                 return;
             }
             HistoryStatus::Loaded(entries) => entries,
         };
         if entries.is_empty() {
-            ui.weak(match (scope, has_paper) {
-                (HistoryScope::ThisPaper, false) => {
-                    "論文を開くと、その論文で調べた単語と解説した文がここに表示されます。"
-                }
-                _ => "まだ履歴はありません。単語を選択するか、英文を解説するとここに残ります。",
-            });
+            ui.label(
+                RichText::new(match (scope, has_paper) {
+                    (HistoryScope::ThisPaper, false) => {
+                        "論文を開くと、その論文で調べた単語と解説した文がここに並びます。"
+                    }
+                    _ => "まだ履歴はありません。単語を選ぶか、英文を解説するとここに残ります。",
+                })
+                .color(p.weak),
+            );
             return;
         }
 
@@ -383,18 +573,22 @@ impl PaperReaderApp {
                 last_paper = Some(&entry.paper_id);
                 ui.add_space(6.0);
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(&entry.paper_title).strong());
-                    ui.weak(format!("arXiv:{}", entry.paper_id));
+                    ui.label(RichText::new(&entry.paper_title).strong().color(p.strong));
                     if current.as_deref() != Some(entry.paper_id.as_str())
-                        && ui.small_button("論文を開く").clicked()
+                        && ui
+                            .link(RichText::new("開く →").size(12.5))
+                            .on_hover_text(format!("arXiv:{} を開きます", entry.paper_id))
+                            .clicked()
                     {
                         action = Some(HistoryAction::OpenPaper(entry.paper_id.clone()));
                     }
                 });
+                ui.add_space(2.0);
             }
-            if let Some(a) = history_row(ui, entry) {
+            if let Some(a) = history_row(ui, &p, entry) {
                 action = Some(a);
             }
+            ui.add_space(6.0);
         }
 
         match action {
@@ -403,13 +597,256 @@ impl PaperReaderApp {
             }
             Some(HistoryAction::Delete(id)) => state::delete_history_entry(&self.shared, &ctx, id),
             Some(HistoryAction::OpenPaper(id)) => {
-                let url = format!("https://arxiv.org/abs/{id}");
-                self.url_input = url.clone();
-                state::open_paper(&self.shared, &ctx, url);
+                state::open_paper(&self.shared, &ctx, format!("https://arxiv.org/abs/{id}"));
             }
             None => {}
         }
     }
+}
+
+impl eframe::App for PaperReaderApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // 解説ペインにフォーカスがあるときのショートカット（論文ペイン側は dom::watch_shortcuts）
+        let ctx = ui.ctx().clone();
+        if !ctx.egui_wants_keyboard_input() {
+            let (explain, clear) = ctx.input(|i| {
+                (
+                    i.key_pressed(egui::Key::E) && i.modifiers.is_none(),
+                    i.key_pressed(egui::Key::Escape),
+                )
+            });
+            if explain {
+                state::on_shortcut(&self.shared, &ctx, dom::Shortcut::Explain);
+            } else if clear {
+                state::on_shortcut(&self.shared, &ctx, dom::Shortcut::ClearSelection);
+            }
+        }
+
+        let p = theme::palette(&ctx);
+        egui::CentralPanel::default_margins()
+            .frame(
+                egui::Frame::new()
+                    .fill(p.bg)
+                    .inner_margin(Margin::symmetric(16, 14)),
+            )
+            .show(ui, |ui| {
+                self.header(ui);
+                ui.add_space(12.0);
+                self.input_bar(ui);
+                self.paper_card(ui);
+                ui.add_space(12.0);
+                self.tabs(ui);
+                ui.add_space(10.0);
+                let tab = self.shared.borrow().tab;
+                egui::ScrollArea::vertical()
+                    .id_salt(tab_salt(tab))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        match tab {
+                            Tab::Explain => self.explain_tab(ui),
+                            Tab::Search => self.search_tab(ui),
+                            Tab::History => self.history_tab(ui),
+                        }
+                        ui.add_space(16.0);
+                    });
+            });
+    }
+}
+
+fn tab_salt(tab: Tab) -> &'static str {
+    match tab {
+        Tab::Explain => "explain_scroll",
+        Tab::Search => "search_scroll",
+        Tab::History => "history_scroll",
+    }
+}
+
+/// ロゴ（アクセント色の角丸に「読」）。
+fn logo(ui: &mut egui::Ui, p: &Palette) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 7.0, p.accent);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "読",
+        theme::body_font(15.0),
+        p.on_accent,
+    );
+}
+
+/// エラーなどのお知らせ（赤みのある帯）。
+fn notice(ui: &mut egui::Ui, p: &Palette, text: &str) {
+    egui::Frame::new()
+        .fill(p.error_soft)
+        .corner_radius(egui::CornerRadius::same(10))
+        .inner_margin(Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(text).color(p.error));
+        });
+}
+
+/// 選択前の案内。
+fn empty_explain(ui: &mut egui::Ui, p: &Palette, has_paper: bool) {
+    theme::card(ui, |ui| {
+        ui.add_space(4.0);
+        if has_paper {
+            ui.label(
+                RichText::new("テキストを選んで読み解く")
+                    .size(17.0)
+                    .strong()
+                    .color(p.strong),
+            );
+        } else {
+            ui.label(
+                RichText::new("まずは論文を開きましょう")
+                    .size(17.0)
+                    .strong()
+                    .color(p.strong),
+            );
+            ui.label(
+                RichText::new(
+                    "上の欄に arXiv の URL・ID（例: 1706.03762）か、キーワードを入れてください。",
+                )
+                .color(p.weak),
+            );
+        }
+        ui.add_space(8.0);
+        for (key, text) in [
+            ("ダブルクリック", "単語 → 辞書の訳と AI の解説"),
+            ("ドラッグ", "英文 → 和訳・文構造・文法"),
+            ("E", "選択中のテキストを解説"),
+            ("Esc", "選択を解除"),
+        ] {
+            ui.horizontal(|ui| {
+                theme::chip(ui, key, p.accent, p.accent_soft);
+                ui.label(RichText::new(text).size(13.5).color(p.text));
+            });
+        }
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new("iPhone などでは長押しで選択できます。")
+                .size(12.5)
+                .color(p.weak),
+        );
+    });
+}
+
+/// 検索前の案内。
+fn empty_search(ui: &mut egui::Ui, p: &Palette) {
+    theme::card(ui, |ui| {
+        ui.label(
+            RichText::new("arXiv の論文を検索")
+                .size(17.0)
+                .strong()
+                .color(p.strong),
+        );
+        ui.label(
+            RichText::new("上の欄にキーワードを入れて「検索」を押してください。").color(p.weak),
+        );
+        ui.add_space(8.0);
+        for (example, text) in [
+            ("attention is all you need", "題名で探す"),
+            ("\"in-context learning\"", "語句で探す"),
+            ("au:Hinton ti:capsule", "著者・題名を指定"),
+            ("cat:cs.CL retrieval", "分野を指定"),
+        ] {
+            ui.horizontal(|ui| {
+                theme::chip(ui, example, p.accent, p.accent_soft);
+                ui.label(RichText::new(text).size(13.0).color(p.weak));
+            });
+        }
+    });
+}
+
+/// 検索結果の 1 件。「読む」かタイトルが押されたら論文 ID を返す。
+fn search_result(
+    ui: &mut egui::Ui,
+    p: &Palette,
+    item: &SearchItem,
+    is_open: bool,
+) -> Option<String> {
+    let mut open = false;
+    theme::card(ui, |ui| {
+        let title = ui
+            .add(
+                egui::Label::new(
+                    RichText::new(&item.title)
+                        .size(15.0)
+                        .strong()
+                        .color(p.strong),
+                )
+                .sense(egui::Sense::click()),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if title.hovered() {
+            ui.painter().line_segment(
+                [title.rect.left_bottom(), title.rect.right_bottom()],
+                egui::Stroke::new(1.0, p.accent),
+            );
+        }
+        open |= title.clicked();
+
+        ui.label(
+            RichText::new(authors_line(&item.authors))
+                .size(12.5)
+                .color(p.text),
+        );
+        ui.horizontal_wrapped(|ui| {
+            if !item.primary_category.is_empty() {
+                theme::chip(ui, &item.primary_category, p.accent, p.accent_soft);
+            }
+            ui.label(RichText::new(&item.published).size(12.0).color(p.weak));
+            ui.label(
+                RichText::new(format!("arXiv:{}", item.id))
+                    .size(12.0)
+                    .color(p.weak),
+            );
+        });
+
+        egui::CollapsingHeader::new(RichText::new("概要").size(12.5).color(p.weak))
+            .id_salt(("abstract", &item.id))
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(RichText::new(&item.summary).size(13.5).color(p.text));
+            });
+
+        ui.horizontal(|ui| {
+            if is_open {
+                theme::chip(ui, "表示中", p.ok, p.ok.gamma_multiply(0.15));
+            } else if theme::primary_button(ui, "読む", true).clicked() {
+                open = true;
+            }
+            ui.hyperlink_to(
+                RichText::new("arXiv ↗").size(12.5),
+                format!("https://arxiv.org/abs/{}", item.id),
+            );
+        });
+    });
+    (open && !is_open).then(|| item.id.clone())
+}
+
+/// "A, B, C ほか 5 名"
+fn authors_line(authors: &[String]) -> String {
+    const SHOW: usize = 3;
+    match authors.len() {
+        0 => "著者不明".into(),
+        n if n <= SHOW => authors.join(", "),
+        n => format!("{} ほか {} 名", authors[..SHOW].join(", "), n - SHOW),
+    }
+}
+
+/// 12345 → "12,345"
+fn group_digits(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 enum HistoryAction {
@@ -419,27 +856,28 @@ enum HistoryAction {
 }
 
 /// 履歴の 1 行。クリックで再表示、× で削除。
-fn history_row(ui: &mut egui::Ui, entry: &HistoryEntry) -> Option<HistoryAction> {
+fn history_row(ui: &mut egui::Ui, p: &Palette, entry: &HistoryEntry) -> Option<HistoryAction> {
     let mut action = None;
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width());
+    theme::card(ui, |ui| {
         ui.horizontal(|ui| {
-            let (label, color) = match entry.mode {
-                Mode::Word => ("単語", egui::Color32::from_rgb(0x2e, 0x7d, 0x32)),
-                Mode::Sentence => ("英文", egui::Color32::from_rgb(0x15, 0x65, 0xc0)),
+            match entry.mode {
+                Mode::Word => theme::chip(ui, "単語", p.word, p.word_soft),
+                Mode::Sentence => theme::chip(ui, "英文", p.sentence, p.sentence_soft),
             };
             ui.label(
-                egui::RichText::new(label)
-                    .small()
-                    .color(egui::Color32::WHITE)
-                    .background_color(color),
+                RichText::new(format_time(entry.updated_at))
+                    .size(12.0)
+                    .color(p.weak),
             );
-            ui.weak(format_time(entry.updated_at));
             if entry.has_explanation {
-                ui.weak("・解説あり");
+                ui.label(RichText::new("✓ 解説あり").size(12.0).color(p.ok));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("×").on_hover_text("履歴から削除").clicked() {
+                if ui
+                    .add(egui::Button::new(RichText::new("×").color(p.weak)).frame(false))
+                    .on_hover_text("履歴から削除")
+                    .clicked()
+                {
                     action = Some(HistoryAction::Delete(entry.id));
                 }
             });
@@ -450,8 +888,10 @@ fn history_row(ui: &mut egui::Ui, entry: &HistoryEntry) -> Option<HistoryAction>
         } else {
             preview
         };
-        let text =
-            egui::RichText::new(preview).size(if entry.mode == Mode::Word { 17.0 } else { 14.0 });
+        let text = match entry.mode {
+            Mode::Word => RichText::new(preview).size(17.0).strong().color(p.strong),
+            Mode::Sentence => RichText::new(preview).size(14.0).color(p.text),
+        };
         let resp = ui
             .add(egui::Label::new(text).sense(egui::Sense::click()))
             .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -475,120 +915,73 @@ fn format_time(secs: i64) -> String {
     )
 }
 
-impl eframe::App for PaperReaderApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // 解説ペインにフォーカスがあるときのショートカット（論文ペイン側は dom::watch_shortcuts）
-        let ctx = ui.ctx().clone();
-        if !ctx.egui_wants_keyboard_input() {
-            let (explain, clear) = ctx.input(|i| {
-                (
-                    i.key_pressed(egui::Key::E) && i.modifiers.is_none(),
-                    i.key_pressed(egui::Key::Escape),
-                )
-            });
-            if explain {
-                state::on_shortcut(&self.shared, &ctx, dom::Shortcut::Explain);
-            } else if clear {
-                state::on_shortcut(&self.shared, &ctx, dom::Shortcut::ClearSelection);
-            }
-        }
-
-        egui::CentralPanel::default_margins().show(ui, |ui| {
-            self.url_bar(ui);
-            self.status_line(ui);
-            ui.separator();
-            self.tabs(ui);
-            ui.separator();
-            let tab = self.shared.borrow().tab;
-            egui::ScrollArea::vertical()
-                .id_salt(tab_salt(tab))
-                .auto_shrink([false, false])
-                .show(ui, |ui| match tab {
-                    Tab::Explain => self.selection_view(ui),
-                    Tab::History => self.history_view(ui),
-                });
-        });
-    }
-}
-
-fn tab_salt(tab: Tab) -> &'static str {
-    match tab {
-        Tab::Explain => "explain_scroll",
-        Tab::History => "history_scroll",
-    }
-}
-
 /// 辞書の結果（見出し語と訳のリスト）。
-fn dict_view(ui: &mut egui::Ui, status: &DictStatus) {
+fn dict_view(ui: &mut egui::Ui, p: &Palette, status: &DictStatus) {
     match status {
         DictStatus::Idle => {}
         DictStatus::Loading => {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.weak("辞書を検索中…");
+                ui.label(RichText::new("辞書を検索中…").color(p.weak));
             });
         }
-        DictStatus::Error(e) => {
-            ui.colored_label(ui.visuals().error_fg_color, format!("辞書: {e}"));
-        }
+        DictStatus::Error(e) => notice(ui, p, &format!("辞書: {e}")),
         DictStatus::Loaded(r) => match &r.headword {
             None => {
-                ui.weak(format!("「{}」は辞書に見つかりませんでした。", r.query));
+                ui.label(
+                    RichText::new(format!("「{}」は辞書に見つかりませんでした。", r.query))
+                        .color(p.weak),
+                );
             }
             Some(headword) => {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        egui::RichText::new(headword)
-                            .size(24.0)
-                            .strong()
-                            .color(ui.visuals().strong_text_color()),
-                    );
+                    ui.label(RichText::new(headword).size(21.0).strong().color(p.strong));
                     if *headword != r.query {
-                        ui.weak(format!("（{} の原形）", r.query));
+                        ui.label(
+                            RichText::new(format!("{} の原形", r.query))
+                                .size(12.5)
+                                .color(p.weak),
+                        );
                     }
                 });
-                ui.add_space(2.0);
-                meanings_list(ui, &r.meanings);
+                meanings_list(ui, p, &r.meanings);
                 for entry in &r.related {
-                    related_view(ui, entry);
+                    related_view(ui, p, entry);
                 }
             }
         },
     }
 }
 
-fn related_view(ui: &mut egui::Ui, entry: &DictEntry) {
+fn related_view(ui: &mut egui::Ui, p: &Palette, entry: &DictEntry) {
     ui.add_space(8.0);
     ui.horizontal_wrapped(|ui| {
-        ui.weak("原形の候補:");
+        ui.label(RichText::new("原形の候補").size(12.5).color(p.weak));
         ui.label(
-            egui::RichText::new(&entry.headword)
-                .size(18.0)
+            RichText::new(&entry.headword)
+                .size(17.0)
                 .strong()
-                .color(ui.visuals().strong_text_color()),
+                .color(p.strong),
         );
     });
-    meanings_list(ui, &entry.meanings);
+    meanings_list(ui, p, &entry.meanings);
 }
 
-/// 訳を番号付きで並べる。元データの『』で囲まれた重要な訳は強調色で表示する。
-fn meanings_list(ui: &mut egui::Ui, meanings: &[String]) {
-    let font = egui::TextStyle::Body.resolve(ui.style());
-    let normal = ui.visuals().text_color();
-    let strong = ui.visuals().strong_text_color();
-    let accent = ui.visuals().hyperlink_color;
+/// 訳を番号付きで並べる。元データの『』で囲まれた重要な訳は強調する。
+fn meanings_list(ui: &mut egui::Ui, p: &Palette, meanings: &[String]) {
+    let font = theme::body_font(14.5);
     for (i, meaning) in meanings.iter().enumerate() {
         let mut job = egui::text::LayoutJob::default();
         job.append(
-            &format!("{}. ", i + 1),
+            &format!("{}  ", i + 1),
             0.0,
-            egui::TextFormat::simple(font.clone(), accent),
+            egui::TextFormat::simple(font.clone(), p.accent),
         );
         for (text, emphasized) in split_emphasis(meaning) {
-            let color = if emphasized { strong } else { normal };
-            let mut format = egui::TextFormat::simple(font.clone(), color);
+            let mut format =
+                egui::TextFormat::simple(font.clone(), if emphasized { p.strong } else { p.text });
             if emphasized {
-                format.underline = egui::Stroke::new(1.0, accent);
+                format.background = p.accent_soft;
             }
             job.append(text, 0.0, format);
         }

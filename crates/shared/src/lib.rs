@@ -108,6 +108,101 @@ pub struct ExplainRequest {
     pub regenerate: bool,
 }
 
+/// 検索の並び順。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchSort {
+    /// 関連度順
+    #[default]
+    Relevance,
+    /// 投稿日の新しい順
+    Newest,
+}
+
+/// 検索結果 1 ページの件数
+pub const SEARCH_PAGE_SIZE: u32 = 20;
+
+/// `GET /api/search?q=&start=&sort=` のクエリ。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchQuery {
+    pub q: String,
+    #[serde(default)]
+    pub start: u32,
+    #[serde(default)]
+    pub sort: SearchSort,
+}
+
+/// 検索結果の 1 件。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchItem {
+    /// バージョンを除いた論文 ID（例: `1706.03762`）
+    pub id: String,
+    pub title: String,
+    pub authors: Vec<String>,
+    /// アブストラクト（空白をまとめたもの）
+    pub summary: String,
+    /// 初版の投稿日（YYYY-MM-DD）
+    pub published: String,
+    /// 主分類（例: `cs.CL`）
+    pub primary_category: String,
+}
+
+/// `GET /api/search` の応答。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchResponse {
+    pub total: u64,
+    pub start: u32,
+    pub items: Vec<SearchItem>,
+}
+
+/// 入力欄の文字列が論文の URL か arXiv ID なら、`/api/paper` に渡す URL を返す。
+/// それ以外（キーワード）なら `None`（検索する）。
+pub fn paper_url_from_input(input: &str) -> Option<String> {
+    let s = input.trim();
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("https://")
+        || lower.starts_with("http://")
+        || lower.starts_with("arxiv.org/")
+    {
+        return Some(if lower.starts_with("arxiv.org/") {
+            format!("https://{s}")
+        } else {
+            s.to_string()
+        });
+    }
+    let id = if lower.starts_with("arxiv:") {
+        &s[6..]
+    } else {
+        s
+    };
+    is_arxiv_id(id).then(|| format!("https://arxiv.org/abs/{id}"))
+}
+
+/// `1706.03762`, `2301.12345v2`, `hep-th/9901001`, `math.AG/0601001v1` のような arXiv ID か。
+pub fn is_arxiv_id(s: &str) -> bool {
+    let (base, _versioned) = match s.rsplit_once('v') {
+        Some((b, v)) if !v.is_empty() && v.bytes().all(|c| c.is_ascii_digit()) => (b, true),
+        _ => (s, false),
+    };
+    let digits = |t: &str| !t.is_empty() && t.bytes().all(|c| c.is_ascii_digit());
+    if let Some((yymm, num)) = base.split_once('.')
+        && yymm.len() == 4
+        && digits(yymm)
+        && (num.len() == 4 || num.len() == 5)
+        && digits(num)
+    {
+        return true;
+    }
+    if let Some((archive, num)) = base.split_once('/') {
+        let archive_ok = !archive.is_empty()
+            && archive
+                .bytes()
+                .all(|c| c.is_ascii_alphabetic() || c == b'-' || c == b'.');
+        return archive_ok && num.len() == 7 && digits(num);
+    }
+    false
+}
+
 /// 履歴の 1 件（調べた単語・解説した文）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HistoryEntry {
@@ -360,6 +455,37 @@ mod tests {
         let r: ExplainRequest = serde_json::from_str(r#"{"mode":"word","text":"x"}"#).unwrap();
         assert_eq!(r.context, "");
         assert!(!r.regenerate);
+    }
+
+    #[test]
+    fn paper_input() {
+        let u = |s: &str| paper_url_from_input(s);
+        assert_eq!(
+            u(" https://arxiv.org/abs/1706.03762 ").as_deref(),
+            Some("https://arxiv.org/abs/1706.03762")
+        );
+        assert_eq!(
+            u("arxiv.org/pdf/1706.03762").as_deref(),
+            Some("https://arxiv.org/pdf/1706.03762")
+        );
+        assert_eq!(
+            u("1706.03762").as_deref(),
+            Some("https://arxiv.org/abs/1706.03762")
+        );
+        assert_eq!(
+            u("arXiv:2301.12345v2").as_deref(),
+            Some("https://arxiv.org/abs/2301.12345v2")
+        );
+        assert_eq!(
+            u("hep-th/9901001").as_deref(),
+            Some("https://arxiv.org/abs/hep-th/9901001")
+        );
+        // キーワードは検索
+        assert_eq!(u("attention is all you need"), None);
+        assert_eq!(u("transformer"), None);
+        assert_eq!(u("1706"), None);
+        assert_eq!(u("12345.6789"), None);
+        assert_eq!(u("vision/transformer"), None);
     }
 
     #[test]

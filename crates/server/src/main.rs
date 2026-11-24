@@ -9,6 +9,7 @@ mod history;
 mod paper;
 mod prompts;
 mod sanitize;
+mod search;
 mod static_files;
 
 use std::sync::Arc;
@@ -39,6 +40,9 @@ pub struct AppState {
     pub llm_stream_http: reqwest::Client,
     /// LLM への同時リクエストを 1 件に制限する
     pub llm_gate: Arc<tokio::sync::Semaphore>,
+    /// arXiv API（検索）用（宛先は export.arxiv.org に固定）
+    pub search_http: reqwest::Client,
+    pub searcher: search::SharedSearcher,
 }
 
 #[tokio::main]
@@ -61,6 +65,7 @@ async fn main() -> Result<()> {
 
     let db = db::connect(&config.database_url).await?;
     let http = paper::build_client(config.allowed_hosts.clone())?;
+    let search_http = paper::build_client(vec![search::API_HOST.to_string()])?;
     let llm_http = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
         .timeout(Duration::from_secs(5))
@@ -78,6 +83,8 @@ async fn main() -> Result<()> {
         llm_http,
         llm_stream_http,
         llm_gate: Arc::new(tokio::sync::Semaphore::new(1)),
+        search_http,
+        searcher: Arc::default(),
     };
 
     let app = router(state, &config);
@@ -96,6 +103,7 @@ fn router(state: AppState, config: &Config) -> Router {
         .route("/health", get(health))
         .route("/paper", get(paper::get_paper))
         .route("/dict", get(dict::get_dict))
+        .route("/search", get(search::get_search))
         .route("/explain", post(explain::post_explain))
         .route(
             "/history",

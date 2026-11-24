@@ -6,7 +6,8 @@ use std::rc::Rc;
 use eframe::egui;
 use paper_reader_shared::{
     DictResponse, ExplainRequest, HealthResponse, HistoryEntry, HistoryRecord, MAX_CONTEXT_CHARS,
-    MAX_TEXT_CHARS, Mode, clip_context, sse_event,
+    MAX_TEXT_CHARS, Mode, SEARCH_PAGE_SIZE, SearchItem, SearchSort, clip_context,
+    paper_url_from_input, sse_event,
 };
 use web_sys::AbortController;
 
@@ -107,7 +108,28 @@ pub enum HistoryStatus {
 pub enum Tab {
     #[default]
     Explain,
+    Search,
     History,
+}
+
+/// 論文検索の状態。
+#[derive(Debug, Clone, Default)]
+pub struct Search {
+    /// 検索した語（結果が表示されているもの）
+    pub query: String,
+    pub sort: SearchSort,
+    pub items: Vec<SearchItem>,
+    pub total: u64,
+    pub loading: bool,
+    pub error: Option<String>,
+    /// 検索ごとに増える番号（古い応答を捨てる）
+    seq: u64,
+}
+
+impl Search {
+    pub fn has_more(&self) -> bool {
+        (self.items.len() as u64) < self.total && self.items.len() < 1_000
+    }
 }
 
 /// 履歴タブで表示する範囲。
@@ -132,6 +154,7 @@ pub enum HealthStatus {
 #[derive(Default)]
 pub struct Shared {
     pub tab: Tab,
+    pub search: Search,
     pub paper: PaperStatus,
     pub selection: Option<SelectionInfo>,
     pub dict: DictStatus,
@@ -372,6 +395,93 @@ pub fn refresh_health(this: &SharedRef, ctx: &egui::Context) {
     });
 }
 
+/// 入力欄の内容が論文の URL / arXiv ID なら開き、それ以外なら検索する。
+pub fn submit_input(this: &SharedRef, ctx: &egui::Context, input: &str) {
+    let input = input.trim();
+    if input.is_empty() {
+        return;
+    }
+    match paper_url_from_input(input) {
+        Some(url) => open_paper(this, ctx, url),
+        None => {
+            let sort = this.borrow().search.sort;
+            search(this, ctx, input.to_string(), sort);
+        }
+    }
+}
+
+/// 論文を検索する（1 ページ目から）。
+pub fn search(this: &SharedRef, ctx: &egui::Context, query: String, sort: SearchSort) {
+    let seq = {
+        let mut s = this.borrow_mut();
+        s.tab = Tab::Search;
+        let st = &mut s.search;
+        st.seq += 1;
+        st.query = query.clone();
+        st.sort = sort;
+        st.items.clear();
+        st.total = 0;
+        st.error = None;
+        st.loading = true;
+        st.seq
+    };
+    ctx.request_repaint();
+    fetch_search_page(this, ctx, seq, query, 0, sort);
+}
+
+/// 検索結果の続きを読み込む。
+pub fn search_more(this: &SharedRef, ctx: &egui::Context) {
+    let (seq, query, start, sort) = {
+        let mut s = this.borrow_mut();
+        let st = &mut s.search;
+        if st.loading || !st.has_more() {
+            return;
+        }
+        st.loading = true;
+        st.error = None;
+        (st.seq, st.query.clone(), st.items.len() as u32, st.sort)
+    };
+    fetch_search_page(this, ctx, seq, query, start, sort);
+}
+
+fn fetch_search_page(
+    this: &SharedRef,
+    ctx: &egui::Context,
+    seq: u64,
+    query: String,
+    start: u32,
+    sort: SearchSort,
+) {
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::fetch_search(&query, start, sort).await;
+        let mut s = this.borrow_mut();
+        let st = &mut s.search;
+        if st.seq != seq {
+            return;
+        }
+        st.loading = false;
+        match result {
+            Ok(r) => {
+                st.total = r.total;
+                // ページの境目で同じ論文が重なることがあるので除く
+                for item in r.items {
+                    if !st.items.iter().any(|i| i.id == item.id) {
+                        st.items.push(item);
+                    }
+                }
+                // 件数が足りないページが返ったら打ち切る（API の total は概算のことがある）
+                if (st.items.len() as u32) < start + SEARCH_PAGE_SIZE / 2 {
+                    st.total = st.items.len() as u64;
+                }
+            }
+            Err(e) => st.error = Some(e),
+        }
+        ctx.request_repaint();
+    });
+}
+
 /// 論文を読み込んで左ペインに表示する。
 pub fn open_paper(this: &SharedRef, ctx: &egui::Context, url: String) {
     this.borrow_mut().paper = PaperStatus::Loading;
@@ -388,6 +498,7 @@ pub fn open_paper(this: &SharedRef, ctx: &egui::Context, url: String) {
                 s.selection_seq += 1;
                 s.explain.reset();
                 s.history_stale = true;
+                s.tab = Tab::Explain;
                 s.paper = PaperStatus::Loaded {
                     id: paper.id,
                     title: paper.title,

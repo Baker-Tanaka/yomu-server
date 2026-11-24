@@ -8,6 +8,8 @@ mod app;
 mod dom;
 #[cfg(target_arch = "wasm32")]
 mod state;
+#[cfg(target_arch = "wasm32")]
+mod theme;
 
 #[cfg(target_arch = "wasm32")]
 fn main() {

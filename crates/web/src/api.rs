@@ -2,7 +2,7 @@
 
 use paper_reader_shared::{
     DictResponse, ErrorResponse, ExplainRequest, HealthResponse, HistoryRecord, HistoryResponse,
-    PaperResponse, SseEvent, SseParser,
+    PaperResponse, SearchResponse, SearchSort, SseEvent, SseParser,
 };
 use serde::de::DeserializeOwned;
 use wasm_bindgen::{JsCast as _, JsValue};
@@ -20,6 +20,18 @@ pub async fn fetch_paper(url: &str) -> Result<PaperResponse, String> {
 pub async fn fetch_dict(word: &str) -> Result<DictResponse, String> {
     let encoded = String::from(js_sys::encode_uri_component(word));
     get_json(&format!("/api/dict?word={encoded}")).await
+}
+
+pub async fn fetch_search(q: &str, start: u32, sort: SearchSort) -> Result<SearchResponse, String> {
+    let encoded = String::from(js_sys::encode_uri_component(q));
+    let sort = match sort {
+        SearchSort::Relevance => "relevance",
+        SearchSort::Newest => "newest",
+    };
+    get_json(&format!(
+        "/api/search?q={encoded}&start={start}&sort={sort}"
+    ))
+    .await
 }
 
 pub async fn fetch_health() -> Result<HealthResponse, String> {

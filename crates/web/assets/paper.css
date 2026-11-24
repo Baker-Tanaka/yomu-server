@@ -4,21 +4,25 @@
    data-theme は解説ペインの「表示」で切り替え、localStorage に保存する（index.html の先頭で読み込む） */
 :root {
   color-scheme: light;
-  --paper-bg: #fff;
-  --paper-fg: #1a1a1a;
-  --muted: #444;
-  --placeholder: #555;
-  --link: #1a5fb4;
-  --accent: #1a5fb4;
-  --rule: #d0d0d0;
-  --table-rule: #666;
-  --table-rule-strong: #333;
-  --selection-bg: #ffe08a;
+  --paper-bg: #fffdf9;
+  --paper-fg: #23262c;
+  --heading: #14171c;
+  --muted: #5d636d;
+  --placeholder: #5d636d;
+  --link: #4352c4;
+  --accent: #4f5bd5;
+  --accent-soft: #eceefc;
+  --rule: #e6e2da;
+  --table-rule: #8a8f98;
+  --table-rule-strong: #3a3e45;
+  --selection-bg: #fde68a;
   --selection-fg: inherit;
-  --note-bg: #fffbe6;
-  --note-border: #d8c88a;
-  --shadow: rgba(0, 0, 0, 0.15);
-  --error: #b00;
+  --abstract-bg: #f6f4ef;
+  --note-bg: #fffbea;
+  --note-border: #e8d9a0;
+  --shadow: rgba(20, 23, 28, 0.12);
+  --scroll: #d5d0c6;
+  --error: #b42318;
   --fatal-bg: #fdecea;
   --fatal-fg: #8a1c1c;
   --fatal-border: #f5c2bd;
@@ -29,20 +33,24 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --paper-bg: #1e1f22;
-    --paper-fg: #dcdcdc;
-    --muted: #a8a8a8;
-    --placeholder: #a0a0a0;
-    --link: #7fb2ff;
-    --accent: #5a9cff;
-    --rule: #3a3b3e;
-    --table-rule: #8a8a8a;
-    --table-rule-strong: #b8b8b8;
-    --selection-bg: #6b5a17;
+    --paper-bg: #1e1f23;
+    --paper-fg: #d7d9de;
+    --heading: #f3f4f6;
+    --muted: #9ba1ab;
+    --placeholder: #a3a8b1;
+    --link: #9ea8ff;
+    --accent: #8c96ff;
+    --accent-soft: #2a2d4d;
+    --rule: #32353d;
+    --table-rule: #8a8f98;
+    --table-rule-strong: #c3c7ce;
+    --selection-bg: #5c4d12;
     --selection-fg: #fff;
-    --note-bg: #2c2a22;
-    --note-border: #6b6140;
+    --abstract-bg: #25272d;
+    --note-bg: #2a2820;
+    --note-border: #5f5638;
     --shadow: rgba(0, 0, 0, 0.5);
+    --scroll: #3a3d45;
     --error: #ff7b72;
     --fatal-bg: #3d1f1f;
     --fatal-fg: #ffb4ab;
@@ -52,20 +60,24 @@
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --paper-bg: #1e1f22;
-  --paper-fg: #dcdcdc;
-  --muted: #a8a8a8;
-  --placeholder: #a0a0a0;
-  --link: #7fb2ff;
-  --accent: #5a9cff;
-  --rule: #3a3b3e;
-  --table-rule: #8a8a8a;
-  --table-rule-strong: #b8b8b8;
-  --selection-bg: #6b5a17;
+  --paper-bg: #1e1f23;
+  --paper-fg: #d7d9de;
+  --heading: #f3f4f6;
+  --muted: #9ba1ab;
+  --placeholder: #a3a8b1;
+  --link: #9ea8ff;
+  --accent: #8c96ff;
+  --accent-soft: #2a2d4d;
+  --rule: #32353d;
+  --table-rule: #8a8f98;
+  --table-rule-strong: #c3c7ce;
+  --selection-bg: #5c4d12;
   --selection-fg: #fff;
-  --note-bg: #2c2a22;
-  --note-border: #6b6140;
+  --abstract-bg: #25272d;
+  --note-bg: #2a2820;
+  --note-border: #5f5638;
   --shadow: rgba(0, 0, 0, 0.5);
+  --scroll: #3a3d45;
   --error: #ff7b72;
   --fatal-bg: #3d1f1f;
   --fatal-fg: #ffb4ab;
@@ -96,8 +108,16 @@ html, body {
   color: var(--paper-fg);
   font-family: "Charter", "Georgia", "Times New Roman", "Hiragino Mincho ProN", serif;
   font-size: 17px;
-  line-height: 1.7;
+  line-height: 1.75;
   -webkit-text-size-adjust: 100%;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll) transparent;
+}
+#paper::-webkit-scrollbar { width: 10px; }
+#paper::-webkit-scrollbar-thumb {
+  background: var(--scroll);
+  border-radius: 10px;
+  border: 3px solid var(--paper-bg);
 }
 
 #explain-pane {
@@ -143,18 +163,57 @@ body.resizing #paper, body.resizing #explain-pane {
   margin-right: auto;
 }
 
-#paper h1, #paper h2, #paper h3, #paper h4 {
-  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Hiragino Sans", sans-serif;
+#paper h1, #paper h2, #paper h3, #paper h4, #paper h5, #paper h6 {
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Helvetica Neue", "Hiragino Sans", sans-serif;
+  color: var(--heading);
   line-height: 1.3;
-  margin: 1.6em 0 0.6em;
+  letter-spacing: -0.01em;
+  margin: 1.8em 0 0.6em;
 }
 #paper h1 { font-size: 1.7em; }
-#paper h2 { font-size: 1.35em; }
+#paper h2 {
+  font-size: 1.38em;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid var(--rule);
+}
 #paper h3 { font-size: 1.15em; }
+#paper h4, #paper h5, #paper h6 { font-size: 1em; }
+
+/* 論文のタイトル・著者・アブストラクト */
+#paper .ltx_title_document {
+  font-family: "Charter", "Georgia", "Hiragino Mincho ProN", serif;
+  font-size: 2.05em;
+  font-weight: 700;
+  line-height: 1.22;
+  letter-spacing: -0.015em;
+  margin: 0.6em 0 0.5em;
+  border: none;
+}
+#paper .ltx_tag_section, #paper .ltx_tag_subsection, #paper .ltx_tag_subsubsection,
+#paper .ltx_tag_appendix {
+  color: var(--accent);
+  margin-right: 0.35em;
+}
+#paper .ltx_abstract {
+  background: var(--abstract-bg);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  padding: 1.1em 1.5em 0.4em;
+}
+#paper .ltx_title_abstract {
+  font-size: 0.78em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  margin: 0 0 0.6em;
+  border: none;
+  padding: 0;
+}
 
 #paper p { margin: 0 0 1em; }
 #paper a { color: var(--link); text-decoration: none; }
-#paper a:hover { text-decoration: underline; }
+#paper a:hover { text-decoration: underline; text-underline-offset: 0.15em; }
 
 #paper ::selection { background: var(--selection-bg); color: var(--selection-fg); }
 
@@ -164,6 +223,7 @@ body.resizing #paper, body.resizing #explain-pane {
   height: auto;
   /* 図は黒い線の透過 PNG が多いので、ダークでは白い下地を敷いて読めるようにする */
   background: var(--figure-bg);
+  border-radius: 6px;
 }
 #paper figure {
   margin: 1.5em 0;
@@ -171,10 +231,15 @@ body.resizing #paper, body.resizing #explain-pane {
   overflow-x: auto;
 }
 #paper figcaption {
-  font-size: 0.9em;
+  font-size: 0.88em;
+  line-height: 1.6;
   text-align: left;
-  margin-top: 0.5em;
+  margin-top: 0.7em;
   color: var(--muted);
+}
+#paper .ltx_tag_figure, #paper .ltx_tag_table {
+  font-weight: 700;
+  color: var(--paper-fg);
 }
 #paper table {
   border-collapse: collapse;
@@ -228,13 +293,14 @@ body.resizing #paper, body.resizing #explain-pane {
   line-height: 1.5;
   background: var(--note-bg);
   border: 1px solid var(--note-border);
-  border-radius: 4px;
-  box-shadow: 0 2px 8px var(--shadow);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px var(--shadow);
 }
 #paper .ltx_note_mark { color: var(--link); }
 
-#paper .ltx_authors { font-size: 0.92em; color: var(--muted); margin-bottom: 1.5em; }
-#paper .ltx_abstract { font-size: 0.96em; margin: 1.5em 0 2em; }
+#paper .ltx_authors { font-size: 0.9em; line-height: 1.6; color: var(--muted); margin-bottom: 1.5em; }
+#paper .ltx_authors a { color: var(--muted); }
+#paper .ltx_abstract { font-size: 0.96em; margin: 1.5em 0 2.2em; }
 #paper .ltx_bibliography { font-size: 0.9em; }
 #paper .ltx_bibitem { margin-bottom: 0.6em; }
 #paper .ltx_centering, #paper .ltx_align_center { text-align: center; }
@@ -249,11 +315,81 @@ body.resizing #paper, body.resizing #explain-pane {
 }
 #paper pre { overflow-x: auto; }
 
-/* プレースホルダーとエラー */
+/* はじめの画面 */
 .paper-placeholder {
   color: var(--placeholder);
-  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
-  margin-top: 4rem !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  line-height: 1.7;
+  margin-top: 10vh !important;
+  max-width: 36rem !important;
+}
+.paper-placeholder .hero-badge {
+  display: inline-block;
+  font-size: 0.78em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 0.25em 0.9em;
+}
+#paper .paper-placeholder h1 {
+  font-size: 2.3em;
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  margin: 0.5em 0 0.4em;
+  border: none;
+}
+.paper-placeholder .accent {
+  background: linear-gradient(90deg, var(--accent), #c062d6);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.paper-placeholder .lead { font-size: 1.05em; margin-bottom: 1.8em; }
+.paper-placeholder .steps {
+  list-style: none;
+  counter-reset: step;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.7em;
+}
+.paper-placeholder .steps li {
+  counter-increment: step;
+  display: grid;
+  grid-template-columns: 2.2em 1fr;
+  column-gap: 0.8em;
+  align-items: start;
+  background: var(--abstract-bg);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  padding: 0.85em 1em;
+}
+.paper-placeholder .steps li::before {
+  content: counter(step);
+  grid-row: span 2;
+  width: 2.2em;
+  height: 2.2em;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.paper-placeholder .steps b { color: var(--heading); }
+.paper-placeholder .steps span { font-size: 0.92em; }
+.paper-placeholder kbd {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.85em;
+  padding: 0.05em 0.45em;
+  border: 1px solid var(--rule);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--paper-bg);
+  color: var(--heading);
 }
 .fatal-error {
   background: var(--fatal-bg);

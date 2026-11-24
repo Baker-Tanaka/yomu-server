@@ -11,7 +11,7 @@
 | パス | 内容 |
 | --- | --- |
 | `crates/shared` | API の型（server と web で共有） |
-| `crates/server` | axum サーバー（静的配信、`/api/paper`、`/api/dict`、`/api/explain`、`/api/history`、`/api/health`） |
+| `crates/server` | axum サーバー（静的配信、`/api/paper`、`/api/search`、`/api/dict`、`/api/explain`、`/api/history`、`/api/health`） |
 | `crates/web` | eframe アプリ（wasm32-unknown-unknown）、`index.html`、`Trunk.toml`、`assets/` |
 | `scripts/import_dict` | 辞書データを SQLite に投入するツール |
 | `scripts/subset_font.sh` | 日本語フォントを使う文字だけに絞るスクリプト |
@@ -104,12 +104,17 @@ trunk serve
 
 ### 使い方のヒント
 
+- **論文を開く・探す**: 解説ペイン上部の欄に、arXiv の URL・ID（`1706.03762`、`arXiv:2301.12345v2` など）を入れると「開く」、
+  それ以外の語を入れると「検索」になります。検索結果は「検索」タブに並び、「読む」かタイトルで開きます
+  - 題名をそのまま入れると題名で探します（`attention is all you need`）。`"..."` で語句、`ti:` `au:` `abs:` `cat:` で欄を指定できます
+  - 並び順は「関連度」と「新着」。「さらに表示」で続きを読み込みます
+
 - **解説**: 「解説する」または **E** キー。**Esc** で選択を解除します（解説ペインにフォーカスがあっても使えます）
 - **キャッシュ**: 一度解説した文は保存され、次からは LLM を呼ばずにすぐ表示されます（「キャッシュから表示」と出ます）。
   作り直すときは「再生成」を押します
 - **履歴**: 「履歴」タブに、論文ごとに調べた単語と解説した文が新しい順に並びます。クリックで再表示（解説がキャッシュにあればそれも表示）、
   × で削除。「すべての論文」に切り替えると、ほかの論文の履歴と「論文を開く」ボタンが出ます
-- **配色**: タブ行の右の「表示」で 自動（OS の設定に従う）/ ライト / ダーク を選べます。論文ペインと解説ペインの両方に効き、ブラウザに保存されます。
+- **配色**: 右上のボタンで 自動（OS の設定に従う）→ ライト → ダーク と切り替わります。論文ペインと解説ペインの両方に効き、ブラウザに保存されます。
   ダークでは図（黒い線の透過画像が多い）に白い下地を敷いて読めるようにしています
 - **ペインの幅**: 境界線をドラッグで変更（ダブルクリックで元に戻す、矢印キーでも調整可）。幅はブラウザに保存されます。
   画面幅 800px 以下（iPhone など）では上下に並び、境界線で高さを変えられます
@@ -248,6 +253,11 @@ tailscale serve status
   - 最後まで生成できた解説は `explain_cache` に保存します。キーは `sha256(LLM_MODEL, mode, text, context, プロンプトのバージョン)`。
     次に同じ解説を頼まれたら LLM を呼ばずに `event: cached` → `event: token`（全文）→ `event: done` を返します。
     `regenerate: true` ならキャッシュを使わずに生成し、結果で上書きします
+- `GET /api/search?q=<検索語>&start=<0〜>&sort=relevance|newest` → `{ total, start, items: [{ id, title, authors, summary, published, primary_category }] }`
+  - arXiv API（`https://export.arxiv.org/api/query`）で 20 件ずつ検索します。宛先は固定で、クエリはサーバーで組み立てます
+  - 語はすべて含む（AND）。is / of などのストップワードは除きます（arXiv では AND に入れると 0 件になるため）。
+    3 語以上でストップワードを含む入力は題名とみなし、まず語句として探して、0 件ならキーワードで探し直します。題名が完全に一致する論文は先頭に出します
+  - arXiv API の利用規約に従って問い合わせは 3 秒に 1 回までにし、同じ検索は 10 分間メモリにキャッシュします
 - `GET /api/history?paper=<論文 ID>` → `{ entries: [{ id, paper_id, paper_title, mode, text, context, updated_at, has_explanation }] }`
   - 新しい順に最大 200 件。`paper` を省くと全論文。`has_explanation` は今のモデルの解説がキャッシュにあるか
 - `POST /api/history` body: `{ paper_id, paper_title, mode, text, context }` → 204（同じ論文・mode・text なら時刻と文脈を更新）

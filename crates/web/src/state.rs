@@ -5,9 +5,10 @@ use std::rc::Rc;
 
 use eframe::egui;
 use paper_reader_shared::{
-    DictResponse, ExplainRequest, ExplainTag, GrammarMapResponse, HealthResponse, HistoryEntry,
-    HistoryRecord, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, SEARCH_PAGE_SIZE, SearchItem,
-    SearchSort, clip_context, paper_url_from_input, sse_event,
+    DictResponse, ExplainRequest, ExplainTag, FeedbackContext, FeedbackDraft, FeedbackItem,
+    FeedbackListResponse, FeedbackPreview, FeedbackSubmit, GrammarMapResponse, HealthResponse,
+    HistoryEntry, HistoryRecord, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, SEARCH_PAGE_SIZE,
+    SearchItem, SearchSort, clip_context, paper_url_from_input, sse_event,
 };
 use web_sys::AbortController;
 
@@ -128,6 +129,52 @@ pub enum GrammarOrder {
     Frequency,
 }
 
+/// フィードバック（不具合・要望を GitHub の Issue にする）の段階。
+#[derive(Debug, Clone, Default)]
+pub enum FeedbackStage {
+    /// 書いている
+    #[default]
+    Edit,
+    /// LLM がラベルとタイトルを付けている
+    Labeling,
+    /// 送る内容を確認している
+    Review(FeedbackPreview),
+    Sending,
+    /// 保存した（Issue を作ったか、未送信）
+    Done(FeedbackItem),
+}
+
+/// フィードバックの画面の状態。
+#[derive(Debug, Clone)]
+pub struct Feedback {
+    pub open: bool,
+    pub stage: FeedbackStage,
+    pub title: String,
+    pub body: String,
+    /// 開いている論文・選択中のテキスト・ブラウザの種類を添付する
+    pub include_context: bool,
+    /// 確認画面で選んでいるラベル
+    pub labels: Vec<String>,
+    pub error: Option<String>,
+    /// 送信先の設定と、送ったフィードバックの一覧
+    pub list: Option<FeedbackListResponse>,
+}
+
+impl Default for Feedback {
+    fn default() -> Self {
+        Self {
+            open: false,
+            stage: FeedbackStage::Edit,
+            title: String::new(),
+            body: String::new(),
+            include_context: true,
+            labels: Vec::new(),
+            error: None,
+            list: None,
+        }
+    }
+}
+
 /// 「講座の案内を表示する」設定の localStorage のキー
 const SHOW_COURSE_KEY: &str = "paper-reader.show-course";
 
@@ -215,6 +262,7 @@ pub struct Shared {
     pub grammar_stale: bool,
     /// 設定: 講座（パーフェクト英文法）の案内を表示する
     pub show_course: bool,
+    pub feedback: Feedback,
 }
 
 impl Shared {
@@ -741,5 +789,166 @@ pub fn refresh_grammar(this: &SharedRef, ctx: &egui::Context) {
             Err(e) => GrammarStatus::Error(e),
         };
         ctx.request_repaint();
+    });
+}
+
+/// フィードバックの画面を開く（書きかけの内容は残す）。
+pub fn open_feedback(this: &SharedRef, ctx: &egui::Context) {
+    {
+        let mut s = this.borrow_mut();
+        let f = &mut s.feedback;
+        f.open = true;
+        f.error = None;
+        if matches!(f.stage, FeedbackStage::Done(_)) {
+            f.stage = FeedbackStage::Edit;
+        }
+    }
+    refresh_feedback_list(this, ctx);
+}
+
+pub fn refresh_feedback_list(this: &SharedRef, ctx: &egui::Context) {
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::fetch_feedback().await;
+        let mut s = this.borrow_mut();
+        match result {
+            Ok(list) => s.feedback.list = Some(list),
+            Err(e) => log::warn!("フィードバックの一覧を取得できません: {e}"),
+        }
+        ctx.request_repaint();
+    });
+}
+
+/// 送信時の状況（添付する場合だけ Issue に載る）。
+fn feedback_context(s: &Shared) -> FeedbackContext {
+    let (paper_id, paper_title) = match s.paper_ref() {
+        Some((id, title)) => (Some(id), Some(title)),
+        None => (None, None),
+    };
+    let tab = match s.tab {
+        Tab::Explain => "解説",
+        Tab::Search => "検索",
+        Tab::History => "履歴",
+        Tab::Grammar => "文法項目",
+    };
+    FeedbackContext {
+        paper_id,
+        paper_title,
+        selection: s.selection.as_ref().map(|sel| sel.text.clone()),
+        tab: tab.into(),
+        user_agent: web_sys::window()
+            .and_then(|w| w.navigator().user_agent().ok())
+            .unwrap_or_default(),
+    }
+}
+
+/// LLM にラベルとタイトルを付けてもらい、確認画面にする。
+pub fn preview_feedback(this: &SharedRef, ctx: &egui::Context) {
+    let draft = {
+        let mut s = this.borrow_mut();
+        let context = feedback_context(&s);
+        let f = &mut s.feedback;
+        if f.body.trim().is_empty() {
+            f.error = Some("内容を書いてください".into());
+            return;
+        }
+        f.error = None;
+        f.stage = FeedbackStage::Labeling;
+        FeedbackDraft {
+            title: f.title.clone(),
+            body: f.body.clone(),
+            include_context: f.include_context,
+            context,
+        }
+    };
+    ctx.request_repaint();
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::preview_feedback(&draft).await;
+        let mut s = this.borrow_mut();
+        let f = &mut s.feedback;
+        if !matches!(f.stage, FeedbackStage::Labeling) {
+            return;
+        }
+        match result {
+            Ok(p) => {
+                f.title = p.title.clone();
+                f.labels = p.labels.clone();
+                f.stage = FeedbackStage::Review(p);
+            }
+            Err(e) => {
+                f.error = Some(e);
+                f.stage = FeedbackStage::Edit;
+            }
+        }
+        ctx.request_repaint();
+    });
+}
+
+/// 確認した内容で送る（GitHub が未設定なら保存だけ）。
+pub fn submit_feedback(this: &SharedRef, ctx: &egui::Context) {
+    let sub = {
+        let mut s = this.borrow_mut();
+        let context = feedback_context(&s);
+        let f = &mut s.feedback;
+        f.error = None;
+        f.stage = FeedbackStage::Sending;
+        FeedbackSubmit {
+            title: f.title.clone(),
+            body: f.body.clone(),
+            labels: f.labels.clone(),
+            include_context: f.include_context,
+            context,
+        }
+    };
+    ctx.request_repaint();
+    let this = this.clone();
+    let ctx2 = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::submit_feedback(&sub).await;
+        {
+            let mut s = this.borrow_mut();
+            let f = &mut s.feedback;
+            match result {
+                Ok(item) => {
+                    // 送れたら（保存できたら）書いた内容は消す
+                    f.title.clear();
+                    f.body.clear();
+                    f.labels.clear();
+                    f.stage = FeedbackStage::Done(item);
+                }
+                Err(e) => {
+                    f.error = Some(e);
+                    f.stage = FeedbackStage::Edit;
+                }
+            }
+        }
+        refresh_feedback_list(&this, &ctx2);
+        ctx2.request_repaint();
+    });
+}
+
+/// 未送信のものを送り直す。
+pub fn retry_feedback(this: &SharedRef, ctx: &egui::Context, id: i64) {
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::retry_feedback(id).await;
+        {
+            let mut s = this.borrow_mut();
+            match result {
+                Ok(item) => {
+                    if let FeedbackStage::Done(done) = &mut s.feedback.stage
+                        && done.id == item.id
+                    {
+                        *done = item;
+                    }
+                }
+                Err(e) => s.feedback.error = Some(e),
+            }
+        }
+        refresh_feedback_list(&this, &ctx);
     });
 }

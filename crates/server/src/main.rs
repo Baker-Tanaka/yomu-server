@@ -5,9 +5,11 @@ mod db;
 mod dict;
 mod error;
 mod explain;
+mod feedback;
 mod grammar;
 mod grammar_api;
 mod history;
+mod llm;
 mod paper;
 mod prompts;
 mod sanitize;
@@ -52,6 +54,9 @@ pub struct AppState {
     grammar: Arc<RwLock<Arc<grammar::GrammarData>>>,
     /// LLM ランタイムが response_format: json_schema を使えるか
     pub structured_output: Arc<AtomicBool>,
+    /// GitHub API 用（フィードバックを Issue にする）
+    pub github_http: reqwest::Client,
+    pub feedback: Arc<feedback::FeedbackState>,
 }
 
 impl AppState {
@@ -123,7 +128,19 @@ async fn main() -> Result<()> {
         searcher: Arc::default(),
         grammar: Arc::new(RwLock::new(Arc::new(grammar_data))),
         structured_output: Arc::new(AtomicBool::new(true)),
+        github_http: feedback::build_client()?,
+        feedback: Arc::default(),
     };
+    match &config.github_repo {
+        Some(repo) if config.github_token.is_some() => {
+            tracing::info!(%repo, "feedback will be sent to GitHub issues");
+            // 前回までに送れなかったフィードバックを送る
+            tokio::spawn(feedback::flush_pending(state.clone()));
+        }
+        _ => tracing::info!(
+            "GITHUB_REPO / GITHUB_TOKEN が未設定のため、フィードバックは保存だけします"
+        ),
+    }
 
     let app = router(state, &config);
     let listener = tokio::net::TcpListener::bind(config.bind_addr)
@@ -153,6 +170,12 @@ fn router(state: AppState, config: &Config) -> Router {
         )
         .route("/history/{id}", delete(history::delete_history))
         .route("/grammar-map", get(grammar_api::get_grammar_map))
+        .route(
+            "/feedback",
+            get(feedback::get_feedback).post(feedback::post_submit),
+        )
+        .route("/feedback/preview", post(feedback::post_preview))
+        .route("/feedback/{id}/retry", post(feedback::post_retry))
         .route("/admin/reload-grammar", post(grammar_api::post_reload))
         .fallback(|| async { AppError::NotFound("API が見つかりません".into()) });
 

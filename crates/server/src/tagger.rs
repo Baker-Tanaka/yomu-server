@@ -4,15 +4,21 @@
 //! - ランタイムが json_schema を受け付けなければ（HTTP 400 / 422 など）、以後は付けずに「JSON だけを出力」させる
 //! - 失敗・タイムアウト・壊れた JSON のときはタグ無しで続ける（解説は止めない）
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use serde_json::{Value, json};
+#[cfg(test)]
+use serde_json::Value;
 
 use crate::grammar::{
     DetectedTag, GrammarData, parse_tagging_response, tagging_schema, tagging_system_prompt,
     tagging_user_message,
 };
+#[cfg(test)]
+use crate::llm::chat_body;
+use crate::llm::{JsonChat, JsonRequest};
 
 /// タグ付けの上限時間
 const TAGGING_TIMEOUT: Duration = Duration::from_secs(60);
@@ -27,130 +33,58 @@ pub struct Tagger<'a> {
     pub structured_output: &'a AtomicBool,
 }
 
-#[derive(Debug)]
-enum TagError {
-    /// json_schema を受け付けなかった
-    SchemaRejected(String),
-    Other(String),
-}
-
-impl std::fmt::Display for TagError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::SchemaRejected(m) => write!(f, "json_schema を受け付けませんでした: {m}"),
-            Self::Other(m) => f.write_str(m),
-        }
-    }
-}
-
 impl Tagger<'_> {
     /// 英文の文法タグを返す。失敗したら空（理由はログに出す）。
     pub async fn tag(&self, g: &GrammarData, sentence: &str) -> Vec<DetectedTag> {
-        let structured = self.structured_output.load(Ordering::Relaxed);
-        let first =
-            tokio::time::timeout(TAGGING_TIMEOUT, self.request(g, sentence, structured)).await;
-        let content = match first {
-            Ok(Ok(c)) => c,
-            Ok(Err(TagError::SchemaRejected(msg))) if structured => {
-                tracing::warn!(error = %msg, "json_schema is not supported; falling back to plain JSON");
-                self.structured_output.store(false, Ordering::Relaxed);
-                match tokio::time::timeout(TAGGING_TIMEOUT, self.request(g, sentence, false)).await
-                {
-                    Ok(Ok(c)) => c,
-                    Ok(Err(e)) => {
-                        tracing::warn!(error = %e, "grammar tagging failed");
-                        return Vec::new();
-                    }
-                    Err(_) => {
-                        tracing::warn!("grammar tagging timed out");
-                        return Vec::new();
-                    }
-                }
-            }
-            Ok(Err(e)) => {
+        let chat = JsonChat {
+            http: self.http,
+            base_url: self.base_url,
+            model: self.model,
+            disable_thinking: self.disable_thinking,
+            structured_output: self.structured_output,
+        };
+        let system = tagging_system_prompt(g);
+        let user = tagging_user_message(sentence);
+        let req = JsonRequest {
+            system: &system,
+            user: &user,
+            response_format: tagging_schema(g),
+            max_tokens: TAGGING_MAX_TOKENS,
+            timeout: TAGGING_TIMEOUT,
+        };
+        let content = match chat.complete(&req).await {
+            Ok(c) => c,
+            Err(e) => {
                 tracing::warn!(error = %e, "grammar tagging failed");
-                return Vec::new();
-            }
-            Err(_) => {
-                tracing::warn!("grammar tagging timed out");
                 return Vec::new();
             }
         };
         let tags = parse_tagging_response(&content, g, sentence);
         tracing::info!(
             tags = ?tags.iter().map(|t| t.tag_id.as_str()).collect::<Vec<_>>(),
-            structured,
             "grammar tagged"
         );
         tags
     }
-
-    async fn request(
-        &self,
-        g: &GrammarData,
-        sentence: &str,
-        structured: bool,
-    ) -> Result<String, TagError> {
-        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let body = request_body(self.model, g, sentence, structured, self.disable_thinking);
-        let resp = self
-            .http
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| TagError::Other(e.to_string()))?;
-        let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| TagError::Other(e.to_string()))?;
-        if !status.is_success() {
-            let msg = format!(
-                "HTTP {}: {}",
-                status.as_u16(),
-                text.chars().take(200).collect::<String>()
-            );
-            return Err(
-                if structured && matches!(status.as_u16(), 400 | 415 | 422 | 501) {
-                    TagError::SchemaRejected(msg)
-                } else {
-                    TagError::Other(msg)
-                },
-            );
-        }
-        let v: Value = serde_json::from_str(&text).map_err(|e| TagError::Other(e.to_string()))?;
-        Ok(v.pointer("/choices/0/message/content")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string())
-    }
 }
 
-pub fn request_body(
+/// タグ付けのリクエスト body（テスト用に構造を確かめる）。
+#[cfg(test)]
+fn request_body(
     model: &str,
     g: &GrammarData,
     sentence: &str,
     structured: bool,
     disable_thinking: bool,
 ) -> Value {
-    let mut body = json!({
-        "model": model,
-        "stream": false,
-        "temperature": 0.0,
-        "max_tokens": TAGGING_MAX_TOKENS,
-        "messages": [
-            { "role": "system", "content": tagging_system_prompt(g) },
-            { "role": "user", "content": tagging_user_message(sentence) },
-        ],
-    });
-    if structured {
-        body["response_format"] = tagging_schema(g);
-    }
-    if disable_thinking {
-        body["reasoning_effort"] = json!("none");
-    }
-    body
+    chat_body(
+        model,
+        &tagging_system_prompt(g),
+        &tagging_user_message(sentence),
+        structured.then(|| tagging_schema(g)),
+        TAGGING_MAX_TOKENS,
+        disable_thinking,
+    )
 }
 
 #[cfg(test)]

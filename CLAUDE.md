@@ -49,6 +49,10 @@ POST /api/explain               … body: { mode: "word" | "sentence", text, con
                                    （キャッシュのヒット時は cached → tags → token → done）
 GET  /api/grammar-map           … 文法タグ一覧・カテゴリ・レッスン対応・履歴での出現回数
 POST /api/admin/reload-grammar  … 文法タグとレッスン対応を読み直す（127.0.0.1 から直接の要求のみ。転送ヘッダー付きは拒否）
+GET  /api/feedback              … 送信先の設定（GitHub）・ラベル定義・送ったフィードバックの一覧
+POST /api/feedback/preview      … 不具合・要望の下書きに LLM がラベル（種類・機能の場所）とタイトルを付け、Issue の本文を組み立てて返す（まだ送らない）
+POST /api/feedback              … 確認した内容を保存し、GitHub が設定されていれば Issue を作る（未設定・失敗なら未送信として残す）
+POST /api/feedback/{id}/retry   … 未送信のフィードバックを送り直す
 GET  /api/health                … サーバーと LLM ランタイムの疎通確認
 
 # 設定（環境変数, .env 可）
@@ -61,6 +65,8 @@ ALLOWED_HOSTS=arxiv.org,www.arxiv.org
 GRAMMAR_TAGS_PATH=data/grammar_tags.yaml                # 文法タグのマスター（リポジトリで管理）
 GRAMMAR_MAP_PATH=data/grammar_map.local.yaml            # 講座のレッスン対応（ユーザーが記入。git 管理外）
 GRAMMAR_MAP_TEMPLATE_PATH=data/grammar_map.template.yaml # local が無いときに読むテンプレート
+GITHUB_REPO=<owner/name>                                # フィードバックを Issue にするリポジトリ（未設定なら保存だけ）
+GITHUB_TOKEN=<fine-grained token>                       # そのリポジトリの Issues: Read and write だけを持つトークン
 
 # 守るべきルール
 - セキュリティ
@@ -69,6 +75,10 @@ GRAMMAR_MAP_TEMPLATE_PATH=data/grammar_map.template.yaml # local が無いとき
     MathML（math, mi, mo, mn, msup, msub, mfrac, mrow, msqrt, mtext, semantics, annotation など）と、
     表・図・見出し・段落・リストは残す。相対 URL の img src は絶対 URL に書き換える
   - LLM への入力文字数に上限を設ける（例: text 2,000 文字、context 4,000 文字）
+  - GITHUB_TOKEN はサーバーの環境変数にだけ置く。ブラウザ・LLM・ログに出さない（設定の Debug 表示は伏せ字にする）
+  - GitHub API の宛先は https://api.github.com に固定し、リダイレクトは追わない
+  - フィードバックは公開リポジトリの Issue になりうるので、送る前に本文をプレビューで見せる。論文・選択テキスト・ブラウザ情報の添付は利用者が選ぶ
+  - フィードバックのラベルは固定の一覧から選ぶ（LLM の出力は enum で縛り、サーバーでも検証する）
 - 信頼性
   - LLM への同時リクエストは tokio::sync::Semaphore で 1 件に制限し、待機中は SSE で「順番待ち」を送る
   - クライアントが切断したら LLM へのストリームも中断する

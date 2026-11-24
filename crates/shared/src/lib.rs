@@ -203,6 +203,108 @@ pub fn is_arxiv_id(s: &str) -> bool {
     false
 }
 
+/// フィードバックに添える、アプリの状態（「状況を添付する」をオンにしたときだけ Issue に載る）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeedbackContext {
+    #[serde(default)]
+    pub paper_id: Option<String>,
+    #[serde(default)]
+    pub paper_title: Option<String>,
+    /// 選択中のテキスト
+    #[serde(default)]
+    pub selection: Option<String>,
+    /// 表示中のタブ
+    #[serde(default)]
+    pub tab: String,
+    /// ブラウザの User-Agent
+    #[serde(default)]
+    pub user_agent: String,
+}
+
+/// `POST /api/feedback/preview` の body（LLM がラベルとタイトルを付ける前の下書き）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeedbackDraft {
+    /// 空なら LLM が付ける
+    #[serde(default)]
+    pub title: String,
+    pub body: String,
+    #[serde(default)]
+    pub include_context: bool,
+    #[serde(default)]
+    pub context: FeedbackContext,
+}
+
+/// `POST /api/feedback/preview` の応答。この内容で Issue を作る。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeedbackPreview {
+    pub title: String,
+    /// LLM が選んだラベル（from-app などの固定のものを含む）
+    pub labels: Vec<String>,
+    /// Issue の本文（Markdown）
+    pub issue_body: String,
+    /// ラベルを LLM が付けたか（失敗したら needs-triage だけ）
+    pub llm_labeled: bool,
+}
+
+/// `POST /api/feedback` の body（プレビューを確認・修正したもの）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeedbackSubmit {
+    pub title: String,
+    pub body: String,
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub include_context: bool,
+    #[serde(default)]
+    pub context: FeedbackContext,
+}
+
+/// 送ったフィードバック 1 件。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeedbackItem {
+    pub id: i64,
+    pub created_at: i64,
+    pub title: String,
+    pub labels: Vec<String>,
+    /// "created"（Issue を作った）か "pending"（未送信。GitHub 未設定や送信失敗）
+    pub status: String,
+    #[serde(default)]
+    pub issue_url: Option<String>,
+    #[serde(default)]
+    pub issue_number: Option<i64>,
+    /// 最後に送信に失敗した理由
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// ラベルの定義（表示用）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeedbackLabel {
+    pub name: String,
+    /// 16 進の色（# なし）
+    pub color: String,
+    pub description: String,
+    /// "type"（種類）, "area"（機能の場所）, "meta"（自動で付くもの）
+    pub kind: String,
+}
+
+/// `GET /api/feedback` の応答。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeedbackListResponse {
+    /// GitHub への送信が設定されているか（GITHUB_REPO と GITHUB_TOKEN）
+    pub configured: bool,
+    /// 送信先（owner/name）
+    #[serde(default)]
+    pub repo: Option<String>,
+    pub labels: Vec<FeedbackLabel>,
+    /// 新しい順
+    pub items: Vec<FeedbackItem>,
+}
+
+/// フィードバック本文の上限（文字数）
+pub const MAX_FEEDBACK_BODY_CHARS: usize = 4_000;
+/// フィードバックのタイトルの上限（文字数）
+pub const MAX_FEEDBACK_TITLE_CHARS: usize = 120;
+
 /// 講座の範囲外として扱うカテゴリ（論文に多い構文）
 pub const OUT_OF_COURSE_CATEGORY: &str = "論文構文";
 

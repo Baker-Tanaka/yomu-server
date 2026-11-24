@@ -22,6 +22,26 @@ pub struct Config {
     /// 講座のレッスン対応（ユーザーが記入する。無ければテンプレートを読む）
     pub grammar_map_path: PathBuf,
     pub grammar_map_template_path: PathBuf,
+    /// フィードバックを Issue にするリポジトリ（owner/name）。未設定なら送信せずに保存だけする
+    pub github_repo: Option<String>,
+    /// Issue を作る GitHub のトークン（Fine-grained token、そのリポジトリの Issues: Read and write だけ）
+    pub github_token: Option<Secret>,
+}
+
+/// ログなどに出してはいけない値。Debug では伏せ字になる。
+#[derive(Clone)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(***)")
+    }
 }
 
 impl Config {
@@ -44,7 +64,33 @@ impl Config {
                 "data/grammar_map.template.yaml",
             )
             .into(),
+            github_repo: parse_repo(&get("GITHUB_REPO", ""))?,
+            github_token: Some(get("GITHUB_TOKEN", ""))
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .map(Secret),
         })
+    }
+}
+
+/// `owner/name` の形か確かめる（空なら未設定）。
+fn parse_repo(s: &str) -> Result<Option<String>> {
+    let s = s.trim().trim_end_matches(".git");
+    if s.is_empty() {
+        return Ok(None);
+    }
+    let ok_part = |p: &str| {
+        !p.is_empty()
+            && p != "."
+            && p != ".."
+            && p.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    };
+    match s.split_once('/') {
+        Some((owner, name)) if ok_part(owner) && ok_part(name) => Ok(Some(s.to_string())),
+        _ => anyhow::bail!(
+            "GITHUB_REPO は owner/name の形で指定してください（例: octocat/hello）: {s}"
+        ),
     }
 }
 
@@ -80,6 +126,34 @@ mod tests {
             super::parse_hosts(" arxiv.org, WWW.arxiv.org ,,"),
             vec!["arxiv.org", "www.arxiv.org"]
         );
+    }
+
+    #[test]
+    fn repo() {
+        assert_eq!(super::parse_repo("").unwrap(), None);
+        assert_eq!(
+            super::parse_repo(" Baker-Tanaka/yomu-server.git ")
+                .unwrap()
+                .as_deref(),
+            Some("Baker-Tanaka/yomu-server")
+        );
+        for bad in [
+            "noslash",
+            "a/b/c",
+            "a/..",
+            "a /b",
+            "https://github.com/a/b",
+            "a/b?x",
+        ] {
+            assert!(super::parse_repo(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn secret_is_hidden() {
+        let s = super::Secret("ghp_x".into());
+        assert_eq!(format!("{s:?}"), "Secret(***)");
+        assert_eq!(s.expose(), "ghp_x");
     }
 
     #[test]

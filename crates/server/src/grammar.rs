@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::llm::extract_json_object;
+
 /// 講座の 17 分類と「論文構文」（表示の順番）。
 pub const CATEGORIES: &[&str] = &[
     "時制",
@@ -540,12 +542,6 @@ fn normalize(s: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
-}
-
-fn extract_json_object(s: &str) -> Option<&str> {
-    let start = s.find('{')?;
-    let end = s.rfind('}')?;
-    (end > start).then(|| &s[start..=end])
 }
 
 #[cfg(test)]

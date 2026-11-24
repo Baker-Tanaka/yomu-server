@@ -1,9 +1,11 @@
 //! サーバー API の呼び出し（fetch）。
 
 use paper_reader_shared::{
-    DictResponse, ErrorResponse, ExplainRequest, GrammarMapResponse, HealthResponse, HistoryRecord,
+    DictResponse, ErrorResponse, ExplainRequest, FeedbackDraft, FeedbackItem, FeedbackListResponse,
+    FeedbackPreview, FeedbackSubmit, GrammarMapResponse, HealthResponse, HistoryRecord,
     HistoryResponse, PaperResponse, SearchResponse, SearchSort, SseEvent, SseParser,
 };
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_futures::JsFuture;
@@ -32,6 +34,60 @@ pub async fn fetch_search(q: &str, start: u32, sort: SearchSort) -> Result<Searc
         "/api/search?q={encoded}&start={start}&sort={sort}"
     ))
     .await
+}
+
+pub async fn fetch_feedback() -> Result<FeedbackListResponse, String> {
+    get_json("/api/feedback").await
+}
+
+pub async fn preview_feedback(draft: &FeedbackDraft) -> Result<FeedbackPreview, String> {
+    post_json("/api/feedback/preview", Some(draft)).await
+}
+
+pub async fn submit_feedback(sub: &FeedbackSubmit) -> Result<FeedbackItem, String> {
+    post_json("/api/feedback", Some(sub)).await
+}
+
+pub async fn retry_feedback(id: i64) -> Result<FeedbackItem, String> {
+    post_json::<FeedbackItem, ()>(&format!("/api/feedback/{id}/retry"), None).await
+}
+
+/// JSON を POST して JSON を受け取る。
+async fn post_json<T: DeserializeOwned, B: Serialize>(
+    path: &str,
+    body: Option<&B>,
+) -> Result<T, String> {
+    let window = web_sys::window().ok_or("window が取得できません")?;
+    let init = RequestInit::new();
+    init.set_method("POST");
+    if let Some(body) = body {
+        let json = serde_json::to_string(body).map_err(|e| e.to_string())?;
+        let headers = Headers::new().map_err(|e| js_error(&e))?;
+        headers
+            .set("Content-Type", "application/json")
+            .map_err(|e| js_error(&e))?;
+        init.set_headers(&headers);
+        init.set_body(&JsValue::from_str(&json));
+    }
+    let request = Request::new_with_str_and_init(path, &init).map_err(|e| js_error(&e))?;
+    let resp: Response = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| format!("サーバーに接続できません（{}）", js_error(&e)))?
+        .dyn_into()
+        .map_err(|_| "不正な応答です".to_string())?;
+    let text = JsFuture::from(resp.text().map_err(|e| js_error(&e))?)
+        .await
+        .map_err(|e| js_error(&e))?
+        .as_string()
+        .unwrap_or_default();
+    if resp.ok() {
+        serde_json::from_str(&text).map_err(|e| format!("応答を解釈できません: {e}"))
+    } else {
+        match serde_json::from_str::<ErrorResponse>(&text) {
+            Ok(err) => Err(err.error),
+            Err(_) => Err(format!("サーバーエラー（HTTP {}）", resp.status())),
+        }
+    }
 }
 
 pub async fn fetch_grammar_map() -> Result<GrammarMapResponse, String> {

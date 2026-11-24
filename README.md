@@ -172,6 +172,38 @@ deploy/install.sh --no-build                                  # 常時稼働の�
 - タグ付けの分だけ、解説が流れ始めるまでが 2〜4 秒ほど延びます（gemma4:e4b-it-qat、モデル読み込み済み）。Ollama は
   `OLLAMA_NUM_PARALLEL=2` にして、タグ付けと解説のプロンプトがそれぞれキャッシュされるようにしています
 
+## 不具合・要望を送る（GitHub Issue）
+
+右上の 💬（または ⚙ の「不具合・要望を送る…」）から、気づいた不具合や欲しい機能を書いて送れます。
+
+1. 内容を書く（タイトルは空欄でよい）。「状況を添付する」をオンにすると、開いている論文・選択中のテキスト・ブラウザの種類も載ります
+2. 「AI でラベルを付けて確認」… ローカル LLM が種類（`bug` / `enhancement` / `question`）と機能の場所
+   （`area:paper` `area:search` `area:dict` `area:explain` `area:grammar` `area:history` `area:ui` `area:mobile` `area:ops`）
+   のラベルを選び、タイトルが空なら要約を付けます。ラベルは押して付け外しでき、送られる本文もそのまま表示されます
+3. 「GitHub に Issue を作成」… Issue になり、リンクが出ます。`from-app` ラベルが必ず付きます
+   （LLM がラベルを付けられなかったときは `needs-triage`）
+
+GitHub が未設定のとき・送信に失敗したときは、この Mac の SQLite に「未送信」として残ります。設定してサーバーを再起動すると自動で送られ、
+💬 の画面の「送ったフィードバック」から手動で再送もできます。ラベルは最初の送信時にリポジトリへ作られます（色と説明つき）。
+
+### GitHub の設定
+
+1. GitHub の Settings → Developer settings → Personal access tokens → **Fine-grained tokens** でトークンを作る
+   - Repository access: **Only select repositories** で対象のリポジトリだけ
+   - Permissions: Repository permissions の **Issues: Read and write** だけ（Metadata: Read-only は自動で付く）
+2. `.env` に書く（`.env` は git 管理外）
+
+   ```sh
+   GITHUB_REPO=owner/name
+   GITHUB_TOKEN=github_pat_...
+   ```
+
+3. `deploy/install.sh --no-build`（`.env` を配置先にコピーしてサーバーを再起動する）
+
+- トークンはサーバーにだけ置き、ブラウザや LLM には渡しません。ログの設定表示も `Secret(***)` になります
+- 宛先は `https://api.github.com` 固定です。連続送信は 5 秒あけ、本文は 4,000 文字まで
+- **公開リポジトリの Issue は誰でも読めます。** 個人的な情報は書かず、添付する内容は確認画面で確かめてください
+
 ## 運用（常時稼働）
 
 MacBook Air 1 台でサーバーと LLM を常時動かし、tailnet 内の別の端末（iPhone など）から HTTPS で使うための手順です。
@@ -305,6 +337,11 @@ tailscale serve status
   - 語はすべて含む（AND）。is / of などのストップワードは除きます（arXiv では AND に入れると 0 件になるため）。
     3 語以上でストップワードを含む入力は題名とみなし、まず語句として探して、0 件ならキーワードで探し直します。題名が完全に一致する論文は先頭に出します
   - arXiv API の利用規約に従って問い合わせは 3 秒に 1 回までにし、同じ検索は 10 分間メモリにキャッシュします
+- `GET /api/feedback` → `{ configured, repo, labels: [{ name, color, description, kind }], items: [{ id, created_at, title, labels, status, issue_url, issue_number, error }] }`
+- `POST /api/feedback/preview` body: `{ title, body, include_context, context: { paper_id, paper_title, selection, tab, user_agent } }`
+  → `{ title, labels, issue_body, llm_labeled }`（LLM のラベル付けは同時実行 1 件の枠を使い、20 秒待っても空かなければラベル無し）
+- `POST /api/feedback` body: `{ title, body, labels, include_context, context }` → 保存した 1 件（`status` は `created` か `pending`）
+- `POST /api/feedback/<id>/retry` → 送り直した結果（GitHub 未設定なら 400）
 - `GET /api/grammar-map` → `{ course, course_short, source: "local" | "template", categories: [{ name, in_course, lesson_count }],
   tags: [{ id, name, category, aliases, hint, in_scope, lessons: [{ id, category, title }], count }] }`（count は履歴の英文での出現回数）
 - `POST /api/admin/reload-grammar` → `{ tags, lessons, source }`（127.0.0.1 から直接の要求のみ。それ以外は 403）

@@ -7,14 +7,15 @@ use std::sync::Arc;
 use eframe::egui::{self, Margin, RichText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use paper_reader_shared::{
-    DictEntry, ExplainTag, GrammarMapResponse, GrammarTagInfo, HistoryEntry, Mode, SearchItem,
-    SearchSort, paper_url_from_input,
+    DictEntry, ExplainTag, FeedbackItem, FeedbackLabel, FeedbackListResponse, GrammarMapResponse,
+    GrammarTagInfo, HistoryEntry, MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode,
+    SearchItem, SearchSort, paper_url_from_input,
 };
 
 use crate::dom;
 use crate::state::{
-    self, DictStatus, ExplainPhase, GrammarOrder, GrammarStatus, HealthStatus, HistoryScope,
-    HistoryStatus, PaperStatus, Shared, SharedRef, Tab,
+    self, DictStatus, ExplainPhase, FeedbackStage, GrammarOrder, GrammarStatus, HealthStatus,
+    HistoryScope, HistoryStatus, PaperStatus, Shared, SharedRef, Tab,
 };
 use crate::theme::{self, Palette};
 
@@ -23,6 +24,12 @@ pub struct PaperReaderApp {
     input: String,
     markdown_cache: CommonMarkCache,
     theme: dom::ThemeChoice,
+    /// フィードバックの画面の中身が変わったか調べるための値（変わったら大きさを測り直す）
+    feedback_layout: u64,
+    /// 大きさを測り直す残りの描画回数
+    feedback_resize_frames: u8,
+    /// 前の描画で測ったフィードバックの画面の中身の高さ
+    feedback_content_h: f32,
 }
 
 impl PaperReaderApp {
@@ -61,6 +68,9 @@ impl PaperReaderApp {
             input: String::new(),
             markdown_cache: CommonMarkCache::default(),
             theme,
+            feedback_layout: 0,
+            feedback_resize_frames: 0,
+            feedback_content_h: 300.0,
         }
     }
 
@@ -100,6 +110,13 @@ impl PaperReaderApp {
                     set_theme(ui.ctx(), next);
                 }
                 self.settings_menu(ui);
+                if ui
+                    .add(egui::Button::new(RichText::new("💬").size(14.0)).frame(false))
+                    .on_hover_text("不具合・要望を送る（GitHub の Issue になります）")
+                    .clicked()
+                {
+                    state::open_feedback(&self.shared, ui.ctx());
+                }
                 self.llm_status(ui, &p);
             });
         });
@@ -126,6 +143,12 @@ impl PaperReaderApp {
             let mut auto = s.auto_explain;
             if ui.checkbox(&mut auto, "選択したら自動で解説").changed() {
                 s.auto_explain = auto;
+            }
+            drop(s);
+            ui.separator();
+            if ui.button("💬 不具合・要望を送る…").clicked() {
+                state::open_feedback(&self.shared, ui.ctx());
+                ui.close();
             }
         })
         .response
@@ -799,7 +822,8 @@ impl eframe::App for PaperReaderApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // 解説ペインにフォーカスがあるときのショートカット（論文ペイン側は dom::watch_shortcuts）
         let ctx = ui.ctx().clone();
-        if !ctx.egui_wants_keyboard_input() {
+        let feedback_open = self.shared.borrow().feedback.open;
+        if !feedback_open && !ctx.egui_wants_keyboard_input() {
             let (explain, clear) = ctx.input(|i| {
                 (
                     i.key_pressed(egui::Key::E) && i.modifiers.is_none(),
@@ -842,7 +866,449 @@ impl eframe::App for PaperReaderApp {
                         ui.add_space(16.0);
                     });
             });
+
+        if feedback_open {
+            self.feedback_modal(&ctx);
+        }
     }
+}
+
+impl PaperReaderApp {
+    /// 不具合・要望を送る画面（モーダル）。
+    fn feedback_modal(&mut self, ctx: &egui::Context) {
+        let p = theme::palette(ctx);
+        // 枠の内側の幅（左右の余白 18 + 画面端からの 16 を引く）
+        let width = (ctx.content_rect().width() - 32.0 - 36.0).clamp(240.0, 520.0);
+        let id = egui::Id::unique("feedback_modal");
+        // 中央に置くと下半分しか使えず切れるので、上寄せにする
+        let max_h = (ctx.content_rect().height() - 24.0 - 36.0 - 24.0).max(200.0);
+        // Area は前の描画の大きさを中身の上限にするので、段階などが変わったら測り直す
+        let layout = {
+            use std::hash::{Hash, Hasher};
+            let s = self.shared.borrow();
+            let f = &s.feedback;
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            std::mem::discriminant(&f.stage).hash(&mut h);
+            f.error.is_some().hash(&mut h);
+            f.list
+                .as_ref()
+                .map(|l| (l.items.len(), l.configured))
+                .hash(&mut h);
+            (width as u32, max_h as u32).hash(&mut h);
+            h.finish()
+        };
+        if layout != self.feedback_layout {
+            self.feedback_layout = layout;
+            self.feedback_resize_frames = 3;
+        }
+        let resize = self.feedback_resize_frames > 0;
+        if resize {
+            self.feedback_resize_frames -= 1;
+            ctx.request_repaint();
+        }
+        let area = egui::Modal::default_area(id)
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 24.0))
+            .default_size(egui::vec2(width + 36.0, max_h + 36.0))
+            .sizing_pass(resize);
+        // Modal の背景の暗幕は Area の範囲でしか塗られないので、画面全体を下の層で暗くする
+        ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Middle,
+            egui::Id::unique("feedback_backdrop"),
+        ))
+        .rect_filled(
+            ctx.content_rect(),
+            0.0,
+            egui::Color32::from_black_alpha(110),
+        );
+        let resp = egui::Modal::new(id)
+            .area(area)
+            .backdrop_color(egui::Color32::TRANSPARENT)
+            .frame(
+                egui::Frame::new()
+                    .fill(p.card)
+                    .stroke(egui::Stroke::new(1.0, p.card_stroke))
+                    .corner_radius(egui::CornerRadius::same(14))
+                    .inner_margin(Margin::same(18)),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(width);
+                // 中身の高さ（前の描画で測ったもの）に合わせ、画面に収まらなければスクロールする
+                let h = self.feedback_content_h.clamp(120.0, max_h);
+                egui::ScrollArea::vertical()
+                    .min_scrolled_height(h)
+                    .max_height(h)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        self.feedback_body(ui, &p);
+                        ui.min_rect().height()
+                    })
+                    .inner
+            });
+        // 中身の高さは表示した描画でだけ測る（測り直しの描画では値がずれる）。変わったら測り直す
+        let measured = resp.inner.ceil();
+        if !resize && (measured - self.feedback_content_h).abs() > 1.0 {
+            self.feedback_content_h = measured;
+            self.feedback_resize_frames = 1;
+            ctx.request_repaint();
+        }
+        let busy = matches!(
+            self.shared.borrow().feedback.stage,
+            FeedbackStage::Labeling | FeedbackStage::Sending
+        );
+        // 背景のクリックでは閉じない（書きかけを失わないように）。Esc・✕・「閉じる」で閉じる
+        let esc = resp.is_top_modal && ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        if esc && !busy {
+            self.shared.borrow_mut().feedback.open = false;
+        }
+    }
+
+    fn feedback_body(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let ctx = ui.ctx().clone();
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("不具合・要望を送る")
+                    .size(18.0)
+                    .strong()
+                    .color(p.strong),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let busy = matches!(
+                    self.shared.borrow().feedback.stage,
+                    FeedbackStage::Labeling | FeedbackStage::Sending
+                );
+                if ui
+                    .add_enabled(
+                        !busy,
+                        egui::Button::new(RichText::new("✕").color(p.weak)).frame(false),
+                    )
+                    .on_hover_text("閉じる（書いた内容は残ります）")
+                    .clicked()
+                {
+                    self.shared.borrow_mut().feedback.open = false;
+                }
+            });
+        });
+        let list = self.shared.borrow().feedback.list.clone();
+        destination_note(ui, p, list.as_ref());
+        ui.add_space(6.0);
+
+        let stage = self.shared.borrow().feedback.stage.clone();
+        match stage {
+            FeedbackStage::Edit => self.feedback_edit(ui, p, &ctx),
+            FeedbackStage::Labeling => {
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(
+                        RichText::new("AI がラベル（種類・機能の場所）とタイトルを付けています…")
+                            .color(p.weak),
+                    );
+                });
+                ui.add_space(12.0);
+            }
+            FeedbackStage::Review(preview) => {
+                self.feedback_review(ui, p, &ctx, &preview, list.as_ref())
+            }
+            FeedbackStage::Sending => {
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(RichText::new("送信しています…").color(p.weak));
+                });
+                ui.add_space(12.0);
+            }
+            FeedbackStage::Done(item) => self.feedback_done(ui, p, &ctx, &item, list.as_ref()),
+        }
+
+        if let Some(e) = self.shared.borrow().feedback.error.clone() {
+            ui.add_space(6.0);
+            notice(ui, p, &e);
+        }
+
+        if let Some(list) = &list
+            && !list.items.is_empty()
+        {
+            ui.add_space(10.0);
+            ui.separator();
+            egui::CollapsingHeader::new(
+                RichText::new(format!("送ったフィードバック（{} 件）", list.items.len()))
+                    .size(13.0)
+                    .color(p.weak),
+            )
+            .id_salt("feedback_list")
+            .default_open(false)
+            .show(ui, |ui| {
+                for item in &list.items {
+                    if feedback_row(ui, p, item, list.configured) {
+                        state::retry_feedback(&self.shared, &ctx, item.id);
+                    }
+                }
+            });
+        }
+    }
+
+    fn feedback_edit(&mut self, ui: &mut egui::Ui, p: &Palette, ctx: &egui::Context) {
+        let mut s = self.shared.borrow_mut();
+        let f = &mut s.feedback;
+        ui.label(
+            RichText::new("タイトル（空欄なら AI が付けます）")
+                .size(12.5)
+                .color(p.weak),
+        );
+        ui.add(
+            egui::TextEdit::singleline(&mut f.title)
+                .hint_text("例: iPhone で英文を選択できない")
+                .char_limit(MAX_FEEDBACK_TITLE_CHARS)
+                .desired_width(f32::INFINITY)
+                .margin(Margin::symmetric(8, 6)),
+        );
+        ui.add_space(4.0);
+        ui.label(RichText::new("内容").size(12.5).color(p.weak));
+        ui.add(
+            egui::TextEdit::multiline(&mut f.body)
+                .hint_text(
+                    "何が起きたか、どうしてほしいかを書いてください。\n\
+                     不具合なら「操作の手順」「期待した動き」「実際の動き」があると助かります。",
+                )
+                .char_limit(MAX_FEEDBACK_BODY_CHARS)
+                .desired_rows(7)
+                .desired_width(f32::INFINITY)
+                .margin(Margin::symmetric(8, 6)),
+        );
+        ui.label(
+            RichText::new(format!(
+                "{} / {MAX_FEEDBACK_BODY_CHARS} 文字",
+                f.body.chars().count()
+            ))
+            .size(11.5)
+            .color(p.weak),
+        );
+        ui.checkbox(
+            &mut f.include_context,
+            "状況を添付する（開いている論文・選択中のテキスト・ブラウザの種類）",
+        );
+        ui.add_space(8.0);
+        let can_go = !f.body.trim().is_empty();
+        drop(s);
+        ui.horizontal(|ui| {
+            if theme::primary_button(ui, "AI でラベルを付けて確認 →", can_go).clicked()
+            {
+                state::preview_feedback(&self.shared, ctx);
+            }
+            if theme::subtle_button(ui, "閉じる").clicked() {
+                self.shared.borrow_mut().feedback.open = false;
+            }
+        });
+    }
+
+    fn feedback_review(
+        &mut self,
+        ui: &mut egui::Ui,
+        p: &Palette,
+        ctx: &egui::Context,
+        preview: &paper_reader_shared::FeedbackPreview,
+        list: Option<&FeedbackListResponse>,
+    ) {
+        let configured = list.is_some_and(|l| l.configured);
+        let all_labels: Vec<FeedbackLabel> = list.map(|l| l.labels.clone()).unwrap_or_default();
+        {
+            let mut s = self.shared.borrow_mut();
+            let f = &mut s.feedback;
+            ui.label(RichText::new("タイトル").size(12.5).color(p.weak));
+            ui.add(
+                egui::TextEdit::singleline(&mut f.title)
+                    .char_limit(MAX_FEEDBACK_TITLE_CHARS)
+                    .desired_width(f32::INFINITY)
+                    .margin(Margin::symmetric(8, 6)),
+            );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("ラベル").size(12.5).color(p.weak));
+                if preview.llm_labeled {
+                    ui.label(
+                        RichText::new("AI が選びました。押すと付け外しできます")
+                            .size(11.5)
+                            .color(p.weak),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new("AI がラベルを付けられませんでした（手で選べます）")
+                            .size(11.5)
+                            .color(p.error),
+                    );
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(5.0, 5.0);
+                // 種類・場所のラベルと、いま付いている自動ラベル（from-app など）
+                let shown: Vec<&FeedbackLabel> = all_labels
+                    .iter()
+                    .filter(|l| l.kind != "meta" || f.labels.contains(&l.name))
+                    .collect();
+                for l in shown {
+                    let on = f.labels.contains(&l.name);
+                    let fixed = l.name == "from-app";
+                    let (fg, bg) = if on {
+                        (p.on_accent, p.accent)
+                    } else {
+                        (p.weak, p.card_stroke)
+                    };
+                    let resp = ui
+                        .add_enabled(
+                            !fixed,
+                            egui::Button::new(RichText::new(&l.name).size(12.0).color(fg))
+                                .fill(bg)
+                                .corner_radius(egui::CornerRadius::same(11)),
+                        )
+                        .on_hover_text(&l.description)
+                        .on_disabled_hover_text("アプリから送った印として必ず付きます");
+                    if resp.clicked() {
+                        if on {
+                            f.labels.retain(|x| x != &l.name);
+                        } else {
+                            f.labels.push(l.name.clone());
+                        }
+                    }
+                }
+            });
+        }
+        ui.add_space(8.0);
+        ui.label(RichText::new("送られる本文").size(12.5).color(p.weak));
+        egui::Frame::new()
+            .fill(p.bg)
+            .corner_radius(egui::CornerRadius::same(8))
+            .inner_margin(Margin::same(10))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                egui::ScrollArea::vertical()
+                    .id_salt("feedback_preview_body")
+                    .max_height(220.0)
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(&preview.issue_body)
+                                .monospace()
+                                .size(12.0)
+                                .color(p.text),
+                        );
+                    });
+            });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let label = if configured {
+                "GitHub に Issue を作成"
+            } else {
+                "保存する（未送信）"
+            };
+            let title_ok = !self.shared.borrow().feedback.title.trim().is_empty();
+            if theme::primary_button(ui, label, title_ok).clicked() {
+                state::submit_feedback(&self.shared, ctx);
+            }
+            if theme::subtle_button(ui, "← 戻って直す").clicked() {
+                self.shared.borrow_mut().feedback.stage = FeedbackStage::Edit;
+            }
+        });
+    }
+
+    fn feedback_done(
+        &mut self,
+        ui: &mut egui::Ui,
+        p: &Palette,
+        ctx: &egui::Context,
+        item: &FeedbackItem,
+        list: Option<&FeedbackListResponse>,
+    ) {
+        let configured = list.is_some_and(|l| l.configured);
+        ui.add_space(6.0);
+        theme::card(ui, |ui| {
+            match (&item.issue_url, item.issue_number) {
+                (Some(url), Some(n)) if item.status == "created" => {
+                    ui.label(
+                        RichText::new(format!("✓ Issue #{n} を作成しました"))
+                            .size(16.0)
+                            .strong()
+                            .color(p.ok),
+                    );
+                    ui.hyperlink_to(RichText::new("GitHub で開く ↗").size(13.0), url);
+                }
+                _ => {
+                    ui.label(
+                        RichText::new("この Mac に保存しました（未送信）")
+                            .size(16.0)
+                            .strong()
+                            .color(p.strong),
+                    );
+                    let note = if configured {
+                        "GitHub に送れませんでした。下の理由を確認して「再送」を押してください（次にサーバーを起動したときにも自動で再送します）。"
+                    } else {
+                        "GitHub への送信が設定されていません。.env に GITHUB_REPO と GITHUB_TOKEN を設定すると、次の起動時に送信されます。"
+                    };
+                    ui.label(RichText::new(note).size(12.5).color(p.weak));
+                    if let Some(e) = &item.error {
+                        notice(ui, p, e);
+                    }
+                    if configured && theme::subtle_button(ui, "↻ 再送").clicked() {
+                        state::retry_feedback(&self.shared, ctx, item.id);
+                    }
+                }
+            }
+            ui.horizontal_wrapped(|ui| {
+                for l in &item.labels {
+                    theme::chip(ui, l, p.accent, p.accent_soft);
+                }
+            });
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if theme::primary_button(ui, "もう 1 件書く", true).clicked() {
+                self.shared.borrow_mut().feedback.stage = FeedbackStage::Edit;
+            }
+            if theme::subtle_button(ui, "閉じる").clicked() {
+                let mut s = self.shared.borrow_mut();
+                s.feedback.open = false;
+                s.feedback.stage = FeedbackStage::Edit;
+            }
+        });
+    }
+}
+
+/// 送信先の説明。
+fn destination_note(ui: &mut egui::Ui, p: &Palette, list: Option<&FeedbackListResponse>) {
+    let text = match list {
+        None => "送信先を確認しています…".to_string(),
+        Some(l) => match (&l.repo, l.configured) {
+            (Some(repo), true) => format!(
+                "GitHub の {repo} に Issue として送ります。公開リポジトリなら誰でも読めるので、個人的な情報は書かないでください。"
+            ),
+            _ => "GitHub への送信が未設定のため、この Mac に保存します（設定すると次の起動時に送られます）。".into(),
+        },
+    };
+    ui.label(RichText::new(text).size(12.0).color(p.weak));
+}
+
+/// 送ったフィードバックの 1 行。「再送」が押されたら true。
+fn feedback_row(ui: &mut egui::Ui, p: &Palette, item: &FeedbackItem, configured: bool) -> bool {
+    let mut retry = false;
+    ui.horizontal_wrapped(|ui| {
+        match (&item.issue_url, item.issue_number) {
+            (Some(url), Some(n)) if item.status == "created" => {
+                ui.hyperlink_to(RichText::new(format!("#{n}")).size(12.5), url);
+            }
+            _ => {
+                theme::chip(ui, "未送信", p.weak, p.card_stroke)
+                    .on_hover_text(item.error.as_deref().unwrap_or("GitHub が未設定です"));
+            }
+        }
+        ui.label(RichText::new(&item.title).size(13.0).color(p.text));
+        ui.label(
+            RichText::new(format_time(item.created_at))
+                .size(11.5)
+                .color(p.weak),
+        );
+        if item.status != "created" && configured && ui.small_button("再送").clicked() {
+            retry = true;
+        }
+    });
+    retry
 }
 
 fn tab_salt(tab: Tab) -> &'static str {

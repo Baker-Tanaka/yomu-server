@@ -1,9 +1,83 @@
 /* レイアウト: 左 論文（既定 60%、#splitter のドラッグで --paper-size を変更）/ 右 egui。
    各ペインは独立スクロール */
+/* 配色。data-theme（"light" / "dark"）が無ければ OS の設定に従う。
+   data-theme は解説ペインの「表示」で切り替え、localStorage に保存する（index.html の先頭で読み込む） */
+:root {
+  color-scheme: light;
+  --paper-bg: #fff;
+  --paper-fg: #1a1a1a;
+  --muted: #444;
+  --placeholder: #555;
+  --link: #1a5fb4;
+  --accent: #1a5fb4;
+  --rule: #d0d0d0;
+  --table-rule: #666;
+  --table-rule-strong: #333;
+  --selection-bg: #ffe08a;
+  --selection-fg: inherit;
+  --note-bg: #fffbe6;
+  --note-border: #d8c88a;
+  --shadow: rgba(0, 0, 0, 0.15);
+  --error: #b00;
+  --fatal-bg: #fdecea;
+  --fatal-fg: #8a1c1c;
+  --fatal-border: #f5c2bd;
+  --figure-bg: transparent;
+}
+
+/* ダーク。egui の既定のダーク（背景 #1b1b1b 前後）となじむ色にする */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper-bg: #1e1f22;
+    --paper-fg: #dcdcdc;
+    --muted: #a8a8a8;
+    --placeholder: #a0a0a0;
+    --link: #7fb2ff;
+    --accent: #5a9cff;
+    --rule: #3a3b3e;
+    --table-rule: #8a8a8a;
+    --table-rule-strong: #b8b8b8;
+    --selection-bg: #6b5a17;
+    --selection-fg: #fff;
+    --note-bg: #2c2a22;
+    --note-border: #6b6140;
+    --shadow: rgba(0, 0, 0, 0.5);
+    --error: #ff7b72;
+    --fatal-bg: #3d1f1f;
+    --fatal-fg: #ffb4ab;
+    --fatal-border: #7a3a35;
+    --figure-bg: #fff;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper-bg: #1e1f22;
+  --paper-fg: #dcdcdc;
+  --muted: #a8a8a8;
+  --placeholder: #a0a0a0;
+  --link: #7fb2ff;
+  --accent: #5a9cff;
+  --rule: #3a3b3e;
+  --table-rule: #8a8a8a;
+  --table-rule-strong: #b8b8b8;
+  --selection-bg: #6b5a17;
+  --selection-fg: #fff;
+  --note-bg: #2c2a22;
+  --note-border: #6b6140;
+  --shadow: rgba(0, 0, 0, 0.5);
+  --error: #ff7b72;
+  --fatal-bg: #3d1f1f;
+  --fatal-fg: #ffb4ab;
+  --fatal-border: #7a3a35;
+  --figure-bg: #fff;
+}
+
 html, body {
   margin: 0;
   height: 100%;
   overflow: hidden;
+  background: var(--paper-bg);
 }
 
 #layout {
@@ -18,8 +92,8 @@ html, body {
   overflow-y: auto;
   box-sizing: border-box;
   padding: 2rem 2.5rem 6rem;
-  background: #fff;
-  color: #1a1a1a;
+  background: var(--paper-bg);
+  color: var(--paper-fg);
   font-family: "Charter", "Georgia", "Times New Roman", "Hiragino Mincho ProN", serif;
   font-size: 17px;
   line-height: 1.7;
@@ -39,10 +113,10 @@ html, body {
   z-index: 5;
   cursor: col-resize;
   touch-action: none;
-  background: linear-gradient(to right, transparent 4px, #d0d0d0 4px, #d0d0d0 5px, transparent 5px);
+  background: linear-gradient(to right, transparent 4px, var(--rule) 4px, var(--rule) 5px, transparent 5px);
 }
 #splitter:hover, #splitter:focus-visible, body.resizing #splitter {
-  background: linear-gradient(to right, transparent 3px, #1a5fb4 3px, #1a5fb4 6px, transparent 6px);
+  background: linear-gradient(to right, transparent 3px, var(--accent) 3px, var(--accent) 6px, transparent 6px);
   outline: none;
 }
 /* ドラッグ中は本文の選択やカーソルの変化を止める */
@@ -79,15 +153,17 @@ body.resizing #paper, body.resizing #explain-pane {
 #paper h3 { font-size: 1.15em; }
 
 #paper p { margin: 0 0 1em; }
-#paper a { color: #1a5fb4; text-decoration: none; }
+#paper a { color: var(--link); text-decoration: none; }
 #paper a:hover { text-decoration: underline; }
 
-#paper ::selection { background: #ffe08a; }
+#paper ::selection { background: var(--selection-bg); color: var(--selection-fg); }
 
 /* 図・表 */
 #paper img {
   max-width: 100%;
   height: auto;
+  /* 図は黒い線の透過 PNG が多いので、ダークでは白い下地を敷いて読めるようにする */
+  background: var(--figure-bg);
 }
 #paper figure {
   margin: 1.5em 0;
@@ -98,7 +174,7 @@ body.resizing #paper, body.resizing #explain-pane {
   font-size: 0.9em;
   text-align: left;
   margin-top: 0.5em;
-  color: #333;
+  color: var(--muted);
 }
 #paper table {
   border-collapse: collapse;
@@ -108,12 +184,12 @@ body.resizing #paper, body.resizing #explain-pane {
 #paper td, #paper th {
   padding: 0.2em 0.5em;
 }
-#paper .ltx_border_t { border-top: 1px solid #666; }
-#paper .ltx_border_b { border-bottom: 1px solid #666; }
-#paper .ltx_border_tt { border-top: 2px solid #333; }
-#paper .ltx_border_bb { border-bottom: 2px solid #333; }
-#paper .ltx_border_r { border-right: 1px solid #666; }
-#paper .ltx_border_l { border-left: 1px solid #666; }
+#paper .ltx_border_t { border-top: 1px solid var(--table-rule); }
+#paper .ltx_border_b { border-bottom: 1px solid var(--table-rule); }
+#paper .ltx_border_tt { border-top: 2px solid var(--table-rule-strong); }
+#paper .ltx_border_bb { border-bottom: 2px solid var(--table-rule-strong); }
+#paper .ltx_border_r { border-right: 1px solid var(--table-rule); }
+#paper .ltx_border_l { border-left: 1px solid var(--table-rule); }
 
 /* 数式（MathML） */
 #paper math {
@@ -133,7 +209,7 @@ body.resizing #paper, body.resizing #explain-pane {
 }
 #paper .ltx_eqn_cell { padding: 0; }
 #paper .ltx_eqn_center_padleft, #paper .ltx_eqn_center_padright { width: 50%; }
-#paper .ltx_tag_equation { font-size: 0.9em; color: #444; }
+#paper .ltx_tag_equation { font-size: 0.9em; color: var(--muted); }
 #paper annotation, #paper annotation-xml { display: none; }
 
 /* LaTeXML の脚注・著者注はホバー時だけ表示 */
@@ -150,14 +226,14 @@ body.resizing #paper, body.resizing #explain-pane {
   padding: 0.6em 0.8em;
   font-size: 0.85em;
   line-height: 1.5;
-  background: #fffbe6;
-  border: 1px solid #d8c88a;
+  background: var(--note-bg);
+  border: 1px solid var(--note-border);
   border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 2px 8px var(--shadow);
 }
-#paper .ltx_note_mark { color: #1a5fb4; }
+#paper .ltx_note_mark { color: var(--link); }
 
-#paper .ltx_authors { font-size: 0.92em; color: #333; margin-bottom: 1.5em; }
+#paper .ltx_authors { font-size: 0.92em; color: var(--muted); margin-bottom: 1.5em; }
 #paper .ltx_abstract { font-size: 0.96em; margin: 1.5em 0 2em; }
 #paper .ltx_bibliography { font-size: 0.9em; }
 #paper .ltx_bibitem { margin-bottom: 0.6em; }
@@ -165,7 +241,7 @@ body.resizing #paper, body.resizing #explain-pane {
 #paper .ltx_font_bold { font-weight: bold; }
 #paper .ltx_font_italic { font-style: italic; }
 #paper .ltx_font_typewriter { font-family: ui-monospace, Menlo, monospace; }
-#paper .ltx_ERROR { color: #b00; }
+#paper .ltx_ERROR { color: var(--error); }
 
 #paper pre, #paper code {
   font-family: ui-monospace, Menlo, monospace;
@@ -175,14 +251,14 @@ body.resizing #paper, body.resizing #explain-pane {
 
 /* プレースホルダーとエラー */
 .paper-placeholder {
-  color: #555;
+  color: var(--placeholder);
   font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
   margin-top: 4rem !important;
 }
 .fatal-error {
-  background: #fdecea;
-  color: #8a1c1c;
-  border: 1px solid #f5c2bd;
+  background: var(--fatal-bg);
+  color: var(--fatal-fg);
+  border: 1px solid var(--fatal-border);
   padding: 0.8em 1em;
   border-radius: 4px;
   margin-bottom: 1em;
@@ -201,10 +277,10 @@ body.resizing #paper, body.resizing #explain-pane {
     flex: 0 0 13px;
     margin: -6px 0;
     cursor: row-resize;
-    background: linear-gradient(to bottom, transparent 6px, #d0d0d0 6px, #d0d0d0 7px, transparent 7px);
+    background: linear-gradient(to bottom, transparent 6px, var(--rule) 6px, var(--rule) 7px, transparent 7px);
   }
   #splitter:hover, #splitter:focus-visible, body.resizing #splitter {
-    background: linear-gradient(to bottom, transparent 5px, #1a5fb4 5px, #1a5fb4 8px, transparent 8px);
+    background: linear-gradient(to bottom, transparent 5px, var(--accent) 5px, var(--accent) 8px, transparent 8px);
   }
   body.resizing { cursor: row-resize; }
   #explain-pane { flex: 1 1 0; min-height: 0; }

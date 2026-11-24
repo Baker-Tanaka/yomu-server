@@ -4,6 +4,14 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>論文リーダー</title>
+  <meta name="color-scheme" content="light dark" />
+  <script>
+    // wasm の読み込み前に保存済みの配色を当て、白い画面が一瞬出るのを防ぐ（dom.rs の THEME_STORAGE_KEY と同じキー）
+    try {
+      var t = localStorage.getItem("paper-reader.theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
   <link data-trunk rel="rust" href="Cargo.toml" data-bin="paper-reader-web" data-wasm-opt="z" />
   <link data-trunk rel="css" href="assets/paper.css" />
 </head>

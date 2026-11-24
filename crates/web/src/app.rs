@@ -18,6 +18,7 @@ pub struct PaperReaderApp {
     shared: SharedRef,
     url_input: String,
     markdown_cache: CommonMarkCache,
+    theme: dom::ThemeChoice,
 }
 
 impl PaperReaderApp {
@@ -54,10 +55,14 @@ impl PaperReaderApp {
         }
         state::refresh_health(&shared, &cc.egui_ctx);
 
+        let theme = dom::load_theme();
+        set_theme(&cc.egui_ctx, theme);
+
         Self {
             shared,
             url_input: String::new(),
             markdown_cache: CommonMarkCache::default(),
+            theme,
         }
     }
 
@@ -293,10 +298,24 @@ impl PaperReaderApp {
 impl PaperReaderApp {
     fn tabs(&mut self, ui: &mut egui::Ui) {
         let mut tab = self.shared.borrow().tab;
+        let mut theme = self.theme;
         ui.horizontal(|ui| {
             ui.selectable_value(&mut tab, Tab::Explain, "解説");
             ui.selectable_value(&mut tab, Tab::History, "履歴");
+            // 配色（論文ペインと解説ペインの両方）
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.selectable_value(&mut theme, dom::ThemeChoice::Dark, "ダーク");
+                ui.selectable_value(&mut theme, dom::ThemeChoice::Light, "ライト");
+                ui.selectable_value(&mut theme, dom::ThemeChoice::System, "自動")
+                    .on_hover_text("OS の設定（ライト / ダーク）に合わせます");
+                ui.weak("表示:");
+            });
         });
+        if theme != self.theme {
+            self.theme = theme;
+            dom::apply_theme(theme);
+            set_theme(ui.ctx(), theme);
+        }
         let mut s = self.shared.borrow_mut();
         if s.tab != tab {
             s.tab = tab;
@@ -601,6 +620,15 @@ fn split_emphasis(s: &str) -> Vec<(&str, bool)> {
         out.push((rest, false));
     }
     out
+}
+
+/// egui の配色を切り替える（System なら OS の設定に従う）。
+fn set_theme(ctx: &egui::Context, theme: dom::ThemeChoice) {
+    ctx.set_theme(match theme {
+        dom::ThemeChoice::System => egui::ThemePreference::System,
+        dom::ThemeChoice::Light => egui::ThemePreference::Light,
+        dom::ThemeChoice::Dark => egui::ThemePreference::Dark,
+    });
 }
 
 /// Noto Sans JP を追加して日本語を表示できるようにする。

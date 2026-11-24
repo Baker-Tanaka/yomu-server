@@ -18,6 +18,8 @@ const SPLIT_STORAGE_KEY: &str = "paper-reader.split";
 const SPLIT_DEFAULT: f64 = 60.0;
 const SPLIT_MIN: f64 = 20.0;
 const SPLIT_MAX: f64 = 80.0;
+/// 配色の設定を保存する localStorage のキー（index.html のスクリプトと合わせる）
+const THEME_STORAGE_KEY: &str = "paper-reader.theme";
 /// 縦並びに切り替わる画面幅（paper.css の @media と合わせる）
 const STACKED_QUERY: &str = "(max-width: 800px)";
 /// selectionchange のデバウンス時間
@@ -432,4 +434,53 @@ fn apply_split(layout: &HtmlElement, splitter: &HtmlElement, pct: f64) {
         .style()
         .set_property("--paper-size", &format!("{pct:.2}%"));
     let _ = splitter.set_attribute("aria-valuenow", &format!("{pct:.0}"));
+}
+
+/// 配色の設定。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeChoice {
+    /// OS の設定に従う
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemeChoice {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+}
+
+/// 保存済みの配色の設定（無ければ OS に従う）。
+pub fn load_theme() -> ThemeChoice {
+    let saved = web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(THEME_STORAGE_KEY).ok().flatten());
+    match saved.as_deref() {
+        Some("light") => ThemeChoice::Light,
+        Some("dark") => ThemeChoice::Dark,
+        _ => ThemeChoice::System,
+    }
+}
+
+/// 論文ペインの配色を切り替えて保存する（<html data-theme>。System なら属性を外して OS に従う）。
+pub fn apply_theme(choice: ThemeChoice) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    if let Some(root) = window.document().and_then(|d| d.document_element()) {
+        let _ = match choice {
+            ThemeChoice::System => root.remove_attribute("data-theme"),
+            ThemeChoice::Light | ThemeChoice::Dark => {
+                root.set_attribute("data-theme", choice.as_str())
+            }
+        };
+    }
+    if let Some(storage) = window.local_storage().ok().flatten() {
+        let _ = storage.set_item(THEME_STORAGE_KEY, choice.as_str());
+    }
 }

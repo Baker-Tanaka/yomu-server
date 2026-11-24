@@ -25,6 +25,9 @@ const API_URL: &str = "https://export.arxiv.org/api/query";
 /// API への問い合わせの最小間隔（arXiv API の利用規約）
 const MIN_INTERVAL: Duration = Duration::from_secs(3);
 const CACHE_TTL: Duration = Duration::from_secs(600);
+/// arXiv にアクセスを制限されたとき（HTTP 429 / 503）に問い合わせを止める時間の最初の値と上限
+const BACKOFF_INITIAL: Duration = Duration::from_secs(60);
+const BACKOFF_MAX: Duration = Duration::from_secs(15 * 60);
 const CACHE_MAX: usize = 200;
 const MAX_QUERY_CHARS: usize = 200;
 const MAX_TERMS: usize = 12;
@@ -44,11 +47,55 @@ pub struct Searcher {
     last_call: Mutex<Option<Instant>>,
     cache: Mutex<HashMap<CacheKey, CacheEntry>>,
     chosen: Mutex<PlanMemo>,
+    backoff: Mutex<Backoff>,
+}
+
+/// arXiv にアクセスを制限されている間は問い合わせない（制限中に送り続けると制限が延びるため）。
+#[derive(Debug, Default)]
+struct Backoff {
+    /// この時刻までは問い合わせない
+    until: Option<Instant>,
+    /// 次に制限されたときに止める時間（成功したら初期値に戻す）
+    next: Option<Duration>,
+}
+
+impl Backoff {
+    /// 制限中なら残り時間。
+    fn remaining(&self, now: Instant) -> Option<Duration> {
+        self.until
+            .filter(|until| *until > now)
+            .map(|until| until - now)
+    }
+
+    /// 制限された。止める時間を返す（60 秒から倍々、最大 15 分）。
+    fn limited(&mut self, now: Instant) -> Duration {
+        let wait = self.next.unwrap_or(BACKOFF_INITIAL);
+        self.until = Some(now + wait);
+        self.next = Some((wait * 2).min(BACKOFF_MAX));
+        wait
+    }
+
+    fn succeeded(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// 制限中に返すメッセージ。
+fn rate_limited_message(wait: Duration) -> String {
+    format!(
+        "arXiv の検索 API にアクセスが一時的に制限されています（混雑や短時間の連続アクセスのため）。\
+         約 {} 秒後にもう一度お試しください。論文の URL や arXiv ID（例: 1706.03762）が分かっていれば、\
+         入力欄にそのまま入れて開けます。",
+        wait.as_secs().max(1)
+    )
 }
 
 impl Searcher {
     /// 間隔を守って API に問い合わせる。
     async fn call(&self, client: &reqwest::Client, url: Url) -> AppResult<String> {
+        if let Some(wait) = self.backoff.lock().await.remaining(Instant::now()) {
+            return Err(AppError::ServiceUnavailable(rate_limited_message(wait)));
+        }
         let mut last = self.last_call.lock().await;
         if let Some(prev) = *last {
             let wait = MIN_INTERVAL.saturating_sub(prev.elapsed());
@@ -58,7 +105,22 @@ impl Searcher {
         }
         let result = fetch(client, url).await;
         *last = Some(Instant::now());
-        result
+        match result {
+            Ok(body) => {
+                self.backoff.lock().await.succeeded();
+                Ok(body)
+            }
+            Err(FetchError::RateLimited(status)) => {
+                let wait = self.backoff.lock().await.limited(Instant::now());
+                tracing::warn!(
+                    status,
+                    wait_secs = wait.as_secs(),
+                    "arXiv API rate limited; backing off"
+                );
+                Err(AppError::ServiceUnavailable(rate_limited_message(wait)))
+            }
+            Err(FetchError::Other(e)) => Err(e),
+        }
     }
 
     async fn search(
@@ -145,24 +207,41 @@ pub async fn get_search(
     Ok(Json(resp))
 }
 
-async fn fetch(client: &reqwest::Client, url: Url) -> AppResult<String> {
+enum FetchError {
+    /// HTTP 429 / 503（アクセス制限・混雑）
+    RateLimited(u16),
+    Other(AppError),
+}
+
+async fn fetch(client: &reqwest::Client, url: Url) -> Result<String, FetchError> {
     let resp = client.get(url).send().await.map_err(|e| {
-        if e.is_timeout() {
-            AppError::UpstreamTimeout("arXiv の検索がタイムアウトしました".into())
+        FetchError::Other(if e.is_timeout() {
+            AppError::UpstreamTimeout(
+                "arXiv の検索がタイムアウトしました。arXiv が混み合っている可能性があります。少し待ってからお試しください。"
+                    .into(),
+            )
         } else {
             AppError::Upstream(format!("arXiv に接続できません: {e}"))
-        }
+        })
     })?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(AppError::Upstream(format!(
-            "arXiv の検索に失敗しました（HTTP {}）",
-            status.as_u16()
-        )));
+    let status = resp.status().as_u16();
+    if is_rate_limited(status) {
+        return Err(FetchError::RateLimited(status));
     }
-    resp.text()
-        .await
-        .map_err(|e| AppError::Upstream(format!("arXiv の応答を受信できません: {e}")))
+    if !resp.status().is_success() {
+        return Err(FetchError::Other(AppError::Upstream(format!(
+            "arXiv の検索に失敗しました（HTTP {status}）"
+        ))));
+    }
+    resp.text().await.map_err(|e| {
+        FetchError::Other(AppError::Upstream(format!(
+            "arXiv の応答を受信できません: {e}"
+        )))
+    })
+}
+
+fn is_rate_limited(status: u16) -> bool {
+    matches!(status, 429 | 503)
 }
 
 fn api_url(search_query: &str, start: u32, sort: SearchSort) -> Result<Url, url::ParseError> {
@@ -490,6 +569,30 @@ mod tests {
         promote_exact_title(&mut r, "attention is all you need");
         let ids: Vec<_> = r.items.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(ids, ["b", "a", "c"]);
+    }
+
+    #[test]
+    fn backoff_doubles_and_resets() {
+        let now = Instant::now();
+        let mut b = Backoff::default();
+        assert_eq!(b.remaining(now), None);
+        assert_eq!(b.limited(now), Duration::from_secs(60));
+        assert_eq!(
+            b.remaining(now + Duration::from_secs(10)),
+            Some(Duration::from_secs(50))
+        );
+        assert_eq!(b.remaining(now + Duration::from_secs(61)), None);
+        assert_eq!(b.limited(now), Duration::from_secs(120));
+        assert_eq!(b.limited(now), Duration::from_secs(240));
+        for _ in 0..10 {
+            b.limited(now);
+        }
+        assert_eq!(b.limited(now), BACKOFF_MAX);
+        b.succeeded();
+        assert_eq!(b.remaining(now), None);
+        assert_eq!(b.limited(now), Duration::from_secs(60));
+        assert!(is_rate_limited(429) && is_rate_limited(503) && !is_rate_limited(500));
+        assert!(rate_limited_message(Duration::from_millis(10)).contains("約 1 秒後"));
     }
 
     #[test]

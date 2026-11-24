@@ -7,15 +7,15 @@ use std::sync::Arc;
 use eframe::egui::{self, Margin, RichText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use paper_reader_shared::{
-    DictEntry, ExplainTag, FeedbackItem, FeedbackLabel, FeedbackListResponse, GrammarMapResponse,
-    GrammarTagInfo, HistoryEntry, MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode,
-    SearchItem, SearchSort, paper_url_from_input,
+    DictEntry, DictResponse, ExplainTag, FeedbackItem, FeedbackLabel, FeedbackListResponse,
+    GrammarMapResponse, GrammarTagInfo, HistoryEntry, MAX_FEEDBACK_BODY_CHARS,
+    MAX_FEEDBACK_TITLE_CHARS, Mode, SearchItem, SearchSort, WordSource, paper_url_from_input,
 };
 
 use crate::dom;
 use crate::state::{
-    self, DictStatus, ExplainPhase, FeedbackStage, GrammarOrder, GrammarStatus, HealthStatus,
-    HistoryScope, HistoryStatus, PaperStatus, PapersStatus, Shared, SharedRef, Tab,
+    self, DictAiPhase, DictStatus, ExplainPhase, FeedbackStage, GrammarOrder, GrammarStatus,
+    HealthStatus, HistoryScope, HistoryStatus, PaperStatus, PapersStatus, Shared, SharedRef, Tab,
 };
 use crate::theme::{self, Palette};
 
@@ -167,6 +167,16 @@ impl PaperReaderApp {
             if ui.checkbox(&mut auto, "選択したら自動で解説").changed() {
                 s.auto_explain = auto;
             }
+            let mut kana = s.show_kana;
+            if ui
+                .checkbox(&mut kana, "単語の読みをカタカナで表示する")
+                .on_hover_text(
+                    "ローカル LLM が発音をカタカナで推定します（一度推定した語は単語帳に保存され、次からはすぐ出ます）",
+                )
+                .changed()
+            {
+                s.set_show_kana(kana);
+            }
             drop(s);
             ui.separator();
             if ui.button("💬 不具合・要望を送る…").clicked() {
@@ -236,6 +246,74 @@ impl PaperReaderApp {
             .on_hover_text(format!("{detail}\nクリックで再確認"));
         if resp.clicked() {
             state::refresh_health(&self.shared, ui.ctx());
+        }
+    }
+
+    /// スマホでシートを下げているときの、選んだ単語の小さな和訳（タップで詳しく）。
+    fn word_strip(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let (word, dict, ai, show_kana) = {
+            let s = self.shared.borrow();
+            let Some(sel) = &s.selection else {
+                return;
+            };
+            (
+                sel.text.clone(),
+                s.dict.clone(),
+                s.dict_ai.clone(),
+                s.show_kana,
+            )
+        };
+        let mut expand = false;
+        ui.horizontal(|ui| {
+            let r = match &dict {
+                DictStatus::Loaded(r) => Some(r),
+                _ => None,
+            };
+            let head = r
+                .map(|r| r.headword.as_deref().unwrap_or(&r.query))
+                .unwrap_or(&word);
+            ui.label(RichText::new(head).size(18.0).strong().color(p.strong));
+            if let Some(kana) = r
+                .filter(|_| show_kana)
+                .and_then(|r| r.note.as_ref())
+                .and_then(|n| n.kana.as_deref())
+            {
+                ui.label(RichText::new(kana).size(13.5).color(p.weak));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                expand = theme::subtle_button(ui, "詳しく").clicked();
+                if r.is_some_and(|r| {
+                    r.headword.is_none()
+                        && r.note.as_ref().is_some_and(|n| {
+                            !n.meanings.is_empty() && n.meanings_source == Some(WordSource::Llm)
+                        })
+                }) {
+                    theme::chip(ui, "AI 訳", p.sentence, p.sentence_soft);
+                }
+            });
+        });
+        let (text, weak) = match (&dict, &ai) {
+            (DictStatus::Loading, _) => ("辞書を検索中…".to_string(), true),
+            (DictStatus::Error(e), _) => (format!("辞書: {e}"), true),
+            (DictStatus::Loaded(r), ai) => match compact_meanings(r) {
+                Some(m) => (m, false),
+                None if *ai == DictAiPhase::Loading => ("AI で訳しています…".into(), true),
+                None => ("辞書に見つかりませんでした".into(), true),
+            },
+            (DictStatus::Idle, _) => (String::new(), true),
+        };
+        let resp = ui.add(
+            egui::Label::new(RichText::new(text).size(14.5).color(if weak {
+                p.weak
+            } else {
+                p.text
+            }))
+            .truncate()
+            .sense(egui::Sense::click()),
+        );
+        if expand || resp.clicked() {
+            self.shared.borrow_mut().tab = Tab::Explain;
+            dom::set_sheet(dom::Sheet::Half);
         }
     }
 
@@ -338,11 +416,15 @@ impl PaperReaderApp {
                 (Tab::Search, search_label.as_str()),
                 (Tab::History, "履歴"),
                 (Tab::Grammar, "文法項目"),
+                (Tab::Words, "単語帳"),
             ],
         );
         if changed {
             let mut s = self.shared.borrow_mut();
             s.tab = tab;
+            if tab == Tab::Words {
+                s.words.stale = true;
+            }
             if tab == Tab::History {
                 s.history_stale = true;
             }
@@ -416,7 +498,13 @@ impl PaperReaderApp {
             ui.add_space(10.0);
             theme::card(ui, |ui| {
                 theme::section_title(ui, "辞書");
-                dict_view(ui, &p, &self.shared.borrow().dict);
+                let retry = {
+                    let s = self.shared.borrow();
+                    dict_view(ui, &p, &s.dict, &s.dict_ai, s.show_kana)
+                };
+                if retry {
+                    state::fetch_dict_ai(&self.shared, ui.ctx());
+                }
             });
         }
 
@@ -1015,9 +1103,27 @@ impl eframe::App for PaperReaderApp {
                 Margin::symmetric(16, 14)
             }))
             .show(ui, |ui| {
+                let (tab, has_paper, word_selected) = {
+                    let s = self.shared.borrow();
+                    (
+                        s.tab,
+                        s.paper_ref().is_some(),
+                        s.selection
+                            .as_ref()
+                            .is_some_and(|sel| sel.mode == Mode::Word),
+                    )
+                };
+                // スマホでシートを下げているときに単語を選んだら、見出しの代わりに小さく和訳を出す
+                if mobile && word_selected && dom::sheet() == dom::Sheet::Peek {
+                    self.word_strip(ui, &p);
+                    ui.add_space(8.0);
+                }
                 self.header(ui);
                 ui.add_space(if mobile { 8.0 } else { 12.0 });
-                self.input_bar(ui);
+                // スマホでは論文を読んでいる間は入力欄を隠す（「検索」タブで出す）
+                if !mobile || !has_paper || tab == Tab::Search {
+                    self.input_bar(ui);
+                }
                 self.paper_card(ui);
                 ui.add_space(if mobile { 10.0 } else { 12.0 });
                 self.tabs(ui);
@@ -1032,6 +1138,7 @@ impl eframe::App for PaperReaderApp {
                             Tab::Search => self.search_tab(ui),
                             Tab::History => self.history_tab(ui),
                             Tab::Grammar => self.grammar_tab(ui),
+                            Tab::Words => crate::words_view::words_tab(&self.shared, ui),
                         }
                         ui.add_space(16.0);
                     });
@@ -1039,6 +1146,8 @@ impl eframe::App for PaperReaderApp {
 
         if feedback_open {
             self.feedback_modal(&ctx);
+        } else {
+            crate::words_view::store_warning_modal(&self.shared, &ctx);
         }
     }
 }
@@ -1490,6 +1599,7 @@ fn tab_salt(tab: Tab) -> &'static str {
         Tab::Search => "search_scroll",
         Tab::History => "history_scroll",
         Tab::Grammar => "grammar_scroll",
+        Tab::Words => "words_scroll",
     }
 }
 
@@ -1507,7 +1617,7 @@ fn logo(ui: &mut egui::Ui, p: &Palette) {
 }
 
 /// エラーなどのお知らせ（赤みのある帯）。
-fn notice(ui: &mut egui::Ui, p: &Palette, text: &str) {
+pub(crate) fn notice(ui: &mut egui::Ui, p: &Palette, text: &str) {
     egui::Frame::new()
         .fill(p.error_soft)
         .corner_radius(egui::CornerRadius::same(10))
@@ -1683,7 +1793,7 @@ fn authors_line(authors: &[String]) -> String {
 }
 
 /// 12345 → "12,345"
-fn group_digits(n: u64) -> String {
+pub(crate) fn group_digits(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
@@ -1761,8 +1871,16 @@ fn format_time(secs: i64) -> String {
     )
 }
 
-/// 辞書の結果（見出し語と訳のリスト）。
-fn dict_view(ui: &mut egui::Ui, p: &Palette, status: &DictStatus) {
+/// 辞書の結果（見出し語と訳のリスト）。辞書に無い語は AI 訳を出す。
+/// AI の「再試行」が押されたら true。
+fn dict_view(
+    ui: &mut egui::Ui,
+    p: &Palette,
+    status: &DictStatus,
+    ai: &DictAiPhase,
+    show_kana: bool,
+) -> bool {
+    let mut retry = false;
     match status {
         DictStatus::Idle => {}
         DictStatus::Loading => {
@@ -1772,31 +1890,131 @@ fn dict_view(ui: &mut egui::Ui, p: &Palette, status: &DictStatus) {
             });
         }
         DictStatus::Error(e) => notice(ui, p, &format!("辞書: {e}")),
-        DictStatus::Loaded(r) => match &r.headword {
-            None => {
-                ui.label(
-                    RichText::new(format!("「{}」は辞書に見つかりませんでした。", r.query))
-                        .color(p.weak),
-                );
-            }
-            Some(headword) => {
+        DictStatus::Loaded(r) => {
+            let note = r.note.as_ref();
+            let kana = note
+                .filter(|_| show_kana)
+                .and_then(|n| n.kana.as_deref().map(|k| (k, n.kana_source)));
+            let headword = r.headword.as_deref().unwrap_or(&r.query);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(headword).size(21.0).strong().color(p.strong));
+                if let Some((kana, source)) = kana {
+                    let resp = ui.label(RichText::new(kana).size(15.0).color(p.text));
+                    if source == Some(WordSource::Llm) {
+                        resp.on_hover_text(
+                            "読みはローカル LLM の推定です（正確な発音とは異なることがあります）",
+                        );
+                        ui.label(RichText::new("読みは AI 推定").size(11.5).color(p.weak));
+                    }
+                }
+                if r.headword.as_deref().is_some_and(|h| h != r.query) {
+                    ui.label(
+                        RichText::new(format!("{} の原形", r.query))
+                            .size(12.5)
+                            .color(p.weak),
+                    );
+                }
+            });
+            let note_meanings = note.map(|n| n.meanings.as_slice()).unwrap_or_default();
+            let user_meanings = note.is_some_and(|n| n.meanings_source == Some(WordSource::User));
+            if r.headword.is_some() {
+                meanings_list(ui, p, &r.meanings);
+                if user_meanings && !note_meanings.is_empty() {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("自分で登録した訳").size(12.5).color(p.weak));
+                    meanings_list(ui, p, note_meanings);
+                }
+                for entry in &r.related {
+                    related_view(ui, p, entry);
+                }
+            } else if !note_meanings.is_empty() {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(headword).size(21.0).strong().color(p.strong));
-                    if *headword != r.query {
+                    if user_meanings {
+                        theme::chip(ui, "自分で登録した訳", p.accent, p.accent_soft);
+                    } else {
+                        theme::chip(ui, "AI 訳", p.sentence, p.sentence_soft);
                         ui.label(
-                            RichText::new(format!("{} の原形", r.query))
-                                .size(12.5)
+                            RichText::new("辞書に無い語のため、ローカル LLM が訳しました（誤りを含むことがあります）")
+                                .size(12.0)
                                 .color(p.weak),
                         );
                     }
                 });
-                meanings_list(ui, p, &r.meanings);
-                for entry in &r.related {
-                    related_view(ui, p, entry);
+                meanings_list(ui, p, note_meanings);
+            } else if *ai != DictAiPhase::Loading {
+                let checked = note.is_some_and(|n| n.ai_checked);
+                ui.label(
+                    RichText::new(if checked {
+                        format!(
+                            "「{}」は辞書に見つからず、AI でも訳せませんでした。",
+                            r.query
+                        )
+                    } else {
+                        format!("「{}」は辞書に見つかりませんでした。", r.query)
+                    })
+                    .color(p.weak),
+                );
+            }
+            match ai {
+                DictAiPhase::Idle => {}
+                DictAiPhase::Loading => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(
+                            RichText::new(if r.needs_ai_meanings() {
+                                "辞書に無いため、AI で訳しています…"
+                            } else {
+                                "読みを推定中…"
+                            })
+                            .size(13.0)
+                            .color(p.weak),
+                        );
+                    });
+                }
+                DictAiPhase::Error(e) => {
+                    ui.add_space(4.0);
+                    notice(ui, p, &format!("AI: {e}"));
+                    retry = theme::subtle_button(ui, "再試行").clicked();
                 }
             }
-        },
+        }
     }
+    retry
+}
+
+/// 小さな表示用の訳（最初の 3 つを「；」でつなぐ。『』や《》の注記は外す）。
+fn compact_meanings(r: &DictResponse) -> Option<String> {
+    let meanings: &[String] = if r.headword.is_some() {
+        &r.meanings
+    } else {
+        r.note
+            .as_ref()
+            .map(|n| n.meanings.as_slice())
+            .unwrap_or_default()
+    };
+    let parts: Vec<String> = meanings
+        .iter()
+        .take(3)
+        .map(|m| strip_dict_notes(m))
+        .filter(|m| !m.is_empty())
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("；"))
+}
+
+/// EJDict の注記（《...》と『』）を外す。
+fn strip_dict_notes(m: &str) -> String {
+    let mut out = String::new();
+    let mut depth: u32 = 0;
+    for c in m.chars() {
+        match c {
+            '《' => depth += 1,
+            '》' => depth = depth.saturating_sub(1),
+            '『' | '』' => {}
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out.trim().to_string()
 }
 
 fn related_view(ui: &mut egui::Ui, p: &Palette, entry: &DictEntry) {

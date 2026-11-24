@@ -45,7 +45,12 @@ GET  /api/paper?url=<arxiv URL> … 論文を取得し、無害化した本文 H
 GET  /api/papers                … 見た論文の一覧（最後に開いた順、版違いはまとめる）とキャッシュの使用量
 DELETE /api/papers?id=&purge=   … 見た論文から外す（purge なら保存した本文と図も消す）
 GET  /api/paper-asset?url=      … 論文の図をサーバー経由で配信し SQLite に保存する（ALLOWED_HOSTS の https で /html/ 以下の画像のみ）
-GET  /api/dict?word=<word>      … ローカル辞書で引いた結果を返す（見出し語、訳のリスト）
+GET  /api/dict?word=<word>      … ローカル辞書で引いた結果を返す（見出し語、訳のリスト、単語帳の情報）。引くたびに単語帳の検索回数を数える
+POST /api/dict/ai               … 辞書に無い語の訳とカタカナの読みを LLM に推定させ、単語帳に保存して返す（UI では「AI 訳」「AI 推定」と明記する）
+GET  /api/words                 … 単語帳の一覧（検索回数・読み・訳）と使用量
+POST /api/words                 … 単語帳に自分で登録・編集する（自分で登録した語は自動では消さない）
+POST /api/words/delete          … 選んだ語を単語帳から消す
+POST /api/words/prune           … 検索回数の少ない語から消す（上限 WORD_STORE_MAX を超えたときも自動で同じ順に消す）
 POST /api/explain               … body: { mode: "word" | "sentence", text, context }
                                    レスポンスは text/event-stream（SSE 形式）で解説を逐次送る
                                    イベント: queued / started / tags（mode=sentence のみ、解説の前に文法タグ）/ token / done / error
@@ -68,6 +73,7 @@ ALLOWED_HOSTS=arxiv.org,www.arxiv.org
 GRAMMAR_TAGS_PATH=data/grammar_tags.yaml                # 文法タグのマスター（リポジトリで管理）
 GRAMMAR_MAP_PATH=data/grammar_map.local.yaml            # 講座のレッスン対応（ユーザーが記入。git 管理外）
 GRAMMAR_MAP_TEMPLATE_PATH=data/grammar_map.template.yaml # local が無いときに読むテンプレート
+WORD_STORE_MAX=20000                                    # 単語帳に残す語数の上限
 GITHUB_REPO=<owner/name>                                # フィードバックを Issue にするリポジトリ（未設定なら保存だけ）
 GITHUB_TOKEN=<fine-grained token>                       # そのリポジトリの Issues: Read and write だけを持つトークン
 

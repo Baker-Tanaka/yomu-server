@@ -91,9 +91,52 @@ pub fn user_message(req: &ExplainRequest, grammar: &[GrammarNote<'_>]) -> String
     msg
 }
 
+/// 単語帳: 辞書に無い語の訳と、カタカナの読みを推定させるシステムプロンプト。
+/// `need_meanings` が false なら読みだけ（訳は辞書にある）。
+pub fn word_note_system_prompt(need_meanings: bool) -> String {
+    let mut s = String::from(
+        "あなたは英和辞典の編集者です。英語論文に出てきた英単語について、JSON だけを出力してください（前置きやコードブロックは不要）。
+- \"kana\": 英語の発音に近いカタカナ表記。アクセント記号や発音記号は付けない（例: relevant → レレバント、modality → モダリティ、data → データ、algorithm → アルゴリズム）。",
+    );
+    if need_meanings {
+        s.push_str(
+            "
+- \"meanings\": 日本語の訳語を 1〜4 個、よく使う意味から順に。1 つ 30 文字以内で短く。品詞が分かるときは先頭に「（名）」「（動）」「（形）」「（副）」を付ける。文脈が与えられたら、その文脈での意味を最初に書く。
+- 略語・固有名詞・造語などで意味に自信が無いときは、その訳の末尾に「（推測）」と付ける。英単語でなければ meanings は空の配列にする。",
+        );
+    } else {
+        s.push_str("\n- \"meanings\": 空の配列にする（訳は辞書にあるため不要）。");
+    }
+    s
+}
+
+/// 単語帳の問い合わせのユーザーメッセージ。文脈は訳を頼むときだけ付ける。
+pub fn word_note_user_message(word: &str, context: &str, need_meanings: bool) -> String {
+    let context = context.trim();
+    if need_meanings && !context.is_empty() {
+        format!("単語: {word}\n\n文脈（単語を含む段落）:\n\"\"\"\n{context}\n\"\"\"")
+    } else {
+        format!("単語: {word}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn word_note_prompts() {
+        let with = word_note_system_prompt(true);
+        assert!(with.contains("\"kana\"") && with.contains("（推測）"));
+        assert!(word_note_system_prompt(false).contains("空の配列"));
+        let m = word_note_user_message("modalities", " multiple modalities ", true);
+        assert!(m.contains("単語: modalities") && m.contains("multiple modalities"));
+        // 読みだけのときは文脈を送らない
+        assert_eq!(
+            word_note_user_message("relevant", "ctx", false),
+            "単語: relevant"
+        );
+    }
 
     fn req(mode: Mode, text: &str, context: &str) -> ExplainRequest {
         ExplainRequest {

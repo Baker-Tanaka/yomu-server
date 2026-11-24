@@ -22,10 +22,22 @@ pub async fn get_dict(
         query.map_err(|_| AppError::BadRequest("word パラメータを指定してください".into()))?;
     let word = normalize_query(&q.word)
         .ok_or_else(|| AppError::BadRequest("辞書で引ける単語ではありません".into()))?;
-    Ok(Json(lookup_word(&state.db, word).await?))
+    let mut resp = lookup_word(&state.db, word).await?;
+    // 単語帳に検索回数を残す（見出し語があればその語、無ければ検索語）。失敗しても辞書の結果は返す
+    let note_word = resp.note_word().to_string();
+    if let Err(e) =
+        crate::words::record_lookup(&state.db, &note_word, state.config.word_store_max).await
+    {
+        tracing::warn!(error = %e, "word lookup count failed");
+    }
+    if let Err(e) = crate::words::attach(&state, &mut resp).await {
+        tracing::warn!(error = %e, "word note read failed");
+    }
+    Ok(Json(resp))
 }
 
-async fn lookup_word(pool: &SqlitePool, query: String) -> AppResult<DictResponse> {
+/// 辞書だけで引く（単語帳の情報は付けない）。
+pub async fn lookup_word(pool: &SqlitePool, query: String) -> AppResult<DictResponse> {
     let candidates = lemma_candidates(&query);
 
     // 1. 完全一致 → 2. 語形変化を還元した候補を順に
@@ -53,6 +65,8 @@ async fn lookup_word(pool: &SqlitePool, query: String) -> AppResult<DictResponse
                         headword: None,
                         meanings: Vec::new(),
                         related: Vec::new(),
+                        note: None,
+                        store: None,
                     });
                 }
             }
@@ -93,6 +107,8 @@ async fn lookup_word(pool: &SqlitePool, query: String) -> AppResult<DictResponse
         headword: Some(headword),
         meanings: split_meanings(&meaning),
         related,
+        note: None,
+        store: None,
     })
 }
 

@@ -10,6 +10,8 @@ mod dom;
 mod state;
 #[cfg(target_arch = "wasm32")]
 mod theme;
+#[cfg(target_arch = "wasm32")]
+mod words_view;
 
 #[cfg(target_arch = "wasm32")]
 fn main() {

@@ -26,6 +26,8 @@ pub struct Config {
     pub github_repo: Option<String>,
     /// Issue を作る GitHub のトークン（Fine-grained token、そのリポジトリの Issues: Read and write だけ）
     pub github_token: Option<Secret>,
+    /// 単語帳（検索回数・カタカナの読み・辞書に無い語の訳）に残す語数の上限
+    pub word_store_max: i64,
 }
 
 /// ログなどに出してはいけない値。Debug では伏せ字になる。
@@ -69,6 +71,7 @@ impl Config {
                 .map(|t| t.trim().to_string())
                 .filter(|t| !t.is_empty())
                 .map(Secret),
+            word_store_max: parse_word_store_max(&get("WORD_STORE_MAX", "20000"))?,
         })
     }
 }
@@ -102,6 +105,19 @@ impl Config {
             template: self.grammar_map_template_path.clone(),
         }
     }
+}
+
+/// 単語帳の上限（100 〜 1,000,000 語）。
+fn parse_word_store_max(s: &str) -> Result<i64> {
+    let n: i64 = s
+        .trim()
+        .parse()
+        .with_context(|| format!("WORD_STORE_MAX は語数（整数）で指定してください: {s}"))?;
+    anyhow::ensure!(
+        (100..=1_000_000).contains(&n),
+        "WORD_STORE_MAX は 100 〜 1000000 の範囲で指定してください: {n}"
+    );
+    Ok(n)
 }
 
 fn parse_bool(s: &str) -> bool {
@@ -154,6 +170,13 @@ mod tests {
         let s = super::Secret("ghp_x".into());
         assert_eq!(format!("{s:?}"), "Secret(***)");
         assert_eq!(s.expose(), "ghp_x");
+    }
+
+    #[test]
+    fn word_store_max() {
+        assert_eq!(super::parse_word_store_max(" 20000 ").unwrap(), 20_000);
+        assert!(super::parse_word_store_max("10").is_err());
+        assert!(super::parse_word_store_max("abc").is_err());
     }
 
     #[test]

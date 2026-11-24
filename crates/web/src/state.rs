@@ -8,7 +8,8 @@ use paper_reader_shared::{
     DictResponse, ExplainRequest, ExplainTag, FeedbackContext, FeedbackDraft, FeedbackItem,
     FeedbackListResponse, FeedbackPreview, FeedbackSubmit, GrammarMapResponse, HealthResponse,
     HistoryEntry, HistoryRecord, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, SEARCH_PAGE_SIZE,
-    SearchItem, SearchSort, clip_context, paper_url_from_input, sse_event,
+    SearchItem, SearchSort, WordListResponse, WordNote, WordSort, WordStoreStats, WordUpsert,
+    clip_context, paper_url_from_input, sse_event,
 };
 use web_sys::AbortController;
 
@@ -39,6 +40,51 @@ pub enum DictStatus {
     Loading,
     Loaded(DictResponse),
     Error(String),
+}
+
+/// 単語の AI 訳・カタカナの読みの問い合わせ状態。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum DictAiPhase {
+    #[default]
+    Idle,
+    Loading,
+    Error(String),
+}
+
+/// 単語帳の一覧の状態。
+#[derive(Debug, Clone, Default)]
+pub enum WordsStatus {
+    #[default]
+    NotLoaded,
+    Loading,
+    Loaded(WordListResponse),
+    Error(String),
+}
+
+/// 単語帳タブの状態。
+#[derive(Debug, Clone, Default)]
+pub struct Words {
+    pub status: WordsStatus,
+    /// 次に単語帳タブを表示するときに読み直す
+    pub stale: bool,
+    /// 見出しの前方一致で絞り込む
+    pub query: String,
+    pub sort: WordSort,
+    /// 削除するために選んだ語
+    pub selected: std::collections::BTreeSet<String>,
+    /// 追加・編集の入力欄
+    pub form_open: bool,
+    pub form_word: String,
+    pub form_kana: String,
+    pub form_meanings: String,
+    /// 操作の結果（成功なら true）
+    pub message: Option<(bool, String)>,
+    pub busy: bool,
+    /// 続きを読み込み中
+    pub loading_more: bool,
+    /// 「検索回数の少ない語を削除」の語数
+    pub prune_count: i64,
+    seq: u64,
 }
 
 /// 解説の進み具合。
@@ -177,6 +223,8 @@ impl Default for Feedback {
 
 /// 「講座の案内を表示する」設定の localStorage のキー
 const SHOW_COURSE_KEY: &str = "paper-reader.show-course";
+/// 「カタカナの読みを表示する」設定の localStorage のキー
+const SHOW_KANA_KEY: &str = "paper-reader.show-kana";
 
 /// 履歴の読み込み状態。
 #[derive(Debug, Clone, Default)]
@@ -196,6 +244,7 @@ pub enum Tab {
     Search,
     History,
     Grammar,
+    Words,
 }
 
 /// 論文検索の状態。
@@ -257,6 +306,16 @@ pub struct Shared {
     pub paper: PaperStatus,
     pub selection: Option<SelectionInfo>,
     pub dict: DictStatus,
+    /// 単語の AI 訳・読みの問い合わせ
+    pub dict_ai: DictAiPhase,
+    dict_ai_controller: Option<AbortController>,
+    /// 設定: カタカナの読み（AI の推定）を表示する
+    pub show_kana: bool,
+    pub words: Words,
+    /// 単語帳が上限に近い（確かめる画面を出す）
+    pub store_warning: Option<WordStoreStats>,
+    /// このページを開いている間は、上限に近い知らせをもう出さない
+    store_warning_dismissed: bool,
     pub explain: Explain,
     pub health: HealthStatus,
     /// 選択を確定したら自動で解説する（既定は手動）
@@ -285,6 +344,12 @@ impl Shared {
     pub fn new() -> Self {
         Self {
             show_course: dom::load_bool(SHOW_COURSE_KEY, true),
+            show_kana: dom::load_bool(SHOW_KANA_KEY, true),
+            words: Words {
+                stale: true,
+                prune_count: 1_000,
+                ..Words::default()
+            },
             grammar_stale: true,
             papers_stale: true,
             ..Self::default()
@@ -294,6 +359,33 @@ impl Shared {
     pub fn set_show_course(&mut self, on: bool) {
         self.show_course = on;
         dom::save_bool(SHOW_COURSE_KEY, on);
+    }
+
+    pub fn set_show_kana(&mut self, on: bool) {
+        self.show_kana = on;
+        dom::save_bool(SHOW_KANA_KEY, on);
+    }
+
+    /// 進行中の AI 訳の問い合わせを中止する。
+    fn abort_dict_ai(&mut self) {
+        if let Some(c) = self.dict_ai_controller.take() {
+            c.abort();
+        }
+        self.dict_ai = DictAiPhase::Idle;
+    }
+
+    /// 辞書の結果を反映する。単語帳が上限に近ければ知らせる。
+    fn set_dict(&mut self, r: DictResponse) {
+        if let Some(store) = r.store {
+            if store.near_full() && !self.store_warning_dismissed {
+                self.store_warning = Some(store);
+            }
+            if let WordsStatus::Loaded(list) = &mut self.words.status {
+                list.store = store;
+            }
+        }
+        self.words.stale = true;
+        self.dict = DictStatus::Loaded(r);
     }
 
     /// 講座の短い名前（文法データを読み込む前は既定の名前）。
@@ -323,8 +415,16 @@ pub fn on_select(this: &SharedRef, ctx: &egui::Context, info: SelectionInfo) {
         s.tab = Tab::Explain;
         s.auto_explain
     };
-    // スマホでは解説シートを半分まで上げて結果を見せる
-    dom::raise_sheet(dom::Sheet::Half);
+    if info.mode == Mode::Word && !auto {
+        // スマホでは単語はシートを小さくしたまま、上に和訳だけを出す（本文を隠さない）。
+        // 全体まで上げているときはそのまま
+        if dom::is_mobile() && dom::sheet() == dom::Sheet::Half {
+            dom::set_sheet(dom::Sheet::Peek);
+        }
+    } else {
+        // 英文は解説シートを半分まで上げて結果を見せる
+        dom::raise_sheet(dom::Sheet::Half);
+    }
     apply_selection(this, ctx, info, auto);
 }
 
@@ -347,6 +447,7 @@ pub fn clear_selection(this: &SharedRef, ctx: &egui::Context) {
     s.selection_seq += 1;
     s.selection = None;
     s.dict = DictStatus::Idle;
+    s.abort_dict_ai();
     s.explain.reset();
     ctx.request_repaint();
 }
@@ -355,8 +456,9 @@ fn apply_selection(this: &SharedRef, ctx: &egui::Context, info: SelectionInfo, e
     let (seq, word) = {
         let mut s = this.borrow_mut();
         s.selection_seq += 1;
-        // 新しい選択が来たら進行中の解説は中止する
+        // 新しい選択が来たら進行中の解説と AI 訳は中止する
         s.explain.reset();
+        s.abort_dict_ai();
         let word = (info.mode == Mode::Word).then(|| info.text.clone());
         s.dict = if word.is_some() {
             DictStatus::Loading
@@ -378,17 +480,291 @@ fn apply_selection(this: &SharedRef, ctx: &egui::Context, info: SelectionInfo, e
     let ctx = ctx.clone();
     wasm_bindgen_futures::spawn_local(async move {
         let result = crate::api::fetch_dict(&word).await;
+        let wants_ai = {
+            let mut s = this.borrow_mut();
+            // 応答待ちの間に別の選択が来ていたら、この結果は捨てる
+            if s.selection_seq != seq {
+                return;
+            }
+            let wants_ai = match result {
+                Ok(r) => {
+                    let wants = r.wants_ai(s.show_kana);
+                    s.set_dict(r);
+                    wants
+                }
+                Err(e) => {
+                    s.dict = DictStatus::Error(e);
+                    false
+                }
+            };
+            ctx.request_repaint();
+            wants_ai
+        };
+        if wants_ai {
+            fetch_dict_ai(&this, &ctx);
+        }
+    });
+}
+
+/// 辞書に無い語の訳と、カタカナの読みを AI に頼む（結果は単語帳に保存され、辞書の表示に足す）。
+pub fn fetch_dict_ai(this: &SharedRef, ctx: &egui::Context) {
+    let (req, seq, signal) = {
         let mut s = this.borrow_mut();
-        // 応答待ちの間に別の選択が来ていたら、この結果は捨てる
-        if s.selection_seq != seq {
+        let Some(sel) = s.selection.clone() else {
+            return;
+        };
+        if sel.mode != Mode::Word {
             return;
         }
-        s.dict = match result {
-            Ok(r) => DictStatus::Loaded(r),
-            Err(e) => DictStatus::Error(e),
+        s.abort_dict_ai();
+        let Ok(controller) = AbortController::new() else {
+            return;
+        };
+        let signal = controller.signal();
+        s.dict_ai_controller = Some(controller);
+        s.dict_ai = DictAiPhase::Loading;
+        let req = paper_reader_shared::DictAiRequest {
+            word: sel.text.clone(),
+            context: clip_context(&sel.context, &sel.text, 600),
+        };
+        (req, s.selection_seq, signal)
+    };
+    ctx.request_repaint();
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::fetch_dict_ai(&req, &signal).await;
+        let mut s = this.borrow_mut();
+        if s.selection_seq != seq || signal.aborted() {
+            return;
+        }
+        s.dict_ai_controller = None;
+        match result {
+            Ok(r) => {
+                s.dict_ai = DictAiPhase::Idle;
+                s.set_dict(r);
+            }
+            Err(e) => s.dict_ai = DictAiPhase::Error(e),
+        }
+        ctx.request_repaint();
+    });
+}
+
+/// 単語帳が上限に近い知らせを閉じる（このページを開いている間は出さない）。
+pub fn dismiss_store_warning(this: &SharedRef) {
+    let mut s = this.borrow_mut();
+    s.store_warning = None;
+    s.store_warning_dismissed = true;
+}
+
+// ───────────── 単語帳 ─────────────
+
+/// 単語帳を読み込む（1 ページ目から）。
+pub fn refresh_words(this: &SharedRef, ctx: &egui::Context) {
+    let (seq, q, sort) = {
+        let mut s = this.borrow_mut();
+        let w = &mut s.words;
+        w.stale = false;
+        w.seq += 1;
+        w.loading_more = false;
+        if !matches!(w.status, WordsStatus::Loaded(_)) {
+            w.status = WordsStatus::Loading;
+        }
+        (w.seq, w.query.trim().to_string(), w.sort)
+    };
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::fetch_words(&q, sort, 0).await;
+        let mut s = this.borrow_mut();
+        let w = &mut s.words;
+        if w.seq != seq {
+            return;
+        }
+        w.status = match result {
+            Ok(r) => {
+                // 一覧から消えた語は選択からも外す
+                w.selected
+                    .retain(|word| r.items.iter().any(|i| &i.word == word));
+                WordsStatus::Loaded(r)
+            }
+            Err(e) => WordsStatus::Error(e),
         };
         ctx.request_repaint();
     });
+}
+
+/// 単語帳の続きを読み込む。
+pub fn words_more(this: &SharedRef, ctx: &egui::Context) {
+    let (seq, q, sort, offset) = {
+        let mut s = this.borrow_mut();
+        let w = &mut s.words;
+        let WordsStatus::Loaded(list) = &w.status else {
+            return;
+        };
+        if w.loading_more || list.items.len() as i64 >= list.total {
+            return;
+        }
+        let offset = list.items.len() as i64;
+        w.loading_more = true;
+        (w.seq, w.query.trim().to_string(), w.sort, offset)
+    };
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::fetch_words(&q, sort, offset).await;
+        let mut s = this.borrow_mut();
+        let w = &mut s.words;
+        if w.seq != seq {
+            return;
+        }
+        w.loading_more = false;
+        match (result, &mut w.status) {
+            (Ok(r), WordsStatus::Loaded(list)) => {
+                for item in r.items {
+                    if !list.items.iter().any(|i| i.word == item.word) {
+                        list.items.push(item);
+                    }
+                }
+                list.total = r.total;
+                list.store = r.store;
+            }
+            (Err(e), _) => w.message = Some((false, e)),
+            _ => {}
+        }
+        ctx.request_repaint();
+    });
+}
+
+/// 単語帳の語を入力欄に入れて編集する。
+pub fn edit_word(this: &SharedRef, note: &WordNote) {
+    let mut s = this.borrow_mut();
+    let w = &mut s.words;
+    w.form_open = true;
+    w.form_word = note.word.clone();
+    w.form_kana = note.kana.clone().unwrap_or_default();
+    w.form_meanings = note.meanings.join("\n");
+    w.message = None;
+}
+
+/// 入力欄の語を登録する（自分で登録した語は自動では消えない）。
+pub fn save_word(this: &SharedRef, ctx: &egui::Context) {
+    let upsert = {
+        let mut s = this.borrow_mut();
+        let w = &mut s.words;
+        if w.busy {
+            return;
+        }
+        w.busy = true;
+        w.message = None;
+        WordUpsert {
+            word: w.form_word.clone(),
+            kana: w.form_kana.clone(),
+            meanings: w.form_meanings.clone(),
+        }
+    };
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::save_word(&upsert).await;
+        {
+            let mut s = this.borrow_mut();
+            let w = &mut s.words;
+            w.busy = false;
+            match result {
+                Ok(note) => {
+                    w.message = Some((true, format!("「{}」を登録しました", note.word)));
+                    w.form_word.clear();
+                    w.form_kana.clear();
+                    w.form_meanings.clear();
+                    w.form_open = false;
+                    w.stale = true;
+                    let word = note.word.clone();
+                    update_shown_note(&mut s, &word, Some(note));
+                }
+                Err(e) => w.message = Some((false, e)),
+            }
+        }
+        ctx.request_repaint();
+    });
+}
+
+/// 選んだ語を単語帳から削除する。
+pub fn delete_selected_words(this: &SharedRef, ctx: &egui::Context) {
+    let words: Vec<String> = {
+        let mut s = this.borrow_mut();
+        let w = &mut s.words;
+        if w.busy || w.selected.is_empty() {
+            return;
+        }
+        w.busy = true;
+        w.message = None;
+        w.selected.iter().cloned().collect()
+    };
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::delete_words(words.clone()).await;
+        if result.is_ok() {
+            let mut s = this.borrow_mut();
+            for w in &words {
+                update_shown_note(&mut s, w, None);
+            }
+        }
+        after_delete(&this, &ctx, result);
+    });
+}
+
+/// 検索回数の少ない語から `count` 語を削除する（自分で登録した語は残す）。
+pub fn prune_words(this: &SharedRef, ctx: &egui::Context, count: i64) {
+    {
+        let mut s = this.borrow_mut();
+        if s.words.busy {
+            return;
+        }
+        s.words.busy = true;
+        s.words.message = None;
+        s.store_warning = None;
+    }
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::prune_words(count).await;
+        after_delete(&this, &ctx, result);
+    });
+}
+
+fn after_delete(
+    this: &SharedRef,
+    ctx: &egui::Context,
+    result: Result<paper_reader_shared::WordDeleteResult, String>,
+) {
+    {
+        let mut s = this.borrow_mut();
+        let w = &mut s.words;
+        w.busy = false;
+        match result {
+            Ok(r) => {
+                w.selected.clear();
+                w.message = Some((true, format!("{} 語を削除しました", r.deleted)));
+                if let WordsStatus::Loaded(list) = &mut w.status {
+                    list.store = r.store;
+                }
+                w.stale = true;
+            }
+            Err(e) => w.message = Some((false, e)),
+        }
+    }
+    ctx.request_repaint();
+}
+
+/// 単語帳を変えたら、表示中の辞書の結果にも反映する（`note` が None なら消した）。
+fn update_shown_note(s: &mut Shared, word: &str, note: Option<WordNote>) {
+    if let DictStatus::Loaded(r) = &mut s.dict
+        && r.note_word() == word
+    {
+        r.note = note;
+    }
 }
 
 /// 現在の選択の解説を始める（進行中のものがあれば中止してから）。
@@ -650,6 +1026,7 @@ pub fn open_paper(this: &SharedRef, ctx: &egui::Context, url: String) {
                 dom::set_paper_html(&paper.html, &paper.title);
                 s.selection = None;
                 s.dict = DictStatus::Idle;
+                s.abort_dict_ai();
                 s.selection_seq += 1;
                 s.explain.reset();
                 s.history_stale = true;
@@ -864,6 +1241,7 @@ fn feedback_context(s: &Shared) -> FeedbackContext {
         Tab::Search => "検索",
         Tab::History => "履歴",
         Tab::Grammar => "文法項目",
+        Tab::Words => "単語帳",
     };
     FeedbackContext {
         paper_id,

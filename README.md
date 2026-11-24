@@ -11,7 +11,7 @@
 | パス | 内容 |
 | --- | --- |
 | `crates/shared` | API の型（server と web で共有） |
-| `crates/server` | axum サーバー（静的配信、`/api/paper`、`/api/search`、`/api/dict`、`/api/explain`、`/api/history`、`/api/health`） |
+| `crates/server` | axum サーバー（静的配信、`/api/paper`、`/api/search`、`/api/dict`、`/api/words`、`/api/explain`、`/api/history`、`/api/health`） |
 | `crates/web` | eframe アプリ（wasm32-unknown-unknown）、`index.html`、`Trunk.toml`、`assets/` |
 | `scripts/import_dict` | 辞書データを SQLite に投入するツール |
 | `scripts/subset_font.sh` | 日本語フォントを使う文字だけに絞るスクリプト |
@@ -120,6 +120,16 @@ trunk serve
   - 題名をそのまま入れると題名で探します（`attention is all you need`）。`"..."` で語句、`ti:` `au:` `abs:` `cat:` で欄を指定できます
   - 並び順は「関連度」と「新着」。「さらに表示」で続きを読み込みます
 
+- **単語の辞書と AI 訳**: 単語を選ぶとローカル辞書（EJDict）で引きます。辞書に無い語（modalities など）は、
+  ローカル LLM が文脈に合わせて訳し、「AI 訳」と明記して出します（誤りを含むことがあります）
+  - **カタカナの読み**: 見出し語の横に、英語の発音をカタカナで出します（ローカル LLM の推定。「読みは AI 推定」と表示）。
+    ⚙ の「単語の読みをカタカナで表示する」でオフにできます
+  - 一度推定した読み・AI 訳は単語帳（SQLite）に保存し、次からは LLM を呼ばずにすぐ出します
+- **単語帳**: 「単語帳」タブに、引いた単語が検索回数・読み・訳と一緒に並びます（回数順・最近・ABC、前方一致で絞り込み）
+  - 「＋ 単語を登録」で、辞書に無い語の訳や読みを自分で登録・編集できます（自分で登録した訳は AI 訳より優先）
+  - チェックを付けて「選んだ N 語を削除」、または「検索回数の少ない語をまとめて削除」で整理します
+  - 上限（`WORD_STORE_MAX`、既定 20,000 語）の 9 割を超えると、整理するか確かめる画面が出ます。
+    上限を超えたら検索回数の少ない語（同じなら古い語）から自動で消します。自分で登録した語は自動では消しません
 - **解説**: 「解説する」または **E** キー。**Esc** で選択を解除します（解説ペインにフォーカスがあっても使えます）
 - **キャッシュ**: 一度解説した文は保存され、次からは LLM を呼ばずにすぐ表示されます（「キャッシュから表示」と出ます）。
   作り直すときは「再生成」を押します
@@ -131,7 +141,9 @@ trunk serve
   - **PC 用**（左右に並ぶ）: 境界線をドラッグで幅を変更（ダブルクリックで元に戻す、矢印キーでも調整可）
   - **スマホ用**（iPhone 15 などの縦画面）: 本文を画面いっぱいに出し、解説パネルは下から出るシートになります。
     つまみを上下にドラッグすると「少し・半分・全体」の 3 段階で止まり、タップで「少し ⇄ 半分」を切り替えます
-    - 論文を開くと「少し」（本文を広く読む）、英文や単語を長押しで選ぶと「半分」、解説・検索・文字入力・フィードバックでは「全体」に自動で動きます
+    - 論文を開くと「少し」（本文を広く読む）、英文を長押しで選ぶと「半分」、解説・検索・文字入力・フィードバックでは「全体」に自動で動きます
+    - 単語を選んだときは「少し」のまま、シートの上に単語・読み・訳を小さく出します（本文を隠さない）。「詳しく」かタップで「半分」に上げて辞書の全体と解説を出します
+    - 論文を開いている間は、論文の URL・検索の入力欄を隠します。論文を探すときは「検索」タブを開くと入力欄が出ます
     - 選択中のテキストの欄に「解説する」ボタンが出ます。ボタンや文字はスマホでは大きめ、見出しは記号だけの省スペース表示です
     - ノッチ・ホームインジケーターを避けて表示し（safe area）、ダブルタップでの拡大は止めています。横に長い表は横スクロールします
     - Safari の共有メニューから「ホーム画面に追加」すると、ブラウザの枠なしで開けます
@@ -352,6 +364,8 @@ tailscale serve status
 | `GITHUB_REPO` | （空） | フィードバックを Issue にするリポジトリ `owner/name`。`scripts/setup_env.sh` が git remote から入れる |
 | `GITHUB_TOKEN` | （空） | Fine-grained token（そのリポジトリの Issues: Read and write だけ）。ブラウザ・LLM・ログには出さない |
 
+| `WORD_STORE_MAX` | `20000` | 単語帳に残す語数の上限（100〜1,000,000）。超えたら検索回数の少ない語から消す |
+
 `.env` の作成・更新は `scripts/setup_env.sh` で行えます（「GitHub の設定」を参照）。
 
 ## API
@@ -367,6 +381,17 @@ tailscale serve status
   - 入力した語そのものが見出し語にある場合（running, used など）も、動詞の原形（run, use）を `related` に入れます。
     辞書の「goの過去」「childの複数形」のような記述からも原形（go, child）を取り出します
   - 見つからない場合は `headword: null`。辞書が未投入なら 503
+  - 引くたびに単語帳（word_notes）の検索回数を 1 増やします（見出し語があればその語、無ければ検索語）。
+    応答の `note` に単語帳の情報（`kana`, `meanings`, `kana_source` / `meanings_source`: `llm` | `user`, `lookup_count`, `ai_checked`）、
+    `store` に使用量 `{ count, max }` を付けます
+- `POST /api/dict/ai` body: `{ word, context }` → `/api/dict` と同じ形
+  - 辞書に無い語の訳（`meanings`）と、カタカナの読み（`kana`）をローカル LLM に推定させ、単語帳に保存して返します（保存済みなら LLM を呼ばない）
+  - 構造化出力（JSON）で受け取り、読みはカタカナだけのとき、訳は 4 個・1 つ 80 文字までを使います。自分で登録した訳・読みは上書きしません
+  - LLM への同時リクエストは解説と同じ 1 件の枠を使い、90 秒待っても空かなければ 503。context は 600 文字に切り詰めます
+- `GET /api/words?q=<前方一致>&sort=count|recent|alpha&offset=<0〜>` → `{ items: [単語帳の 1 語（dict_summary に辞書の最初の訳）], total, store }`（100 語ずつ）
+- `POST /api/words` body: `{ word, kana, meanings }` → 保存した 1 語（自分で登録。空の項目は変えない。meanings は改行・「、」区切り）
+- `POST /api/words/delete` body: `{ words: [string] }` → `{ deleted, store }`（1,000 語まで）
+- `POST /api/words/prune` body: `{ count }` → `{ deleted, store }`（検索回数の少ない順・同じなら古い順に消す。自分で登録した語は残す）
 - `POST /api/explain` body: `{ mode: "word" | "sentence", text, context, regenerate? }` → `text/event-stream`
   - `event: queued`（ほかの解説の生成待ち）→ `event: started` →（英文のみ）`event: tags` → `event: token`（data は追記する文字列）… → `event: done`
   - `tags` の data: `[{ tag_id, name, category, span, in_scope, lessons: [{ id, category, title }], hint }]`

@@ -3,7 +3,8 @@
 use paper_reader_shared::{
     DictResponse, ErrorResponse, ExplainRequest, FeedbackDraft, FeedbackItem, FeedbackListResponse,
     FeedbackPreview, FeedbackSubmit, GrammarMapResponse, HealthResponse, HistoryRecord,
-    HistoryResponse, PaperResponse, SearchResponse, SearchSort, SseEvent, SseParser,
+    HistoryResponse, PaperResponse, SearchResponse, SearchSort, SseEvent, SseParser, WordDelete,
+    WordDeleteResult, WordListResponse, WordNote, WordPrune, WordSort, WordUpsert,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -22,6 +23,39 @@ pub async fn fetch_paper(url: &str) -> Result<PaperResponse, String> {
 pub async fn fetch_dict(word: &str) -> Result<DictResponse, String> {
     let encoded = String::from(js_sys::encode_uri_component(word));
     get_json(&format!("/api/dict?word={encoded}")).await
+}
+
+/// 辞書に無い語の訳と、カタカナの読みを AI に推定させる（単語帳に保存される）。
+pub async fn fetch_dict_ai(
+    req: &paper_reader_shared::DictAiRequest,
+    signal: &AbortSignal,
+) -> Result<DictResponse, String> {
+    post_json_with_signal("/api/dict/ai", Some(req), Some(signal)).await
+}
+
+pub async fn fetch_words(q: &str, sort: WordSort, offset: i64) -> Result<WordListResponse, String> {
+    let encoded = String::from(js_sys::encode_uri_component(q));
+    let sort = match sort {
+        WordSort::Count => "count",
+        WordSort::Recent => "recent",
+        WordSort::Alpha => "alpha",
+    };
+    get_json(&format!(
+        "/api/words?q={encoded}&sort={sort}&offset={offset}"
+    ))
+    .await
+}
+
+pub async fn save_word(u: &WordUpsert) -> Result<WordNote, String> {
+    post_json("/api/words", Some(u)).await
+}
+
+pub async fn delete_words(words: Vec<String>) -> Result<WordDeleteResult, String> {
+    post_json("/api/words/delete", Some(&WordDelete { words })).await
+}
+
+pub async fn prune_words(count: i64) -> Result<WordDeleteResult, String> {
+    post_json("/api/words/prune", Some(&WordPrune { count })).await
 }
 
 pub async fn fetch_search(q: &str, start: u32, sort: SearchSort) -> Result<SearchResponse, String> {
@@ -57,9 +91,21 @@ async fn post_json<T: DeserializeOwned, B: Serialize>(
     path: &str,
     body: Option<&B>,
 ) -> Result<T, String> {
+    post_json_with_signal(path, body, None).await
+}
+
+/// JSON を POST して JSON を受け取る（`signal` で中止できる）。
+async fn post_json_with_signal<T: DeserializeOwned, B: Serialize>(
+    path: &str,
+    body: Option<&B>,
+    signal: Option<&AbortSignal>,
+) -> Result<T, String> {
     let window = web_sys::window().ok_or("window が取得できません")?;
     let init = RequestInit::new();
     init.set_method("POST");
+    if let Some(signal) = signal {
+        init.set_signal(Some(signal));
+    }
     if let Some(body) = body {
         let json = serde_json::to_string(body).map_err(|e| e.to_string())?;
         let headers = Headers::new().map_err(|e| js_error(&e))?;

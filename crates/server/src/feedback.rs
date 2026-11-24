@@ -105,7 +105,7 @@ pub const LABELS: &[LabelDef] = &[
     LabelDef {
         name: "area:dict",
         color: "c5def5",
-        description: "単語の辞書（訳、原形の推定）",
+        description: "単語の辞書と単語帳（訳、原形の推定、AI 訳、カタカナの読み）",
         kind: LabelKind::Area,
     },
     LabelDef {

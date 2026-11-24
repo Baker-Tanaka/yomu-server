@@ -17,6 +17,7 @@ mod sanitize;
 mod search;
 mod static_files;
 mod tagger;
+mod words;
 
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
@@ -168,6 +169,10 @@ fn router(state: AppState, config: &Config) -> Router {
         )
         .route("/paper-asset", get(papers::get_asset))
         .route("/dict", get(dict::get_dict))
+        .route("/dict/ai", post(words::post_dict_ai))
+        .route("/words", get(words::get_words).post(words::post_word))
+        .route("/words/delete", post(words::post_delete))
+        .route("/words/prune", post(words::post_prune))
         .route("/search", get(search::get_search))
         .route("/explain", post(explain::post_explain))
         .route(

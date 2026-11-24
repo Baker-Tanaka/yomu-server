@@ -105,6 +105,199 @@ pub struct DictResponse {
     /// 関連する見出し語（"running" に対する "run"、"went" に対する "go" など）
     #[serde(default)]
     pub related: Vec<DictEntry>,
+    /// 単語帳に保存した情報（カタカナの読み、辞書に無い語の訳、検索回数）。
+    /// 見出し語があればその語、無ければ検索語について
+    #[serde(default)]
+    pub note: Option<WordNote>,
+    /// 単語帳の使用量
+    #[serde(default)]
+    pub store: Option<WordStoreStats>,
+}
+
+impl DictResponse {
+    /// 単語帳の見出し（辞書にあれば見出し語、無ければ検索語）。
+    pub fn note_word(&self) -> &str {
+        self.headword.as_deref().unwrap_or(&self.query)
+    }
+
+    /// AI に訳を頼むべきか（辞書に無く、保存した訳も無い）。
+    pub fn needs_ai_meanings(&self) -> bool {
+        self.headword.is_none() && self.note.as_ref().is_none_or(|n| n.meanings.is_empty())
+    }
+
+    /// AI に訳・読みを頼むべきか。一度頼んだ語は（結果が空でも）頼み直さない。
+    pub fn wants_ai(&self, want_kana: bool) -> bool {
+        if !self.query.chars().any(|c| c.is_ascii_alphabetic()) {
+            return false;
+        }
+        if self.note.as_ref().is_some_and(|n| n.ai_checked) {
+            return false;
+        }
+        let no_kana = self.note.as_ref().is_none_or(|n| n.kana.is_none());
+        self.needs_ai_meanings() || (want_kana && no_kana)
+    }
+}
+
+/// 単語帳の情報をだれが書いたか。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum WordSource {
+    /// ローカル LLM が推定した
+    Llm,
+    /// 利用者が登録した
+    User,
+}
+
+impl WordSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Llm => "llm",
+            Self::User => "user",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "llm" => Some(Self::Llm),
+            "user" => Some(Self::User),
+            _ => None,
+        }
+    }
+}
+
+/// 単語帳の 1 語（検索回数と、辞書を補う情報）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WordNote {
+    pub word: String,
+    /// カタカナの読み（英語の発音をカタカナで表したもの）
+    pub kana: Option<String>,
+    pub kana_source: Option<WordSource>,
+    /// 辞書に無い語の訳（AI 訳か、自分で登録した訳）
+    pub meanings: Vec<String>,
+    pub meanings_source: Option<WordSource>,
+    /// 辞書で引いた回数
+    pub lookup_count: i64,
+    /// 最後に引いた時刻（UNIX 秒）
+    pub last_looked_at: i64,
+    /// AI に訳・読みを問い合わせ済みか
+    #[serde(default)]
+    pub ai_checked: bool,
+    /// ローカル辞書の最初の訳（単語帳の一覧で使う。辞書に無ければ `None`）
+    #[serde(default)]
+    pub dict_summary: Option<String>,
+}
+
+impl WordNote {
+    /// 自分で登録した情報があるか（自動では消さない）。
+    pub fn is_user(&self) -> bool {
+        self.kana_source == Some(WordSource::User) || self.meanings_source == Some(WordSource::User)
+    }
+}
+
+/// 単語帳の使用量。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WordStoreStats {
+    pub count: i64,
+    /// 上限（これを超えると、検索回数の少ない語から自動で消す。自分で登録した語は消さない）
+    pub max: i64,
+}
+
+impl WordStoreStats {
+    /// 上限の 9 割を超えた（整理するか確かめる）。
+    pub fn near_full(&self) -> bool {
+        self.max > 0 && self.count * 10 >= self.max * 9
+    }
+}
+
+/// `POST /api/dict/ai` の body。辞書に無い語の訳と、カタカナの読みを LLM に推定させて単語帳に保存する。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DictAiRequest {
+    pub word: String,
+    /// 単語を含む段落（訳を文脈に合わせるため。長ければサーバーで切り詰める）
+    #[serde(default)]
+    pub context: String,
+}
+
+/// 単語帳の並び順。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WordSort {
+    /// 検索回数の多い順
+    #[default]
+    Count,
+    /// 最近引いた順
+    Recent,
+    /// アルファベット順
+    Alpha,
+}
+
+/// `GET /api/words` のクエリ。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WordListQuery {
+    /// 見出しの前方一致
+    #[serde(default)]
+    pub q: String,
+    #[serde(default)]
+    pub sort: WordSort,
+    #[serde(default)]
+    pub offset: i64,
+}
+
+/// 単語帳の 1 ページで返す数
+pub const WORD_PAGE_SIZE: i64 = 100;
+
+/// `GET /api/words` の応答。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WordListResponse {
+    pub items: Vec<WordNote>,
+    /// 条件に合う語の数
+    pub total: i64,
+    pub store: WordStoreStats,
+}
+
+/// `POST /api/words` の body（自分で登録・編集する）。空の項目は変えない。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WordUpsert {
+    pub word: String,
+    #[serde(default)]
+    pub kana: String,
+    /// 訳（1 行に 1 つ、または「、」「;」区切り）
+    #[serde(default)]
+    pub meanings: String,
+}
+
+/// `POST /api/words/delete` の body。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WordDelete {
+    pub words: Vec<String>,
+}
+
+/// `POST /api/words/prune` の body。検索回数の少ない順に `count` 語を消す（自分で登録した語は残す）。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct WordPrune {
+    pub count: i64,
+}
+
+/// 削除の結果。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WordDeleteResult {
+    pub deleted: i64,
+    pub store: WordStoreStats,
+}
+
+/// 単語帳の訳の入力を、1 つずつの訳に分ける（改行・「、」「;」「/」区切り）。
+pub fn split_user_meanings(s: &str) -> Vec<String> {
+    s.split(['\n', '、', ';', '；', '/'])
+        .map(|m| normalize_whitespace(m).trim().to_string())
+        .filter(|m| !m.is_empty())
+        .collect()
+}
+
+/// カタカナの読みとして使える文字だけか（カタカナ・長音・中黒・空白）。
+pub fn is_kana_reading(s: &str) -> bool {
+    !s.trim().is_empty()
+        && s.chars()
+            .all(|c| matches!(c, '\u{30A1}'..='\u{30FA}' | 'ー' | '・' | ' ' | '\u{3000}'))
 }
 
 /// 解説のモード。
@@ -708,5 +901,87 @@ mod tests {
     #[test]
     fn normalize() {
         assert_eq!(normalize_whitespace("  a \n\t b  c "), "a b c");
+    }
+
+    fn dict(headword: Option<&str>, note: Option<WordNote>) -> DictResponse {
+        DictResponse {
+            query: "modalities".into(),
+            headword: headword.map(str::to_owned),
+            meanings: Vec::new(),
+            related: Vec::new(),
+            note,
+            store: None,
+        }
+    }
+
+    fn note(kana: Option<&str>, meanings: &[&str], ai_checked: bool) -> WordNote {
+        WordNote {
+            word: "modality".into(),
+            kana: kana.map(str::to_owned),
+            kana_source: None,
+            meanings: meanings.iter().map(|m| m.to_string()).collect(),
+            meanings_source: None,
+            lookup_count: 1,
+            last_looked_at: 0,
+            ai_checked,
+            dict_summary: None,
+        }
+    }
+
+    #[test]
+    fn wants_ai() {
+        // 辞書に無い → 訳を頼む（読みの設定に関係なく）
+        assert!(dict(None, None).wants_ai(false));
+        assert!(dict(None, Some(note(Some("モダリティ"), &[], false))).wants_ai(false));
+        // 辞書にある → 読みが欲しいときだけ
+        assert!(!dict(Some("modality"), None).wants_ai(false));
+        assert!(dict(Some("modality"), None).wants_ai(true));
+        assert!(!dict(Some("modality"), Some(note(Some("モダリティ"), &[], false))).wants_ai(true));
+        // 保存した訳がある・問い合わせ済みなら頼まない
+        assert!(!dict(None, Some(note(Some("モダリティ"), &["様式"], false))).wants_ai(true));
+        assert!(!dict(None, Some(note(None, &[], true))).wants_ai(true));
+        // 英字を含まない語は頼まない
+        let mut d = dict(None, None);
+        d.query = "2024".into();
+        assert!(!d.wants_ai(true));
+        assert_eq!(dict(None, None).note_word(), "modalities");
+        assert_eq!(dict(Some("modality"), None).note_word(), "modality");
+    }
+
+    #[test]
+    fn store_stats() {
+        assert!(!WordStoreStats { count: 0, max: 0 }.near_full());
+        assert!(
+            !WordStoreStats {
+                count: 89,
+                max: 100
+            }
+            .near_full()
+        );
+        assert!(
+            WordStoreStats {
+                count: 90,
+                max: 100
+            }
+            .near_full()
+        );
+    }
+
+    #[test]
+    fn user_meanings() {
+        assert_eq!(
+            split_user_meanings("様式、 様相\n（論文）モダリティ; /"),
+            vec!["様式", "様相", "（論文）モダリティ"]
+        );
+        assert!(split_user_meanings("  \n、").is_empty());
+    }
+
+    #[test]
+    fn kana_reading() {
+        assert!(is_kana_reading("レレヴァント"));
+        assert!(is_kana_reading("ステート・オブ・ジ・アート"));
+        assert!(!is_kana_reading("relevant"));
+        assert!(!is_kana_reading("れればんと"));
+        assert!(!is_kana_reading(" "));
     }
 }

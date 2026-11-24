@@ -61,7 +61,8 @@ GET  /api/feedback              … 送信先の設定（GitHub）・ラベル�
 POST /api/feedback/preview      … 不具合・要望の下書きに LLM がラベル（種類・機能の場所）とタイトルを付け、Issue の本文を組み立てて返す（まだ送らない）
 POST /api/feedback              … 確認した内容を保存し、GitHub が設定されていれば Issue を作る（未設定・失敗なら未送信として残す）
 POST /api/feedback/{id}/retry   … 未送信のフィードバックを送り直す
-GET  /api/health                … サーバーと LLM ランタイムの疎通確認
+GET  /api/health                … サーバーと LLM ランタイムの疎通確認、サーバーのバージョンと Git ハッシュ
+                                   （ハッシュは crates/shared/build.rs がビルド時に埋め込む。画面の ⚙ に画面とサーバーの両方を表示する）
 
 # 設定（環境変数, .env 可）
 BIND_ADDR=127.0.0.1:8080

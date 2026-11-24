@@ -7,9 +7,10 @@ use std::sync::Arc;
 use eframe::egui::{self, Margin, RichText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use paper_reader_shared::{
-    DictEntry, DictResponse, ExplainTag, FeedbackItem, FeedbackLabel, FeedbackListResponse,
-    GrammarMapResponse, GrammarTagInfo, HistoryEntry, MAX_FEEDBACK_BODY_CHARS,
-    MAX_FEEDBACK_TITLE_CHARS, Mode, SearchItem, SearchSort, WordSource, paper_url_from_input,
+    APP_VERSION, DictEntry, DictResponse, ExplainTag, FeedbackItem, FeedbackLabel,
+    FeedbackListResponse, GIT_HASH, GrammarMapResponse, GrammarTagInfo, HistoryEntry,
+    MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode, SearchItem, SearchSort, WordSource,
+    build_version_label, paper_url_from_input, version_label,
 };
 
 use crate::dom;
@@ -183,9 +184,43 @@ impl PaperReaderApp {
                 state::open_feedback(&self.shared, ui.ctx());
                 ui.close();
             }
+            ui.separator();
+            self.version_info(ui);
         })
         .response
         .on_hover_text("設定");
+    }
+
+    /// 画面（wasm）とサーバーのバージョン・Git ハッシュ。食い違っていたら再読み込みを促す。
+    fn version_info(&self, ui: &mut egui::Ui) {
+        let web = build_version_label();
+        ui.label(RichText::new(format!("画面: {web}")).small().weak())
+            .on_hover_text("この画面（ブラウザで動いている部分）をビルドしたバージョンとコミット");
+        let s = self.shared.borrow();
+        let HealthStatus::Ok(h) = &s.health else {
+            return;
+        };
+        if h.version.is_empty() {
+            return;
+        }
+        let server = version_label(&h.version, &h.git_hash, &h.git_date);
+        ui.label(RichText::new(format!("サーバー: {server}")).small().weak())
+            .on_hover_text("サーバーをビルドしたバージョンとコミット");
+        let differs = h.version != APP_VERSION
+            || (!h.git_hash.is_empty() && !GIT_HASH.is_empty() && h.git_hash != GIT_HASH);
+        if differs {
+            let warn = ui.visuals().warn_fg_color;
+            ui.add(
+                egui::Label::new(
+                    RichText::new(
+                        "画面とサーバーのバージョンが違います。ページを再読み込みしてください",
+                    )
+                    .small()
+                    .color(warn),
+                )
+                .wrap(),
+            );
+        }
     }
 
     /// LLM の状態（丸と短い文言。詳しくはホバーで、クリックで再確認）。

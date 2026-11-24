@@ -2,6 +2,29 @@
 
 use serde::{Deserialize, Serialize};
 
+/// アプリのバージョン（workspace の Cargo.toml の version）。
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// ビルドしたコミットの短い Git ハッシュ（分からなければ空文字）。build.rs が埋め込む。
+pub const GIT_HASH: &str = env!("PAPER_READER_GIT_HASH");
+/// ビルドしたコミットの日付（YYYY-MM-DD。分からなければ空文字）。
+pub const GIT_DATE: &str = env!("PAPER_READER_GIT_DATE");
+
+/// 表示用のバージョン文字列（例: `0.1.0 (535ee91, 2026-11-24)`）。
+pub fn version_label(version: &str, git_hash: &str, git_date: &str) -> String {
+    let hash = git_hash.trim();
+    let date = git_date.trim();
+    match (hash.is_empty(), date.is_empty()) {
+        (true, _) => format!("{version} (コミット不明)"),
+        (false, true) => format!("{version} ({hash})"),
+        (false, false) => format!("{version} ({hash}, {date})"),
+    }
+}
+
+/// このビルドのバージョン文字列。
+pub fn build_version_label() -> String {
+    version_label(APP_VERSION, GIT_HASH, GIT_DATE)
+}
+
 /// エラー応答の共通形式 `{ "error": "..." }`。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ErrorResponse {
@@ -79,6 +102,15 @@ pub struct HealthResponse {
     /// LLM ランタイムにそのモデルがあるか（疎通できなければ `None`）
     #[serde(default)]
     pub model_available: Option<bool>,
+    /// サーバーのバージョン（Cargo.toml の version）
+    #[serde(default)]
+    pub version: String,
+    /// サーバーをビルドしたコミットの短い Git ハッシュ（分からなければ空文字）
+    #[serde(default)]
+    pub git_hash: String,
+    /// そのコミットの日付（YYYY-MM-DD。分からなければ空文字）
+    #[serde(default)]
+    pub git_date: String,
 }
 
 /// `GET /api/dict?word=` のクエリ。
@@ -781,6 +813,29 @@ pub fn normalize_whitespace(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_labels() {
+        assert_eq!(
+            version_label("0.1.0", "535ee91", "2026-11-24"),
+            "0.1.0 (535ee91, 2026-11-24)"
+        );
+        assert_eq!(version_label("0.1.0", "535ee91", ""), "0.1.0 (535ee91)");
+        assert_eq!(
+            version_label("0.1.0", "", "2026-11-24"),
+            "0.1.0 (コミット不明)"
+        );
+        assert_eq!(version_label("0.1.0", " ", " "), "0.1.0 (コミット不明)");
+        assert!(build_version_label().starts_with(APP_VERSION));
+    }
+
+    #[test]
+    fn health_without_version_fields() {
+        // 古いサーバーの応答（バージョンの項目なし）も読める
+        let h: HealthResponse = serde_json::from_str(r#"{"server":true,"llm":null}"#).unwrap();
+        assert_eq!(h.version, "");
+        assert_eq!(h.git_hash, "");
+    }
 
     #[test]
     fn detect_mode() {

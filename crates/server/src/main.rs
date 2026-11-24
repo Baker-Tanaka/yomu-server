@@ -148,7 +148,11 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(config.bind_addr)
         .await
         .with_context(|| format!("{} に bind できません", config.bind_addr))?;
-    tracing::info!("listening on http://{}", config.bind_addr);
+    tracing::info!(
+        "paper-reader {} listening on http://{}",
+        paper_reader_shared::build_version_label(),
+        config.bind_addr
+    );
     // /api/admin/* で接続元を確認するため、接続情報を付ける
     axum::serve(
         listener,
@@ -216,6 +220,9 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
         llm: Some(models.is_some()),
         model_available: models.map(|ids| ids.iter().any(|id| model_matches(id, &model))),
         model,
+        version: paper_reader_shared::APP_VERSION.to_string(),
+        git_hash: paper_reader_shared::GIT_HASH.to_string(),
+        git_date: paper_reader_shared::GIT_DATE.to_string(),
     })
 }
 

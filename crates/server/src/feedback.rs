@@ -357,7 +357,7 @@ pub fn compose_issue_body(
     out.push_str("\n\n---\n<details><summary>送信時の状況（アプリが自動で添付）</summary>\n\n");
     out.push_str(&format!(
         "- アプリ: paper-reader {}\n",
-        env!("CARGO_PKG_VERSION")
+        paper_reader_shared::build_version_label()
     ));
     if !ctx.tab.trim().is_empty() {
         out.push_str(&format!("- 画面: {}タブ\n", one_line(&ctx.tab, 20)));

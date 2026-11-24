@@ -453,7 +453,12 @@ tailscale serve status
   - 新しい順に最大 200 件。`paper` を省くと全論文。`has_explanation` は今のモデルの解説がキャッシュにあるか
 - `POST /api/history` body: `{ paper_id, paper_title, mode, text, context }` → 204（同じ論文・mode・text なら時刻と文脈を更新）
 - `DELETE /api/history/<id>` → 204
-- `GET /api/health` → `{ server, llm, model, model_available }`（LLM ランタイムの `/models` で疎通とモデルの有無を確認）
+- `GET /api/health` → `{ server, llm, model, model_available, version, git_hash, git_date }`（LLM ランタイムの `/models` で疎通とモデルの有無を確認）
+  - `version` は Cargo.toml のバージョン、`git_hash` / `git_date` はサーバーをビルドしたコミットの短いハッシュと日付（`crates/shared/build.rs` がビルド時に埋め込みます。
+    git が無い環境では空文字。環境変数 `PAPER_READER_GIT_HASH` / `PAPER_READER_GIT_DATE` をビルド時に与えると上書きできます）
+  - 画面の ⚙（設定）の下に、画面（wasm）とサーバーのそれぞれのバージョンとハッシュを表示します。食い違っていたら再読み込みを促します。
+    フィードバックの Issue に添付する「アプリ」の行にもハッシュが入ります
+  - コミットしていない変更はハッシュに表れません（ハッシュはビルドした時点の HEAD）
 
 ## テストと静的解析
 

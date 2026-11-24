@@ -83,8 +83,9 @@ rm -rf "$app_home/dist.new"
 cp -R crates/web/dist "$app_home/dist.new"
 rm -rf "$app_home/dist"
 mv "$app_home/dist.new" "$app_home/dist"
+# .env はトークンを含むので本人だけが読めるようにする
 if [ -f .env ]; then
-  cp .env "$app_home/.env"
+  install -m 600 .env "$app_home/.env"
 fi
 # 文法タグのマスターとレッスン対応（local は記入してあればコピーする。サーバーは配置先の data/ を読む）
 cp data/grammar_tags.yaml data/grammar_map.template.yaml "$app_home/data/"

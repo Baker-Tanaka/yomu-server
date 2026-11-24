@@ -89,7 +89,7 @@ ollama serve          # 127.0.0.1:11434 で待ち受け（外部には公開し�
 
 ```sh
 # 1. サーバー（127.0.0.1:8080）
-cp .env.example .env   # 必要に応じて編集
+scripts/setup_env.sh   # .env を作る（GITHUB_REPO は git remote から。トークンは省略可）
 cargo run -p paper-reader-server
 ```
 
@@ -203,11 +203,17 @@ GitHub が未設定のとき・送信に失敗したときは、この Mac の S
 2. `.env` に書く（`.env` は git 管理外）
 
    ```sh
-   GITHUB_REPO=owner/name
-   GITHUB_TOKEN=github_pat_...
+   scripts/setup_env.sh --token --apply
    ```
 
-3. `deploy/install.sh --no-build`（`.env` を配置先にコピーしてサーバーを再起動する）
+   - `GITHUB_REPO` が空なら git の remote（`origin`）から `owner/name` を入れます（`--remote <name>` で変更可）
+   - トークンは画面に出さずに貼り付けます（`pbpaste | scripts/setup_env.sh --token` でも可）。
+     コマンドライン引数には載せず、GitHub API でリポジトリと Issues にアクセスできるか確かめてから保存します（`--no-verify` で省略）
+   - `.env` は 600（本人だけ読める）にします。`.env.example` に増えた設定は既定値で足し、既にある値は変えません
+   - 手で書く場合は `GITHUB_REPO=owner/name` と `GITHUB_TOKEN=github_pat_...`
+
+3. 配置先に反映する … 上の `--apply` が配置先の `.env` を置き換えてサーバーを再起動します
+   （`deploy/install.sh --no-build` でも同じく `.env` をコピーします）
 
 - トークンはサーバーにだけ置き、ブラウザや LLM には渡しません。ログの設定表示も `Secret(***)` になります
 - 宛先は `https://api.github.com` 固定です。連続送信は 5 秒あけ、本文は 4,000 文字まで
@@ -340,6 +346,13 @@ tailscale serve status
 | `DATABASE_URL` | `sqlite://data/app.db` | SQLite（無ければ作成） |
 | `STATIC_DIR` | `crates/web/dist` | `trunk build` の出力先 |
 | `ALLOWED_HOSTS` | `arxiv.org,www.arxiv.org` | 論文取得を許可するホスト（https のみ） |
+| `GRAMMAR_TAGS_PATH` | `data/grammar_tags.yaml` | 文法タグのマスター |
+| `GRAMMAR_MAP_PATH` | `data/grammar_map.local.yaml` | 講座のレッスン対応（git 管理外） |
+| `GRAMMAR_MAP_TEMPLATE_PATH` | `data/grammar_map.template.yaml` | `GRAMMAR_MAP_PATH` が無いときに読むテンプレート |
+| `GITHUB_REPO` | （空） | フィードバックを Issue にするリポジトリ `owner/name`。`scripts/setup_env.sh` が git remote から入れる |
+| `GITHUB_TOKEN` | （空） | Fine-grained token（そのリポジトリの Issues: Read and write だけ）。ブラウザ・LLM・ログには出さない |
+
+`.env` の作成・更新は `scripts/setup_env.sh` で行えます（「GitHub の設定」を参照）。
 
 ## API
 

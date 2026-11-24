@@ -2,7 +2,8 @@
 
 英語論文（arXiv の HTML 版）を読むための Web アプリです。左ペインに論文本文を表示し、選択した単語・英文を右ペイン（egui / wasm）に表示します。
 
-- 現在の実装範囲: **フェーズ3**（論文表示と選択の取得、ローカル辞書による単語訳、LLM による解説のストリーミング）
+- 現在の実装範囲: **フェーズ4**（論文表示と選択の取得、ローカル辞書による単語訳、LLM による解説のストリーミング、
+  解説キャッシュ、履歴、本番ビルドと常時稼働）
 - 設計とルール: [CLAUDE.md](CLAUDE.md)
 
 ## 構成
@@ -10,9 +11,11 @@
 | パス | 内容 |
 | --- | --- |
 | `crates/shared` | API の型（server と web で共有） |
-| `crates/server` | axum サーバー（静的配信、`/api/paper`、`/api/dict`、`/api/explain`、`/api/health`） |
+| `crates/server` | axum サーバー（静的配信、`/api/paper`、`/api/dict`、`/api/explain`、`/api/history`、`/api/health`） |
 | `crates/web` | eframe アプリ（wasm32-unknown-unknown）、`index.html`、`Trunk.toml`、`assets/` |
 | `scripts/import_dict` | 辞書データを SQLite に投入するツール |
+| `scripts/subset_font.sh` | 日本語フォントを使う文字だけに絞るスクリプト |
+| `deploy/` | 本番ビルド、launchd の plist、インストール用スクリプト |
 | `data/` | 辞書の元データ、SQLite ファイル（git 管理外） |
 
 ## 必要なもの
@@ -78,7 +81,7 @@ ollama serve          # 127.0.0.1:11434 で待ち受け（外部には公開し�
 - 「1〜2 秒以内に解説が流れ始める」を満たすのは e4b 系だけでした。品質を優先して待ち時間を許容するなら `gemma4:12b-it-qat` も選べます（`LLM_MODEL` を変えるだけ）
 - MLX 版はわずかに速いものの 3GB 多くメモリを使うため、ブラウザやサーバーと同居する 16GB 機では QAT 版を既定にしました
 - thinking に対応したモデルでは最初の文字が遅れないよう、`LLM_DISABLE_THINKING=true`（既定）で `reasoning_effort: "none"` を送ります
-- 計測時、Mac のスリープで生成が 15 分止まりました。常時稼働させる場合はスリープ防止が必要です（フェーズ4）
+- 計測時、Mac のスリープで生成が 15 分止まりました。常時稼働させる場合はスリープ防止が必要です（「運用」を参照）
 
 ## 開発時の起動
 
@@ -99,11 +102,107 @@ trunk serve
 ブラウザで http://127.0.0.1:8000 を開き、右上の欄に arXiv の URL（例: `https://arxiv.org/abs/1706.03762`）を入れて「開く」を押します。
 本文の単語をダブルクリックするか英文をドラッグで選択すると、右ペインに選択文字列・mode（word / sentence）・段落が表示されます。
 
+### 使い方のヒント
+
+- **解説**: 「解説する」または **E** キー。**Esc** で選択を解除します（解説ペインにフォーカスがあっても使えます）
+- **キャッシュ**: 一度解説した文は保存され、次からは LLM を呼ばずにすぐ表示されます（「キャッシュから表示」と出ます）。
+  作り直すときは「再生成」を押します
+- **履歴**: 「履歴」タブに、論文ごとに調べた単語と解説した文が新しい順に並びます。クリックで再表示（解説がキャッシュにあればそれも表示）、
+  × で削除。「すべての論文」に切り替えると、ほかの論文の履歴と「論文を開く」ボタンが出ます
+- **ペインの幅**: 境界線をドラッグで変更（ダブルクリックで元に戻す、矢印キーでも調整可）。幅はブラウザに保存されます。
+  画面幅 800px 以下（iPhone など）では上下に並び、境界線で高さを変えられます
+
 ### サーバーだけで配信する
 
 ```sh
 (cd crates/web && trunk build)
 cargo run -p paper-reader-server   # http://127.0.0.1:8080 で UI も配信
+```
+
+## 運用（常時稼働）
+
+MacBook Air 1 台でサーバーと LLM を常時動かし、tailnet 内の別の端末（iPhone など）から HTTPS で使うための手順です。
+
+### 1. 本番ビルド
+
+```sh
+deploy/build.sh
+```
+
+- サーバーを release ビルドし、フロントエンドを `trunk build --release` でビルドします。
+  `index.html` の `data-wasm-opt="z"` により、trunk が wasm-opt（サイズ優先）を自動でダウンロードして適用します
+- wasm は約 5.8MB（うちフォント約 1.9MB）で、配信時は brotli / gzip で約 3.2MB に圧縮されます
+- `brew install brotli` しておくと、ビルド時に `.br` / `.gz` を最大圧縮で作り（wasm は約 2.6MB）、サーバーはそれをそのまま返します。
+  無ければサーバーがその場で圧縮します（`tower-http` の CompressionLayer。SSE は圧縮しません）
+- ファイル名にハッシュが付いた wasm / js / css は `Cache-Control: immutable` で長期間キャッシュされ、`index.html` は毎回更新を確認します
+
+### 2. サーバーと Ollama の自動起動（launchd）
+
+```sh
+deploy/install.sh                # ビルド → 配置 → LaunchAgent を登録して起動
+curl -s http://127.0.0.1:8080/api/health
+```
+
+- `~/Library/LaunchAgents` に 2 つの LaunchAgent を入れます。ログイン時に起動し、落ちても 10 秒後に再起動します（`KeepAlive`）
+  - `local.paper-reader.server` … サーバー（[deploy/local.paper-reader.server.plist](deploy/local.paper-reader.server.plist)）
+  - `local.paper-reader.ollama` … `ollama serve`（`OLLAMA_HOST=127.0.0.1:11434` で外部に公開しない。
+    `OLLAMA_KEEP_ALIVE=30m` で最後に使ってから 30 分はモデルをメモリに残す）
+- **配置先は `~/Library/Application Support/paper-reader`** です。launchd のジョブは macOS のプライバシー保護により
+  `~/Desktop` や `~/Documents` のファイルを読めないため、サーバーのバイナリ・`dist/`・`.env` をそこへコピーします。
+  データベースは初回だけ `data/app.db`（辞書・キャッシュ・履歴）をコピーし、以後はそちらを使います
+- ログ: `~/Library/Logs/paper-reader/server.log`, `ollama.log`
+- 更新するとき: コードを変えたら `deploy/install.sh` をもう一度実行します（データベースはそのまま）
+- 止める・外す: `deploy/uninstall.sh`（配置先のデータとログは残ります）。一時的に止めるだけなら
+  `launchctl bootout gui/$(id -u)/local.paper-reader.server`
+- Ollama を `brew services start ollama` で動かしたい場合は、`deploy/install.sh --no-ollama` を使います（二重起動しないように）
+- 辞書を入れ直すとき: `DATABASE_URL="sqlite://$HOME/Library/Application Support/paper-reader/data/app.db" cargo run -p import-dict --release`
+
+### 3. スリープ防止
+
+Mac がスリープすると生成もアクセスも止まります。次のどちらかを使います。
+
+- **caffeinate（おすすめ）**: `deploy/install.sh --caffeinate` で `caffeinate -i -s` の LaunchAgent も入れます。
+  電源接続中のシステムスリープとアイドルスリープを防ぎ、ディスプレイは通常どおり消えます。やめるときは `deploy/uninstall.sh` か
+  `launchctl bootout gui/$(id -u)/local.paper-reader.caffeinate`
+- **pmset**: 電源接続中は眠らない設定にします（管理者権限が必要）
+
+  ```sh
+  sudo pmset -c sleep 0 disksleep 0 displaysleep 10   # -c は電源接続時の設定
+  pmset -g                                            # 確認
+  ```
+
+- どちらの方法でも、**MacBook の蓋を閉じるとスリープします**（外部ディスプレイ・電源・キーボードをつないだクラムシェルモードを除く）。
+  蓋は開けたまま使ってください
+
+### 4. tailnet 内に HTTPS で公開（tailscale serve）
+
+サーバーは 127.0.0.1 だけで待ち受けたまま、[Tailscale](https://tailscale.com) の `serve` で tailnet 内の端末にだけ HTTPS で公開します
+（インターネットには公開しない `funnel` は使いません）。
+
+1. Mac に Tailscale を入れてログインする（App Store 版か `brew install --cask tailscale`）。iPhone にも Tailscale アプリを入れて同じアカウントでログインする
+2. 管理画面（https://login.tailscale.com/admin/dns）で **MagicDNS** と **HTTPS Certificates** を有効にする
+3. Mac で次を実行する
+
+   ```sh
+   tailscale serve --bg 8080          # https://<マシン名>.<tailnet名>.ts.net/ → http://127.0.0.1:8080
+   tailscale serve status             # 公開中の URL を確認
+   ```
+
+   `--bg` を付けると設定が保存され、再起動後も Tailscale が起動すれば自動で有効になります。やめるときは `tailscale serve reset`
+4. iPhone の Safari で `https://<マシン名>.<tailnet名>.ts.net/` を開く
+
+- 論文ペインと解説ペインは上下に並びます。単語や英文は長押しで選択します（選択範囲を調整すると解説ペインに反映されます）
+- Ollama（11434）は 127.0.0.1 のままで、tailnet にも公開しません
+
+### 再起動後の確認
+
+ログイン後に次がすべて通れば、自動起動が働いています。
+
+```sh
+launchctl print gui/$(id -u)/local.paper-reader.server | grep state   # state = running
+launchctl print gui/$(id -u)/local.paper-reader.ollama | grep state
+curl -s http://127.0.0.1:8080/api/health    # {"server":true,"llm":true,...,"model_available":true}
+tailscale serve status
 ```
 
 ## 設定（環境変数 / `.env`）
@@ -131,10 +230,17 @@ cargo run -p paper-reader-server   # http://127.0.0.1:8080 で UI も配信
   - 入力した語そのものが見出し語にある場合（running, used など）も、動詞の原形（run, use）を `related` に入れます。
     辞書の「goの過去」「childの複数形」のような記述からも原形（go, child）を取り出します
   - 見つからない場合は `headword: null`。辞書が未投入なら 503
-- `POST /api/explain` body: `{ mode: "word" | "sentence", text, context }` → `text/event-stream`
+- `POST /api/explain` body: `{ mode: "word" | "sentence", text, context, regenerate? }` → `text/event-stream`
   - `event: queued`（ほかの解説の生成待ち）→ `event: started` → `event: token`（data は追記する文字列）… → `event: done`
   - 失敗時は `event: error`（data はエラーメッセージ）。入力の検証エラーは 400 と `{ "error": "..." }`
   - text は 2,000 文字、context は 4,000 文字まで。LLM への同時リクエストは 1 件で、クライアントが切断すると生成も止めます
+  - 最後まで生成できた解説は `explain_cache` に保存します。キーは `sha256(LLM_MODEL, mode, text, context, プロンプトのバージョン)`。
+    次に同じ解説を頼まれたら LLM を呼ばずに `event: cached` → `event: token`（全文）→ `event: done` を返します。
+    `regenerate: true` ならキャッシュを使わずに生成し、結果で上書きします
+- `GET /api/history?paper=<論文 ID>` → `{ entries: [{ id, paper_id, paper_title, mode, text, context, updated_at, has_explanation }] }`
+  - 新しい順に最大 200 件。`paper` を省くと全論文。`has_explanation` は今のモデルの解説がキャッシュにあるか
+- `POST /api/history` body: `{ paper_id, paper_title, mode, text, context }` → 204（同じ論文・mode・text なら時刻と文脈を更新）
+- `DELETE /api/history/<id>` → 204
 - `GET /api/health` → `{ server, llm, model, model_available }`（LLM ランタイムの `/models` で疎通とモデルの有無を確認）
 
 ## テストと静的解析
@@ -148,4 +254,19 @@ cargo clippy -p paper-reader-web --target wasm32-unknown-unknown -- -D warnings
 
 ## フォント
 
-`crates/web/assets/fonts/NotoSansJP-Regular.otf` は [Noto CJK](https://github.com/notofonts/noto-cjk)（SIL Open Font License 1.1）の日本語サブセット版です。フェーズ4で、使う文字だけに絞ってさらに小さくします。
+`crates/web/assets/fonts/NotoSansJP-Regular.otf` は [Noto CJK](https://github.com/notofonts/noto-cjk)（SIL Open Font License 1.1）の
+Noto Sans JP を、使う文字だけに絞ったものです（4.5MB → 1.9MB）。wasm に埋め込むので、小さいほど読み込みが速くなります。
+
+含める文字は [scripts/font_chars.py](scripts/font_chars.py) で決めています: JIS X 0208（第1・第2水準漢字、かな、記号）、CP932 の拡張（①、㈱、NEC/IBM 拡張漢字など）、
+ASCII・Latin-1・ギリシャ文字・一般句読点・矢印・数学記号・全角形など約 1.1 万字。これ以外の文字（JIS 第3・第4水準の漢字など）は豆腐（□）になります。
+
+作り直す手順:
+
+```sh
+pip install fonttools                      # または brew install fonttools
+mkdir -p data/fonts
+curl -L -o data/fonts/NotoSansJP-Regular.otf \
+  https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/JP/NotoSansJP-Regular.otf
+scripts/subset_font.sh                     # → crates/web/assets/fonts/NotoSansJP-Regular.otf
+# 文字を増やすときは scripts/font_chars.py の RANGES を編集して再実行する
+```

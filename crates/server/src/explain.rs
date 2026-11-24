@@ -2,6 +2,7 @@
 //!
 //! - LLM への同時リクエストは `AppState::llm_gate`（Semaphore, 1 件）で制限し、待つときは `queued` を送る
 //! - クライアントが切断したら（SSE の受け手が drop されたら）上流のストリームも drop して生成を止める
+//! - 最後まで生成できた解説は explain_cache に保存し、次回は LLM を呼ばずに同じ SSE 形式で返す
 
 use std::convert::Infallible;
 use std::time::Duration;
@@ -18,6 +19,8 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use crate::AppState;
+use crate::cache::cache_key;
+use crate::db;
 use crate::error::{AppError, AppResult};
 use crate::prompts;
 
@@ -33,9 +36,38 @@ pub async fn post_explain(
     let Json(req) =
         body.map_err(|e| AppError::BadRequest(format!("リクエストを解釈できません: {e}")))?;
     let req = validate(req)?;
+    let key = key_for(&state, &req);
 
     let (tx, rx) = mpsc::channel::<Event>(64);
-    tokio::spawn(run(state, req, tx));
+    let cached = if req.regenerate {
+        None
+    } else {
+        match db::get_explanation(&state.db, &key).await {
+            Ok(hit) => hit,
+            Err(e) => {
+                // キャッシュが読めなくても生成はできる
+                tracing::warn!(error = %e, "explain cache read failed");
+                None
+            }
+        }
+    };
+    match cached {
+        Some(markdown) => {
+            tracing::info!(mode = req.mode.as_str(), "explain cache hit");
+            // 3 件だけなのでチャネルの容量内に収まり、待たずに送れる
+            for (event, data) in [
+                (sse_event::CACHED, ""),
+                (sse_event::TOKEN, markdown.as_str()),
+                (sse_event::DONE, ""),
+            ] {
+                let _ = tx.try_send(Event::default().event(event).data(data));
+            }
+            drop(tx);
+        }
+        None => {
+            tokio::spawn(run(state, req, key, tx));
+        }
+    }
 
     let stream = futures_util::stream::unfold(rx, |mut rx| async move {
         rx.recv().await.map(|ev| (Ok(ev), rx))
@@ -65,6 +97,17 @@ pub fn validate(mut req: ExplainRequest) -> AppResult<ExplainRequest> {
     Ok(req)
 }
 
+/// この解説のキャッシュキー。
+pub fn key_for(state: &AppState, req: &ExplainRequest) -> String {
+    cache_key(
+        &state.config.llm_model,
+        req.mode,
+        &req.text,
+        &req.context,
+        prompts::PROMPT_VERSION,
+    )
+}
+
 /// 生成を止めた理由。
 #[derive(Debug)]
 enum StreamError {
@@ -74,7 +117,14 @@ enum StreamError {
     Llm(String),
 }
 
-async fn run(state: AppState, req: ExplainRequest, tx: mpsc::Sender<Event>) {
+/// LLM の生成結果。
+struct Completion {
+    text: String,
+    /// `[DONE]` まで受け取り、長さの上限で打ち切られてもいない
+    complete: bool,
+}
+
+async fn run(state: AppState, req: ExplainRequest, key: String, tx: mpsc::Sender<Event>) {
     let gate = state.llm_gate.clone();
     let _permit = match gate.clone().try_acquire_owned() {
         Ok(p) => p,
@@ -105,12 +155,27 @@ async fn run(state: AppState, req: ExplainRequest, tx: mpsc::Sender<Event>) {
         Err(_) => Err(StreamError::Llm("解説の生成がタイムアウトしました".into())),
     };
     match result {
-        Ok(text) => {
+        Ok(c) => {
             tracing::info!(
                 mode = req.mode.as_str(),
-                chars = text.chars().count(),
+                chars = c.text.chars().count(),
+                complete = c.complete,
                 "explain done"
             );
+            // クライアントへの完了通知より先に保存する（直後に同じ解説を頼まれてもヒットするように）
+            if c.complete {
+                let entry = db::NewExplanation {
+                    key: &key,
+                    model: &state.config.llm_model,
+                    mode: req.mode,
+                    text: &req.text,
+                    markdown: &c.text,
+                    prompt_version: prompts::PROMPT_VERSION,
+                };
+                if let Err(e) = db::put_explanation(&state.db, &entry).await {
+                    tracing::warn!(error = %e, "explain cache write failed");
+                }
+            }
             let _ = send(&tx, sse_event::DONE, "").await;
         }
         Err(StreamError::ClientGone) => tracing::info!("client disconnected; generation aborted"),
@@ -132,7 +197,7 @@ async fn stream_llm(
     state: &AppState,
     req: &ExplainRequest,
     tx: &mpsc::Sender<Event>,
-) -> Result<String, StreamError> {
+) -> Result<Completion, StreamError> {
     let cfg = &state.config;
     if cfg.llm_model.is_empty() {
         return Err(StreamError::Llm(
@@ -162,6 +227,7 @@ async fn stream_llm(
 
     let mut parser = SseParser::default();
     let mut full = String::new();
+    let mut truncated = false;
     loop {
         let chunk = tokio::select! {
             c = resp.chunk() => c.map_err(|e| StreamError::Llm(describe_reqwest(&e, &cfg.llm_base_url)))?,
@@ -172,15 +238,28 @@ async fn stream_llm(
             return if full.is_empty() {
                 Err(StreamError::Llm("LLM の応答が途中で終了しました".into()))
             } else {
-                Ok(full)
+                Ok(Completion {
+                    text: full,
+                    complete: false,
+                })
             };
         };
         for ev in parser.push(&String::from_utf8_lossy(&chunk)) {
             match parse_upstream(&ev.data)? {
-                Upstream::Done => return Ok(full),
-                Upstream::Token(t) => {
-                    full.push_str(&t);
-                    send(tx, sse_event::TOKEN, &t).await?;
+                Upstream::Done => {
+                    return Ok(Completion {
+                        complete: !truncated && !full.trim().is_empty(),
+                        text: full,
+                    });
+                }
+                Upstream::Delta { content, finish } => {
+                    if finish.as_deref() == Some("length") {
+                        truncated = true;
+                    }
+                    if !content.is_empty() {
+                        full.push_str(&content);
+                        send(tx, sse_event::TOKEN, &content).await?;
+                    }
                 }
                 Upstream::Skip => {}
             }
@@ -209,7 +288,11 @@ pub fn request_body(model: &str, req: &ExplainRequest, disable_thinking: bool) -
 
 #[derive(Debug, PartialEq, Eq)]
 enum Upstream {
-    Token(String),
+    /// 本文の断片と、最後の断片なら終了理由（"stop", "length" など）
+    Delta {
+        content: String,
+        finish: Option<String>,
+    },
     Done,
     Skip,
 }
@@ -237,10 +320,17 @@ fn parse_upstream(data: &str) -> Result<Upstream, StreamError> {
         .pointer("/choices/0/delta/content")
         .and_then(Value::as_str)
         .unwrap_or("");
-    if content.is_empty() {
+    let finish = v
+        .pointer("/choices/0/finish_reason")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if content.is_empty() && finish.is_none() {
         Ok(Upstream::Skip)
     } else {
-        Ok(Upstream::Token(content.to_string()))
+        Ok(Upstream::Delta {
+            content: content.to_string(),
+            finish,
+        })
     }
 }
 
@@ -307,7 +397,21 @@ mod tests {
     #[test]
     fn upstream_parsing() {
         let tok = r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":"和訳"}}]}"#;
-        assert_eq!(parse_upstream(tok).unwrap(), Upstream::Token("和訳".into()));
+        assert_eq!(
+            parse_upstream(tok).unwrap(),
+            Upstream::Delta {
+                content: "和訳".into(),
+                finish: None
+            }
+        );
+        let last = r#"{"choices":[{"delta":{"content":""},"finish_reason":"length"}]}"#;
+        assert_eq!(
+            parse_upstream(last).unwrap(),
+            Upstream::Delta {
+                content: String::new(),
+                finish: Some("length".into())
+            }
+        );
         let reasoning = r#"{"choices":[{"delta":{"reasoning":"thinking..."}}]}"#;
         assert_eq!(parse_upstream(reasoning).unwrap(), Upstream::Skip);
         assert_eq!(parse_upstream("[DONE]").unwrap(), Upstream::Done);

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  paper-reader サーバーの LaunchAgent（ログイン時に起動し、落ちたら再起動する）。
+  __APP_HOME__ と __LOG_DIR__ は deploy/install.sh が置き換える。
+  launchd のジョブは ~/Desktop や ~/Documents を読めないため、install.sh が成果物を __APP_HOME__ にコピーする。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.paper-reader.server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__APP_HOME__/bin/paper-reader-server</string>
+  </array>
+  <!-- ここにある .env も読む（下の EnvironmentVariables が優先） -->
+  <key>WorkingDirectory</key>
+  <string>__APP_HOME__</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- 終了したら（正常終了でも）再起動する。連続で落ちるときは 10 秒あける -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>STATIC_DIR</key>
+    <string>__APP_HOME__/dist</string>
+    <key>DATABASE_URL</key>
+    <string>sqlite://__APP_HOME__/data/app.db</string>
+    <key>RUST_LOG</key>
+    <string>info,tower_http=info,sqlx=warn</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/server.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/server.log</string>
+</dict>
+</plist>

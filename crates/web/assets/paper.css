@@ -1,4 +1,5 @@
-/* レイアウト: 左 60% 論文 / 右 40% egui。各ペインは独立スクロール */
+/* レイアウト: 左 論文（既定 60%、#splitter のドラッグで --paper-size を変更）/ 右 egui。
+   各ペインは独立スクロール */
 html, body {
   margin: 0;
   height: 100%;
@@ -12,11 +13,11 @@ html, body {
 }
 
 #paper {
-  flex: 0 0 60%;
+  flex: 0 0 var(--paper-size, 60%);
+  min-width: 0;
   overflow-y: auto;
   box-sizing: border-box;
   padding: 2rem 2.5rem 6rem;
-  border-right: 1px solid #d0d0d0;
   background: #fff;
   color: #1a1a1a;
   font-family: "Charter", "Georgia", "Times New Roman", "Hiragino Mincho ProN", serif;
@@ -26,9 +27,32 @@ html, body {
 }
 
 #explain-pane {
-  flex: 1 1 40%;
+  flex: 1 1 0;
   min-width: 0;
   position: relative;
+}
+
+/* ペインの境界。見た目は 1px の線で、つかめる範囲は左右に広げる */
+#splitter {
+  flex: 0 0 9px;
+  margin: 0 -4px;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+  background: linear-gradient(to right, transparent 4px, #d0d0d0 4px, #d0d0d0 5px, transparent 5px);
+}
+#splitter:hover, #splitter:focus-visible, body.resizing #splitter {
+  background: linear-gradient(to right, transparent 3px, #1a5fb4 3px, #1a5fb4 6px, transparent 6px);
+  outline: none;
+}
+/* ドラッグ中は本文の選択やカーソルの変化を止める */
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+body.resizing #paper, body.resizing #explain-pane {
+  pointer-events: none;
 }
 
 #egui_canvas {
@@ -168,11 +192,20 @@ html, body {
 @media (max-width: 800px) {
   #layout { flex-direction: column; }
   #paper {
-    flex: 0 0 60%;
-    border-right: none;
-    border-bottom: 1px solid #d0d0d0;
+    flex: 0 0 var(--paper-size, 60%);
+    min-height: 0;
     padding: 1rem 1rem 4rem;
     font-size: 16px;
   }
-  #explain-pane { flex: 1 1 40%; min-height: 0; }
+  #splitter {
+    flex: 0 0 13px;
+    margin: -6px 0;
+    cursor: row-resize;
+    background: linear-gradient(to bottom, transparent 6px, #d0d0d0 6px, #d0d0d0 7px, transparent 7px);
+  }
+  #splitter:hover, #splitter:focus-visible, body.resizing #splitter {
+    background: linear-gradient(to bottom, transparent 5px, #1a5fb4 5px, #1a5fb4 8px, transparent 8px);
+  }
+  body.resizing { cursor: row-resize; }
+  #explain-pane { flex: 1 1 0; min-height: 0; }
 }

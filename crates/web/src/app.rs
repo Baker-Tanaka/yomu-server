@@ -6,10 +6,13 @@ use std::sync::Arc;
 
 use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
-use paper_reader_shared::{DictEntry, Mode};
+use paper_reader_shared::{DictEntry, HistoryEntry, Mode};
 
 use crate::dom;
-use crate::state::{self, DictStatus, ExplainPhase, HealthStatus, PaperStatus, Shared, SharedRef};
+use crate::state::{
+    self, DictStatus, ExplainPhase, HealthStatus, HistoryScope, HistoryStatus, PaperStatus, Shared,
+    SharedRef, Tab,
+};
 
 pub struct PaperReaderApp {
     shared: SharedRef,
@@ -38,6 +41,16 @@ impl PaperReaderApp {
             state::on_select(&shared_for_dom, &ctx, info);
         }) {
             log::error!("選択の監視を開始できません: {e}");
+        }
+        let ctx = cc.egui_ctx.clone();
+        let shared_for_keys = shared.clone();
+        if let Err(e) = dom::watch_shortcuts(move |key| {
+            state::on_shortcut(&shared_for_keys, &ctx, key);
+        }) {
+            log::error!("ショートカットを有効にできません: {e}");
+        }
+        if let Err(e) = dom::init_splitter() {
+            log::error!("ペイン境界のドラッグを有効にできません: {e}");
         }
         state::refresh_health(&shared, &cc.egui_ctx);
 
@@ -147,7 +160,9 @@ impl PaperReaderApp {
 
     fn selection_view(&mut self, ui: &mut egui::Ui) {
         let Some(sel) = self.shared.borrow().selection.clone() else {
-            ui.weak("左の本文で単語をダブルクリックするか、英文をドラッグして選択してください。");
+            ui.weak("本文の単語をダブルクリックするか、英文をドラッグして選択してください（iPhone などでは長押しで選択）。");
+            ui.add_space(6.0);
+            ui.weak("ショートカット: E で解説、Esc で選択解除");
             return;
         };
 
@@ -192,19 +207,31 @@ impl PaperReaderApp {
 
     fn explain_view(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        let (phase, running) = {
+        let (phase, running, from_cache) = {
             let s = self.shared.borrow();
-            (s.explain.phase.clone(), s.explain.phase.is_running())
+            (
+                s.explain.phase.clone(),
+                s.explain.phase.is_running(),
+                s.explain.from_cache,
+            )
         };
 
         ui.horizontal_wrapped(|ui| {
             ui.heading("解説");
             if ui
                 .add_enabled(!running, egui::Button::new("解説する"))
-                .on_hover_text("選択中のテキストを LLM で解説します")
+                .on_hover_text("選択中のテキストを LLM で解説します（E キー）")
                 .clicked()
             {
-                state::start_explain(&self.shared, &ctx);
+                state::start_explain(&self.shared, &ctx, false);
+            }
+            if phase == ExplainPhase::Done
+                && ui
+                    .button("再生成")
+                    .on_hover_text("キャッシュを使わずに解説を作り直します")
+                    .clicked()
+            {
+                state::start_explain(&self.shared, &ctx, true);
             }
             if running && ui.button("停止").clicked() {
                 state::stop_explain(&self.shared);
@@ -231,12 +258,19 @@ impl PaperReaderApp {
                     ui.weak("順番待ち中…（ほかの解説を生成しています）");
                 });
             }
+            ExplainPhase::Done if from_cache => {
+                ui.label(
+                    egui::RichText::new("キャッシュから表示")
+                        .small()
+                        .color(ui.visuals().weak_text_color()),
+                );
+            }
             ExplainPhase::Streaming | ExplainPhase::Done => {}
             ExplainPhase::Error(msg) => {
                 ui.horizontal_wrapped(|ui| {
                     ui.colored_label(ui.visuals().error_fg_color, msg);
                     if ui.button("再試行").clicked() {
-                        state::start_explain(&self.shared, &ctx);
+                        state::start_explain(&self.shared, &ctx, false);
                     }
                 });
             }
@@ -256,16 +290,212 @@ impl PaperReaderApp {
     }
 }
 
+impl PaperReaderApp {
+    fn tabs(&mut self, ui: &mut egui::Ui) {
+        let mut tab = self.shared.borrow().tab;
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut tab, Tab::Explain, "解説");
+            ui.selectable_value(&mut tab, Tab::History, "履歴");
+        });
+        let mut s = self.shared.borrow_mut();
+        if s.tab != tab {
+            s.tab = tab;
+            if tab == Tab::History {
+                s.history_stale = true;
+            }
+        }
+    }
+
+    fn history_view(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let (scope, has_paper, stale) = {
+            let s = self.shared.borrow();
+            (s.history_scope, s.paper_ref().is_some(), s.history_stale)
+        };
+        if stale {
+            state::refresh_history(&self.shared, &ctx);
+        }
+
+        let mut new_scope = scope;
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut new_scope, HistoryScope::ThisPaper, "この論文");
+            ui.selectable_value(&mut new_scope, HistoryScope::AllPapers, "すべての論文");
+            if ui.small_button("更新").clicked() {
+                self.shared.borrow_mut().history_stale = true;
+            }
+        });
+        if new_scope != scope {
+            let mut s = self.shared.borrow_mut();
+            s.history_scope = new_scope;
+            s.history_stale = true;
+        }
+        ui.add_space(4.0);
+
+        let status = self.shared.borrow().history.clone();
+        let entries = match status {
+            HistoryStatus::NotLoaded | HistoryStatus::Loading => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.weak("履歴を読み込み中…");
+                });
+                return;
+            }
+            HistoryStatus::Error(e) => {
+                ui.colored_label(ui.visuals().error_fg_color, format!("履歴: {e}"));
+                return;
+            }
+            HistoryStatus::Loaded(entries) => entries,
+        };
+        if entries.is_empty() {
+            ui.weak(match (scope, has_paper) {
+                (HistoryScope::ThisPaper, false) => {
+                    "論文を開くと、その論文で調べた単語と解説した文がここに表示されます。"
+                }
+                _ => "まだ履歴はありません。単語を選択するか、英文を解説するとここに残ります。",
+            });
+            return;
+        }
+
+        let current = self.shared.borrow().paper_ref().map(|(id, _)| id);
+        let mut action = None;
+        let mut last_paper: Option<&str> = None;
+        for entry in &entries {
+            if scope == HistoryScope::AllPapers && last_paper != Some(entry.paper_id.as_str()) {
+                last_paper = Some(&entry.paper_id);
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new(&entry.paper_title).strong());
+                    ui.weak(format!("arXiv:{}", entry.paper_id));
+                    if current.as_deref() != Some(entry.paper_id.as_str())
+                        && ui.small_button("論文を開く").clicked()
+                    {
+                        action = Some(HistoryAction::OpenPaper(entry.paper_id.clone()));
+                    }
+                });
+            }
+            if let Some(a) = history_row(ui, entry) {
+                action = Some(a);
+            }
+        }
+
+        match action {
+            Some(HistoryAction::Show(entry)) => {
+                state::show_history_entry(&self.shared, &ctx, &entry)
+            }
+            Some(HistoryAction::Delete(id)) => state::delete_history_entry(&self.shared, &ctx, id),
+            Some(HistoryAction::OpenPaper(id)) => {
+                let url = format!("https://arxiv.org/abs/{id}");
+                self.url_input = url.clone();
+                state::open_paper(&self.shared, &ctx, url);
+            }
+            None => {}
+        }
+    }
+}
+
+enum HistoryAction {
+    Show(HistoryEntry),
+    Delete(i64),
+    OpenPaper(String),
+}
+
+/// 履歴の 1 行。クリックで再表示、× で削除。
+fn history_row(ui: &mut egui::Ui, entry: &HistoryEntry) -> Option<HistoryAction> {
+    let mut action = None;
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            let (label, color) = match entry.mode {
+                Mode::Word => ("単語", egui::Color32::from_rgb(0x2e, 0x7d, 0x32)),
+                Mode::Sentence => ("英文", egui::Color32::from_rgb(0x15, 0x65, 0xc0)),
+            };
+            ui.label(
+                egui::RichText::new(label)
+                    .small()
+                    .color(egui::Color32::WHITE)
+                    .background_color(color),
+            );
+            ui.weak(format_time(entry.updated_at));
+            if entry.has_explanation {
+                ui.weak("・解説あり");
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("×").on_hover_text("履歴から削除").clicked() {
+                    action = Some(HistoryAction::Delete(entry.id));
+                }
+            });
+        });
+        let preview: String = entry.text.chars().take(160).collect();
+        let preview = if preview.len() < entry.text.len() {
+            format!("{preview}…")
+        } else {
+            preview
+        };
+        let text =
+            egui::RichText::new(preview).size(if entry.mode == Mode::Word { 17.0 } else { 14.0 });
+        let resp = ui
+            .add(egui::Label::new(text).sense(egui::Sense::click()))
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("クリックで再表示");
+        if resp.clicked() {
+            action = Some(HistoryAction::Show(entry.clone()));
+        }
+    });
+    action
+}
+
+/// UNIX 秒をローカル時刻の "11/24 09:15" にする。
+fn format_time(secs: i64) -> String {
+    let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(secs as f64 * 1000.0));
+    format!(
+        "{}/{} {:02}:{:02}",
+        d.get_month() + 1,
+        d.get_date(),
+        d.get_hours(),
+        d.get_minutes()
+    )
+}
+
 impl eframe::App for PaperReaderApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // 解説ペインにフォーカスがあるときのショートカット（論文ペイン側は dom::watch_shortcuts）
+        let ctx = ui.ctx().clone();
+        if !ctx.egui_wants_keyboard_input() {
+            let (explain, clear) = ctx.input(|i| {
+                (
+                    i.key_pressed(egui::Key::E) && i.modifiers.is_none(),
+                    i.key_pressed(egui::Key::Escape),
+                )
+            });
+            if explain {
+                state::on_shortcut(&self.shared, &ctx, dom::Shortcut::Explain);
+            } else if clear {
+                state::on_shortcut(&self.shared, &ctx, dom::Shortcut::ClearSelection);
+            }
+        }
+
         egui::CentralPanel::default_margins().show(ui, |ui| {
             self.url_bar(ui);
             self.status_line(ui);
             ui.separator();
+            self.tabs(ui);
+            ui.separator();
+            let tab = self.shared.borrow().tab;
             egui::ScrollArea::vertical()
+                .id_salt(tab_salt(tab))
                 .auto_shrink([false, false])
-                .show(ui, |ui| self.selection_view(ui));
+                .show(ui, |ui| match tab {
+                    Tab::Explain => self.selection_view(ui),
+                    Tab::History => self.history_view(ui),
+                });
         });
+    }
+}
+
+fn tab_salt(tab: Tab) -> &'static str {
+    match tab {
+        Tab::Explain => "explain_scroll",
+        Tab::History => "history_scroll",
     }
 }
 

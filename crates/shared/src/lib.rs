@@ -103,9 +103,49 @@ pub struct ExplainRequest {
     pub text: String,
     #[serde(default)]
     pub context: String,
-    /// true ならキャッシュを使わずに生成し直す（フェーズ4）
+    /// true ならキャッシュを使わずに生成し直す
     #[serde(default)]
     pub regenerate: bool,
+}
+
+/// 履歴の 1 件（調べた単語・解説した文）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryEntry {
+    pub id: i64,
+    pub paper_id: String,
+    pub paper_title: String,
+    pub mode: Mode,
+    pub text: String,
+    /// 解説に使った文脈（切り詰め済み）
+    pub context: String,
+    /// 最後に調べた時刻（UNIX 秒）
+    pub updated_at: i64,
+    /// 現在のモデルで解説がキャッシュされているか
+    pub has_explanation: bool,
+}
+
+/// `POST /api/history` の body。同じ論文・mode・text なら時刻と文脈を更新する。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryRecord {
+    pub paper_id: String,
+    pub paper_title: String,
+    pub mode: Mode,
+    pub text: String,
+    #[serde(default)]
+    pub context: String,
+}
+
+/// `GET /api/history?paper=` のクエリ。`paper` が無ければ全論文。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HistoryQuery {
+    #[serde(default)]
+    pub paper: Option<String>,
+}
+
+/// `GET /api/history` の応答（新しい順）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryResponse {
+    pub entries: Vec<HistoryEntry>,
 }
 
 /// `/api/explain` の SSE イベント名。
@@ -120,6 +160,8 @@ pub mod sse_event {
     pub const QUEUED: &str = "queued";
     /// 生成開始（順番待ちが終わった）
     pub const STARTED: &str = "started";
+    /// キャッシュから返す（このあと token と done が続く）
+    pub const CACHED: &str = "cached";
 }
 
 /// SSE の 1 イベント。

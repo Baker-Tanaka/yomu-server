@@ -1,7 +1,8 @@
 //! サーバー API の呼び出し（fetch）。
 
 use paper_reader_shared::{
-    DictResponse, ErrorResponse, ExplainRequest, HealthResponse, PaperResponse, SseEvent, SseParser,
+    DictResponse, ErrorResponse, ExplainRequest, HealthResponse, HistoryRecord, HistoryResponse,
+    PaperResponse, SseEvent, SseParser,
 };
 use serde::de::DeserializeOwned;
 use wasm_bindgen::{JsCast as _, JsValue};
@@ -23,6 +24,62 @@ pub async fn fetch_dict(word: &str) -> Result<DictResponse, String> {
 
 pub async fn fetch_health() -> Result<HealthResponse, String> {
     get_json("/api/health").await
+}
+
+/// 履歴を取得する。`paper` が `None` なら全論文。
+pub async fn fetch_history(paper: Option<&str>) -> Result<HistoryResponse, String> {
+    match paper {
+        Some(p) => {
+            let encoded = String::from(js_sys::encode_uri_component(p));
+            get_json(&format!("/api/history?paper={encoded}")).await
+        }
+        None => get_json("/api/history").await,
+    }
+}
+
+pub async fn post_history(record: &HistoryRecord) -> Result<(), String> {
+    let body = serde_json::to_string(record).map_err(|e| e.to_string())?;
+    send_without_body("POST", "/api/history", Some(&body)).await
+}
+
+pub async fn delete_history(id: i64) -> Result<(), String> {
+    send_without_body("DELETE", &format!("/api/history/{id}"), None).await
+}
+
+/// 応答の本文を使わないリクエスト（成功なら `Ok(())`）。
+async fn send_without_body(method: &str, path: &str, json: Option<&str>) -> Result<(), String> {
+    let window = web_sys::window().ok_or("window が取得できません")?;
+    let init = RequestInit::new();
+    init.set_method(method);
+    if let Some(json) = json {
+        let headers = Headers::new().map_err(|e| js_error(&e))?;
+        headers
+            .set("Content-Type", "application/json")
+            .map_err(|e| js_error(&e))?;
+        init.set_headers(&headers);
+        init.set_body(&JsValue::from_str(json));
+    }
+    let request = Request::new_with_str_and_init(path, &init).map_err(|e| js_error(&e))?;
+    let resp: Response = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| format!("サーバーに接続できません（{}）", js_error(&e)))?
+        .dyn_into()
+        .map_err(|_| "不正な応答です".to_string())?;
+    if resp.ok() {
+        return Ok(());
+    }
+    let text = match resp.text() {
+        Ok(p) => JsFuture::from(p)
+            .await
+            .ok()
+            .and_then(|v| v.as_string())
+            .unwrap_or_default(),
+        Err(_) => String::new(),
+    };
+    Err(match serde_json::from_str::<ErrorResponse>(&text) {
+        Ok(err) => err.error,
+        Err(_) => format!("サーバーエラー（HTTP {}）", resp.status()),
+    })
 }
 
 /// `POST /api/explain` を呼び、SSE のイベントを受け取るたびに `on_event` を呼ぶ。

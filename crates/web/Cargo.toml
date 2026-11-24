@@ -20,4 +20,6 @@ web-sys = { version = "0.3.107", features = [
   "Selection", "Range", "Event", "EventTarget", "Request", "RequestInit", "Response", "Headers",
   "AbortController", "AbortSignal", "ReadableStream", "ReadableStreamDefaultReader",
   "TextDecoder", "TextDecodeOptions",
+  "KeyboardEvent", "PointerEvent", "MouseEvent", "Storage", "DomRect", "DomTokenList",
+  "CssStyleDeclaration", "MediaQueryList",
 ] }

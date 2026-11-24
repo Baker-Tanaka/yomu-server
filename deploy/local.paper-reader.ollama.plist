@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Ollama の LaunchAgent。127.0.0.1 だけで待ち受ける（外部に公開しない）。
+  __OLLAMA__ と __LOG_DIR__ は deploy/install.sh が置き換える。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.paper-reader.ollama</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__OLLAMA__</string>
+    <string>serve</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>OLLAMA_HOST</key>
+    <string>127.0.0.1:11434</string>
+    <!-- 最後に使ってから 30 分はモデルをメモリに残す（最初の 1 文字までの待ちを減らす） -->
+    <key>OLLAMA_KEEP_ALIVE</key>
+    <string>30m</string>
+    <key>OLLAMA_MAX_LOADED_MODELS</key>
+    <string>1</string>
+    <key>OLLAMA_NUM_PARALLEL</key>
+    <string>1</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/ollama.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/ollama.log</string>
+</dict>
+</plist>

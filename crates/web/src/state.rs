@@ -5,8 +5,8 @@ use std::rc::Rc;
 
 use eframe::egui;
 use paper_reader_shared::{
-    DictResponse, ExplainRequest, HealthResponse, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode,
-    clip_context, sse_event,
+    DictResponse, ExplainRequest, HealthResponse, HistoryEntry, HistoryRecord, MAX_CONTEXT_CHARS,
+    MAX_TEXT_CHARS, Mode, clip_context, sse_event,
 };
 use web_sys::AbortController;
 
@@ -66,6 +66,8 @@ pub struct Explain {
     pub markdown: String,
     /// 解説の対象（表示用）
     pub target: Option<(Mode, String)>,
+    /// サーバーのキャッシュから返された解説か
+    pub from_cache: bool,
     /// 解説ごとに増える番号。中止した解説から遅れて届いたイベントを捨てる
     seq: u64,
     controller: Option<AbortController>,
@@ -79,6 +81,42 @@ impl Explain {
         }
         self.seq += 1;
     }
+
+    /// 中止して表示も空にする。
+    fn reset(&mut self) {
+        self.abort();
+        self.phase = ExplainPhase::Idle;
+        self.markdown.clear();
+        self.target = None;
+        self.from_cache = false;
+    }
+}
+
+/// 履歴の読み込み状態。
+#[derive(Debug, Clone, Default)]
+pub enum HistoryStatus {
+    #[default]
+    NotLoaded,
+    Loading,
+    Loaded(Vec<HistoryEntry>),
+    Error(String),
+}
+
+/// 右ペインのタブ。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Tab {
+    #[default]
+    Explain,
+    History,
+}
+
+/// 履歴タブで表示する範囲。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HistoryScope {
+    /// 表示中の論文だけ
+    #[default]
+    ThisPaper,
+    AllPapers,
 }
 
 /// LLM の疎通状態。
@@ -93,6 +131,7 @@ pub enum HealthStatus {
 /// DOM のイベントや非同期処理と共有する状態。
 #[derive(Default)]
 pub struct Shared {
+    pub tab: Tab,
     pub paper: PaperStatus,
     pub selection: Option<SelectionInfo>,
     pub dict: DictStatus,
@@ -102,18 +141,66 @@ pub struct Shared {
     pub auto_explain: bool,
     /// 選択ごとに増える番号。古い選択に対する辞書の応答を捨てるために使う
     selection_seq: u64,
+    pub history: HistoryStatus,
+    pub history_scope: HistoryScope,
+    /// 履歴が変わったので、次に履歴タブを表示するときに読み直す
+    pub history_stale: bool,
+    /// 履歴の読み込みごとに増える番号（古い応答を捨てる）
+    history_seq: u64,
 }
 
-/// 新しい選択を反映する。単語なら辞書を引き、自動解説が有効なら解説も始める。
+impl Shared {
+    /// 表示中の論文の (ID, タイトル)。
+    pub fn paper_ref(&self) -> Option<(String, String)> {
+        match &self.paper {
+            PaperStatus::Loaded { id, title, .. } => Some((id.clone(), title.clone())),
+            _ => None,
+        }
+    }
+}
+
+/// 本文での新しい選択を反映する。単語なら辞書を引いて履歴に残し、自動解説が有効なら解説も始める。
 pub fn on_select(this: &SharedRef, ctx: &egui::Context, info: SelectionInfo) {
-    let (seq, word, auto) = {
+    if info.mode == Mode::Word {
+        record_history(this, ctx, &info);
+    }
+    let auto = {
+        let mut s = this.borrow_mut();
+        s.tab = Tab::Explain;
+        s.auto_explain
+    };
+    apply_selection(this, ctx, info, auto);
+}
+
+/// 履歴の項目を再表示する。解説がキャッシュにあればそれも表示する（LLM は呼ばれない）。
+pub fn show_history_entry(this: &SharedRef, ctx: &egui::Context, entry: &HistoryEntry) {
+    dom::clear_selection();
+    let info = SelectionInfo {
+        text: entry.text.clone(),
+        context: entry.context.clone(),
+        mode: entry.mode,
+    };
+    this.borrow_mut().tab = Tab::Explain;
+    apply_selection(this, ctx, info, entry.has_explanation);
+}
+
+/// 選択を解除する（本文の選択と右ペインの表示の両方）。
+pub fn clear_selection(this: &SharedRef, ctx: &egui::Context) {
+    dom::clear_selection();
+    let mut s = this.borrow_mut();
+    s.selection_seq += 1;
+    s.selection = None;
+    s.dict = DictStatus::Idle;
+    s.explain.reset();
+    ctx.request_repaint();
+}
+
+fn apply_selection(this: &SharedRef, ctx: &egui::Context, info: SelectionInfo, explain: bool) {
+    let (seq, word) = {
         let mut s = this.borrow_mut();
         s.selection_seq += 1;
         // 新しい選択が来たら進行中の解説は中止する
-        s.explain.abort();
-        s.explain.phase = ExplainPhase::Idle;
-        s.explain.markdown.clear();
-        s.explain.target = None;
+        s.explain.reset();
         let word = (info.mode == Mode::Word).then(|| info.text.clone());
         s.dict = if word.is_some() {
             DictStatus::Loading
@@ -121,10 +208,10 @@ pub fn on_select(this: &SharedRef, ctx: &egui::Context, info: SelectionInfo) {
             DictStatus::Idle
         };
         s.selection = Some(info);
-        (s.selection_seq, word, s.auto_explain)
+        (s.selection_seq, word)
     };
-    if auto {
-        start_explain(this, ctx);
+    if explain {
+        start_explain(this, ctx, false);
     }
     ctx.request_repaint();
 
@@ -149,7 +236,8 @@ pub fn on_select(this: &SharedRef, ctx: &egui::Context, info: SelectionInfo) {
 }
 
 /// 現在の選択の解説を始める（進行中のものがあれば中止してから）。
-pub fn start_explain(this: &SharedRef, ctx: &egui::Context) {
+/// `regenerate` が true ならキャッシュを使わずに生成し直す。
+pub fn start_explain(this: &SharedRef, ctx: &egui::Context, regenerate: bool) {
     let (req, seq, signal) = {
         let mut s = this.borrow_mut();
         let Some(sel) = s.selection.clone() else {
@@ -157,6 +245,7 @@ pub fn start_explain(this: &SharedRef, ctx: &egui::Context) {
         };
         s.explain.abort();
         s.explain.markdown.clear();
+        s.explain.from_cache = false;
         s.explain.target = Some((sel.mode, sel.text.clone()));
 
         if sel.text.chars().count() > MAX_TEXT_CHARS {
@@ -179,11 +268,20 @@ pub fn start_explain(this: &SharedRef, ctx: &egui::Context) {
             mode: sel.mode,
             context: clip_context(&sel.context, &sel.text, MAX_CONTEXT_CHARS),
             text: sel.text,
-            regenerate: false,
+            regenerate,
         };
         (req, s.explain.seq, signal)
     };
     ctx.request_repaint();
+    record_history(
+        this,
+        ctx,
+        &SelectionInfo {
+            text: req.text.clone(),
+            context: req.context.clone(),
+            mode: req.mode,
+        },
+    );
 
     let this = this.clone();
     let ctx = ctx.clone();
@@ -200,6 +298,7 @@ pub fn start_explain(this: &SharedRef, ctx: &egui::Context) {
                 match ev.event.as_str() {
                     sse_event::QUEUED => e.phase = ExplainPhase::Queued,
                     sse_event::STARTED => e.phase = ExplainPhase::Connecting,
+                    sse_event::CACHED => e.from_cache = true,
                     sse_event::TOKEN => {
                         e.phase = ExplainPhase::Streaming;
                         e.markdown.push_str(&ev.data);
@@ -218,6 +317,8 @@ pub fn start_explain(this: &SharedRef, ctx: &egui::Context) {
             }
         };
         let result = crate::api::stream_explain(&req, &signal, on_event).await;
+        // 完了した解説はキャッシュされ、履歴の「解説あり」が変わる
+        this.borrow_mut().history_stale = true;
 
         let failed = {
             let mut s = this.borrow_mut();
@@ -285,10 +386,8 @@ pub fn open_paper(this: &SharedRef, ctx: &egui::Context, url: String) {
                 s.selection = None;
                 s.dict = DictStatus::Idle;
                 s.selection_seq += 1;
-                s.explain.abort();
-                s.explain.phase = ExplainPhase::Idle;
-                s.explain.markdown.clear();
-                s.explain.target = None;
+                s.explain.reset();
+                s.history_stale = true;
                 s.paper = PaperStatus::Loaded {
                     id: paper.id,
                     title: paper.title,
@@ -300,4 +399,106 @@ pub fn open_paper(this: &SharedRef, ctx: &egui::Context, url: String) {
         }
         ctx.request_repaint();
     });
+}
+
+/// 表示中の論文の履歴に追加する（論文を開いていなければ何もしない）。
+fn record_history(this: &SharedRef, ctx: &egui::Context, info: &SelectionInfo) {
+    let Some((paper_id, paper_title)) = this.borrow().paper_ref() else {
+        return;
+    };
+    let record = HistoryRecord {
+        paper_id,
+        paper_title,
+        mode: info.mode,
+        // 解説のキャッシュキーと揃えるため、解説で送るのと同じ切り詰めをする
+        context: clip_context(&info.context, &info.text, MAX_CONTEXT_CHARS),
+        text: info.text.clone(),
+    };
+    if record.text.chars().count() > MAX_TEXT_CHARS {
+        return;
+    }
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Err(e) = crate::api::post_history(&record).await {
+            log::warn!("履歴を保存できません: {e}");
+        }
+        this.borrow_mut().history_stale = true;
+        ctx.request_repaint();
+    });
+}
+
+/// 履歴を読み込む。
+pub fn refresh_history(this: &SharedRef, ctx: &egui::Context) {
+    let (seq, paper) = {
+        let mut s = this.borrow_mut();
+        s.history_stale = false;
+        s.history_seq += 1;
+        let paper = match s.history_scope {
+            HistoryScope::ThisPaper => match s.paper_ref() {
+                Some((id, _)) => Some(id),
+                None => {
+                    s.history = HistoryStatus::Loaded(Vec::new());
+                    return;
+                }
+            },
+            HistoryScope::AllPapers => None,
+        };
+        // 読み直しの間も一覧を残す（ちらつかないように）
+        if !matches!(s.history, HistoryStatus::Loaded(_)) {
+            s.history = HistoryStatus::Loading;
+        }
+        (s.history_seq, paper)
+    };
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::fetch_history(paper.as_deref()).await;
+        let mut s = this.borrow_mut();
+        if s.history_seq != seq {
+            return;
+        }
+        s.history = match result {
+            Ok(r) => HistoryStatus::Loaded(r.entries),
+            Err(e) => HistoryStatus::Error(e),
+        };
+        ctx.request_repaint();
+    });
+}
+
+/// 履歴を 1 件削除する。
+pub fn delete_history_entry(this: &SharedRef, ctx: &egui::Context, id: i64) {
+    // 先に一覧から消して、すぐ反映されるようにする
+    if let HistoryStatus::Loaded(entries) = &mut this.borrow_mut().history {
+        entries.retain(|e| e.id != id);
+    }
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Err(e) = crate::api::delete_history(id).await {
+            log::warn!("履歴を削除できません: {e}");
+            this.borrow_mut().history_stale = true;
+        }
+        ctx.request_repaint();
+    });
+}
+
+/// キーボードショートカット（E: 解説, Esc: 選択解除）。
+pub fn on_shortcut(this: &SharedRef, ctx: &egui::Context, shortcut: dom::Shortcut) {
+    match shortcut {
+        dom::Shortcut::Explain => {
+            let ready = {
+                let mut s = this.borrow_mut();
+                let ready = s.selection.is_some() && !s.explain.phase.is_running();
+                if ready {
+                    s.tab = Tab::Explain;
+                }
+                ready
+            };
+            if ready {
+                start_explain(this, ctx, false);
+            }
+        }
+        dom::Shortcut::ClearSelection => clear_selection(this, ctx),
+    }
 }

@@ -1,24 +1,26 @@
 mod arxiv;
+mod cache;
 mod config;
 mod db;
 mod dict;
 mod error;
 mod explain;
+mod history;
 mod paper;
 mod prompts;
 mod sanitize;
+mod static_files;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::extract::State;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use paper_reader_shared::HealthResponse;
 use sqlx::SqlitePool;
 use tower_http::compression::CompressionLayer;
-use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -95,14 +97,18 @@ fn router(state: AppState, config: &Config) -> Router {
         .route("/paper", get(paper::get_paper))
         .route("/dict", get(dict::get_dict))
         .route("/explain", post(explain::post_explain))
+        .route(
+            "/history",
+            get(history::get_history).post(history::post_history),
+        )
+        .route("/history/{id}", delete(history::delete_history))
         .fallback(|| async { AppError::NotFound("API が見つかりません".into()) });
-
-    let index = config.static_dir.join("index.html");
-    let static_files = ServeDir::new(&config.static_dir).fallback(ServeFile::new(index));
 
     Router::new()
         .nest("/api", api)
-        .fallback_service(static_files)
+        .fallback_service(static_files::service(&config.static_dir))
+        .layer(axum::middleware::from_fn(static_files::cache_headers))
+        // SSE（text/event-stream）は圧縮しない（tower-http の既定）。.br / .gz があるファイルはそのまま返す
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -151,10 +157,33 @@ fn model_matches(id: &str, model: &str) -> bool {
     !model.is_empty() && norm(id) == norm(model)
 }
 
+/// Ctrl-C（SIGINT）か、launchd が停止時に送る SIGTERM で終了する。
 async fn shutdown_signal() {
-    if let Err(e) = tokio::signal::ctrl_c().await {
-        tracing::error!(error = %e, "failed to listen for ctrl-c");
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::error!(error = %e, "failed to listen for ctrl-c");
+            std::future::pending::<()>().await;
+        }
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to listen for SIGTERM");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
     }
+    tracing::info!("shutting down");
 }
 
 #[cfg(test)]

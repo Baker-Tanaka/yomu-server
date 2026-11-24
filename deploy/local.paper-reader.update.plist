@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  自動更新の LaunchAgent（10 分ごとに GitHub の main を確認し、新しければビルドして反映する）。
+  __APP_HOME__ / __LOG_DIR__ / __PATH__ は deploy/update.sh --setup が置き換える。
+  ~/Desktop は読めないので、配置先の clone（__APP_HOME__/src）の update.sh を実行する。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.paper-reader.update</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__APP_HOME__/src/deploy/update.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__APP_HOME__/src</string>
+  <key>StartInterval</key>
+  <integer>600</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <!-- ビルドは重いので優先度を下げる -->
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/update.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/update.log</string>
+</dict>
+</plist>

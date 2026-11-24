@@ -234,7 +234,7 @@ GitHub が未設定のとき・送信に失敗したときは、この Mac の S
 
 ## Issue から開発する（scripts/issues.py）
 
-開いている Issue を一覧にし、選んだものを Claude Code（`claude -p`）に実装させて PR にします。マージは人が行います。
+開いている Issue を一覧にし、選んだものを Claude Code（`claude -p`）に実装させて PR にします。マージは人が行います。マージすると、自動更新（「自動更新」を参照）が 10 分以内にサーバーへ反映します。
 
 ```sh
 scripts/issues.py            # 一覧を出し、実施する番号を入力（例: 5 7）
@@ -307,6 +307,23 @@ curl -s http://127.0.0.1:8080/api/health
 - 自動起動ごと外す: `deploy/uninstall.sh`（配置先のデータとログは残ります）。一時的に止めるだけなら `deploy/ctl.sh stop`
 - Ollama を `brew services start ollama` で動かしたい場合は、`deploy/install.sh --no-ollama` を使います（二重起動しないように）
 - 辞書を入れ直すとき: `DATABASE_URL="sqlite://$HOME/Library/Application Support/paper-reader/data/app.db" cargo run -p import-dict --release`
+
+### 自動更新（GitHub の main に入ったら反映する）
+
+```sh
+deploy/update.sh --setup    # 一度だけ。配置先に専用の clone を作り、.env などをコピーして LaunchAgent を入れる
+deploy/update.sh --status   # 反映している版と GitHub の main
+deploy/update.sh --force    # 今の版をビルドし直して反映する
+```
+
+- LaunchAgent（`local.paper-reader.update`）が 10 分ごとに GitHub の `main` を確認し、新しいコミットがあれば
+  `~/Library/Application Support/paper-reader/src` に取り込んでビルド（`deploy/build.sh`）し、`deploy/install.sh --no-build --no-ollama` で入れ替えて再起動します。
+  launchd のジョブは `~/Desktop` を読めないため、開発用の repo とは別の clone を使います
+- `origin/main` が今の版を含むとき（早送りできるとき）だけ取り込みます。手元で反映した未 push のコミットを巻き戻さないためです（ログに「main を push してください」と出ます）
+- ビルドに失敗したら入れ替えず、今の版のまま動き続けます（同じコミットは `--force` まで試し直さない）。反映後に `/api/health` が返らなければ前の版に戻します
+- 電源につながっていないときは自動では更新しません。反映・失敗は macOS の通知で知らせ、反映したコミットの `Closes #N` の Issue に「反映しました」とコメントします
+- `.env` と `data/grammar_map.local.yaml` は git 管理外なので、変えたら `deploy/update.sh --setup` をもう一度実行するか、配置先に直接コピーします
+- ログ: `~/Library/Logs/paper-reader/update.log`（ビルドは `update-build.log`、配置は `update-install.log`）
 
 ### 3. スリープ防止
 

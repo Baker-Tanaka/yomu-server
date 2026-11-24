@@ -5,86 +5,16 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use eframe::egui;
-use paper_reader_shared::{DictEntry, DictResponse, Mode};
+use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+use paper_reader_shared::{DictEntry, Mode};
 
-use crate::dom::{self, SelectionInfo};
-
-/// 論文の読み込み状態。
-#[derive(Debug, Clone, Default)]
-enum PaperStatus {
-    #[default]
-    Empty,
-    Loading,
-    Loaded {
-        id: String,
-        title: String,
-        source_url: String,
-    },
-    Error(String),
-}
-
-/// 辞書の検索状態。
-#[derive(Debug, Clone, Default)]
-enum DictStatus {
-    /// 単語が選択されていない
-    #[default]
-    Idle,
-    Loading,
-    Loaded(DictResponse),
-    Error(String),
-}
-
-/// DOM のイベントや非同期処理と共有する状態。
-#[derive(Default)]
-struct Shared {
-    paper: PaperStatus,
-    selection: Option<SelectionInfo>,
-    dict: DictStatus,
-    /// 選択ごとに増える番号。古い選択に対する応答を捨てるために使う
-    selection_seq: u64,
-}
-
-impl Shared {
-    /// 新しい選択を反映し、単語なら辞書を引き始める。
-    fn on_select(this: &Rc<RefCell<Self>>, ctx: &egui::Context, info: SelectionInfo) {
-        let (seq, word) = {
-            let mut s = this.borrow_mut();
-            s.selection_seq += 1;
-            let word = (info.mode == Mode::Word).then(|| info.text.clone());
-            s.dict = if word.is_some() {
-                DictStatus::Loading
-            } else {
-                DictStatus::Idle
-            };
-            s.selection = Some(info);
-            (s.selection_seq, word)
-        };
-        ctx.request_repaint();
-
-        let Some(word) = word else {
-            return;
-        };
-        let this = this.clone();
-        let ctx = ctx.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = crate::api::fetch_dict(&word).await;
-            let mut s = this.borrow_mut();
-            // 応答待ちの間に別の選択が来ていたら、この結果は捨てる
-            if s.selection_seq != seq {
-                return;
-            }
-            s.dict = match result {
-                Ok(r) => DictStatus::Loaded(r),
-                Err(e) => DictStatus::Error(e),
-            };
-            ctx.request_repaint();
-        });
-    }
-}
+use crate::dom;
+use crate::state::{self, DictStatus, ExplainPhase, HealthStatus, PaperStatus, Shared, SharedRef};
 
 pub struct PaperReaderApp {
-    shared: Rc<RefCell<Shared>>,
+    shared: SharedRef,
     url_input: String,
+    markdown_cache: CommonMarkCache,
 }
 
 impl PaperReaderApp {
@@ -100,50 +30,22 @@ impl PaperReaderApp {
             }
         });
 
-        let shared: Rc<RefCell<Shared>> = Rc::default();
+        let shared: SharedRef = Rc::new(RefCell::new(Shared::default()));
 
         let ctx = cc.egui_ctx.clone();
         let shared_for_dom = shared.clone();
         if let Err(e) = dom::watch_selection(move |info| {
-            Shared::on_select(&shared_for_dom, &ctx, info);
+            state::on_select(&shared_for_dom, &ctx, info);
         }) {
             log::error!("選択の監視を開始できません: {e}");
         }
+        state::refresh_health(&shared, &cc.egui_ctx);
 
         Self {
             shared,
             url_input: String::new(),
+            markdown_cache: CommonMarkCache::default(),
         }
-    }
-
-    fn open_paper(&mut self, ctx: &egui::Context) {
-        let url = self.url_input.trim().to_string();
-        if url.is_empty() {
-            return;
-        }
-        self.shared.borrow_mut().paper = PaperStatus::Loading;
-        let shared = self.shared.clone();
-        let ctx = ctx.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = crate::api::fetch_paper(&url).await;
-            let mut shared = shared.borrow_mut();
-            match result {
-                Ok(paper) => {
-                    dom::set_paper_html(&paper.html, &paper.title);
-                    shared.selection = None;
-                    shared.dict = DictStatus::Idle;
-                    shared.selection_seq += 1;
-                    shared.paper = PaperStatus::Loaded {
-                        id: paper.id,
-                        title: paper.title,
-                        source_url: paper.source_url,
-                    };
-                }
-                // 失敗しても表示中の論文と選択はそのまま残す
-                Err(e) => shared.paper = PaperStatus::Error(e),
-            }
-            ctx.request_repaint();
-        });
     }
 
     fn url_bar(&mut self, ui: &mut egui::Ui) {
@@ -169,8 +71,9 @@ impl PaperReaderApp {
                 submit = true;
             }
         });
-        if submit && !loading {
-            self.open_paper(ui.ctx());
+        let url = self.url_input.trim().to_string();
+        if submit && !loading && !url.is_empty() {
+            state::open_paper(&self.shared, ui.ctx(), url);
         }
 
         match &self.shared.borrow().paper {
@@ -200,19 +103,53 @@ impl PaperReaderApp {
         }
     }
 
-    fn selection_view(&self, ui: &mut egui::Ui) {
-        let shared = self.shared.borrow();
-        let Some(sel) = &shared.selection else {
+    /// LLM の疎通状態（1 行）。
+    fn status_line(&self, ui: &mut egui::Ui) {
+        let mut recheck = false;
+        ui.horizontal_wrapped(|ui| {
+            let ok = egui::Color32::from_rgb(0x2e, 0x9d, 0x4a);
+            let bad = ui.visuals().error_fg_color;
+            match &self.shared.borrow().health {
+                HealthStatus::Checking => {
+                    ui.spinner();
+                    ui.weak("LLM の状態を確認中…");
+                }
+                HealthStatus::Error(e) => {
+                    ui.colored_label(bad, "●");
+                    ui.weak(format!("サーバーに接続できません: {e}"));
+                }
+                HealthStatus::Ok(h) => match (h.llm, h.model_available) {
+                    (Some(true), Some(true)) => {
+                        ui.colored_label(ok, "●");
+                        ui.weak(format!("LLM: {}", h.model));
+                    }
+                    (Some(true), _) => {
+                        ui.colored_label(bad, "●");
+                        ui.weak(format!(
+                            "LLM は起動していますが、モデル「{}」がありません",
+                            h.model
+                        ));
+                    }
+                    _ => {
+                        ui.colored_label(bad, "●");
+                        ui.weak("LLM ランタイムに接続できません（Ollama が起動しているか確認してください）");
+                    }
+                },
+            }
+            if ui.small_button("再確認").clicked() {
+                recheck = true;
+            }
+        });
+        if recheck {
+            state::refresh_health(&self.shared, ui.ctx());
+        }
+    }
+
+    fn selection_view(&mut self, ui: &mut egui::Ui) {
+        let Some(sel) = self.shared.borrow().selection.clone() else {
             ui.weak("左の本文で単語をダブルクリックするか、英文をドラッグして選択してください。");
             return;
         };
-
-        if sel.mode == Mode::Word {
-            dict_view(ui, &shared.dict);
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(4.0);
-        }
 
         ui.horizontal(|ui| {
             ui.heading("選択中のテキスト");
@@ -236,13 +173,86 @@ impl PaperReaderApp {
             ui.label(egui::RichText::new(&sel.text).size(16.0));
         });
 
+        if sel.mode == Mode::Word {
+            ui.add_space(8.0);
+            dict_view(ui, &self.shared.borrow().dict);
+        }
+
+        ui.add_space(8.0);
+        ui.separator();
+        self.explain_view(ui);
+
         ui.add_space(12.0);
-        ui.heading("段落（文脈）");
-        ui.add_space(4.0);
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(&sel.context);
+        egui::CollapsingHeader::new("段落（文脈）")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(&sel.context);
+            });
+    }
+
+    fn explain_view(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let (phase, running) = {
+            let s = self.shared.borrow();
+            (s.explain.phase.clone(), s.explain.phase.is_running())
+        };
+
+        ui.horizontal_wrapped(|ui| {
+            ui.heading("解説");
+            if ui
+                .add_enabled(!running, egui::Button::new("解説する"))
+                .on_hover_text("選択中のテキストを LLM で解説します")
+                .clicked()
+            {
+                state::start_explain(&self.shared, &ctx);
+            }
+            if running && ui.button("停止").clicked() {
+                state::stop_explain(&self.shared);
+            }
+            let mut auto = self.shared.borrow().auto_explain;
+            if ui.checkbox(&mut auto, "選択したら自動で解説").changed() {
+                self.shared.borrow_mut().auto_explain = auto;
+            }
         });
+
+        match &phase {
+            ExplainPhase::Idle => {
+                ui.weak("「解説する」を押すと、和訳や文法の解説を表示します。");
+            }
+            ExplainPhase::Connecting => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.weak("解説を準備中…");
+                });
+            }
+            ExplainPhase::Queued => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.weak("順番待ち中…（ほかの解説を生成しています）");
+                });
+            }
+            ExplainPhase::Streaming | ExplainPhase::Done => {}
+            ExplainPhase::Error(msg) => {
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(ui.visuals().error_fg_color, msg);
+                    if ui.button("再試行").clicked() {
+                        state::start_explain(&self.shared, &ctx);
+                    }
+                });
+            }
+        }
+
+        let markdown = self.shared.borrow().explain.markdown.clone();
+        if !markdown.is_empty() {
+            ui.add_space(4.0);
+            CommonMarkViewer::new().show(ui, &mut self.markdown_cache, &markdown);
+            if phase == ExplainPhase::Streaming {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.weak("生成中…");
+                });
+            }
+        }
     }
 }
 
@@ -250,6 +260,7 @@ impl eframe::App for PaperReaderApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default_margins().show(ui, |ui| {
             self.url_bar(ui);
+            self.status_line(ui);
             ui.separator();
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])

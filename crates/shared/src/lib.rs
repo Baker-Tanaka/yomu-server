@@ -31,6 +31,12 @@ pub struct HealthResponse {
     pub server: bool,
     /// LLM ランタイムに疎通できたか（未確認なら `None`）
     pub llm: Option<bool>,
+    /// 設定されているモデル名（LLM_MODEL）
+    #[serde(default)]
+    pub model: String,
+    /// LLM ランタイムにそのモデルがあるか（疎通できなければ `None`）
+    #[serde(default)]
+    pub model_available: Option<bool>,
 }
 
 /// `GET /api/dict?word=` のクエリ。
@@ -85,6 +91,141 @@ impl Mode {
     }
 }
 
+/// LLM に渡す選択文字列の上限（文字数）
+pub const MAX_TEXT_CHARS: usize = 2_000;
+/// LLM に渡す文脈の上限（文字数）
+pub const MAX_CONTEXT_CHARS: usize = 4_000;
+
+/// `POST /api/explain` の body。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExplainRequest {
+    pub mode: Mode,
+    pub text: String,
+    #[serde(default)]
+    pub context: String,
+    /// true ならキャッシュを使わずに生成し直す（フェーズ4）
+    #[serde(default)]
+    pub regenerate: bool,
+}
+
+/// `/api/explain` の SSE イベント名。
+pub mod sse_event {
+    /// 解説の断片。data は追記する文字列
+    pub const TOKEN: &str = "token";
+    /// 正常終了
+    pub const DONE: &str = "done";
+    /// 失敗。data はエラーメッセージ
+    pub const ERROR: &str = "error";
+    /// 他の解説の生成待ち
+    pub const QUEUED: &str = "queued";
+    /// 生成開始（順番待ちが終わった）
+    pub const STARTED: &str = "started";
+}
+
+/// SSE の 1 イベント。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SseEvent {
+    /// `event:` 行（無ければ "message"）
+    pub event: String,
+    /// `data:` 行を改行でつないだもの
+    pub data: String,
+}
+
+/// 受信したバイト列（文字列化済み）を少しずつ渡すと、完成したイベントを返す SSE パーサー。
+/// `\n`, `\r\n`, `\r` の改行に対応する。コメント行（`:` 始まり）は無視する。
+#[derive(Debug, Default)]
+pub struct SseParser {
+    buf: String,
+    event: Option<String>,
+    data: Vec<String>,
+    /// 直前のチャンクが `\r` で終わったか（次の `\n` を読み飛ばす）
+    pending_cr: bool,
+}
+
+impl SseParser {
+    pub fn push(&mut self, chunk: &str) -> Vec<SseEvent> {
+        let mut chunk = chunk;
+        if self.pending_cr {
+            chunk = chunk.strip_prefix('\n').unwrap_or(chunk);
+            self.pending_cr = false;
+        }
+        self.buf.push_str(chunk);
+
+        let mut out = Vec::new();
+        while let Some(pos) = self.buf.find(['\n', '\r']) {
+            let line: String = self.buf[..pos].to_string();
+            let is_cr = self.buf.as_bytes()[pos] == b'\r';
+            let mut consumed = pos + 1;
+            if is_cr {
+                if self.buf.len() > consumed {
+                    if self.buf.as_bytes()[consumed] == b'\n' {
+                        consumed += 1;
+                    }
+                } else {
+                    self.pending_cr = true;
+                }
+            }
+            self.buf.drain(..consumed);
+            if let Some(ev) = self.line(&line) {
+                out.push(ev);
+            }
+        }
+        out
+    }
+
+    fn line(&mut self, line: &str) -> Option<SseEvent> {
+        if line.is_empty() {
+            if self.data.is_empty() && self.event.is_none() {
+                return None;
+            }
+            let ev = SseEvent {
+                event: self.event.take().unwrap_or_else(|| "message".into()),
+                data: std::mem::take(&mut self.data).join("\n"),
+            };
+            return Some(ev);
+        }
+        if line.starts_with(':') {
+            return None;
+        }
+        let (field, value) = match line.split_once(':') {
+            Some((f, v)) => (f, v.strip_prefix(' ').unwrap_or(v)),
+            None => (line, ""),
+        };
+        match field {
+            "event" => self.event = Some(value.to_string()),
+            "data" => self.data.push(value.to_string()),
+            _ => {}
+        }
+        None
+    }
+}
+
+/// 文脈が `max_chars` を超えるとき、選択文字列の位置を中心に切り詰める（前後に "…" を付ける）。
+pub fn clip_context(context: &str, text: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = context.chars().collect();
+    if chars.len() <= max_chars {
+        return context.to_string();
+    }
+    let budget = max_chars.saturating_sub(2);
+    let center = context
+        .find(text)
+        .map(|byte| context[..byte].chars().count() + text.chars().count() / 2)
+        .unwrap_or(0);
+    let start = center
+        .saturating_sub(budget / 2)
+        .min(chars.len().saturating_sub(budget));
+    let end = (start + budget).min(chars.len());
+    let mut out = String::new();
+    if start > 0 {
+        out.push('…');
+    }
+    out.extend(&chars[start..end]);
+    if end < chars.len() {
+        out.push('…');
+    }
+    out
+}
+
 /// 連続する空白（改行含む）を 1 つの半角スペースにまとめ、前後を削る。
 pub fn normalize_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -108,6 +249,75 @@ mod tests {
         assert_eq!(serde_json::to_string(&Mode::Word).unwrap(), "\"word\"");
         let m: Mode = serde_json::from_str("\"sentence\"").unwrap();
         assert_eq!(m, Mode::Sentence);
+    }
+
+    fn feed(p: &mut SseParser, chunks: &[&str]) -> Vec<SseEvent> {
+        chunks.iter().flat_map(|c| p.push(c)).collect()
+    }
+
+    fn ev(event: &str, data: &str) -> SseEvent {
+        SseEvent {
+            event: event.into(),
+            data: data.into(),
+        }
+    }
+
+    #[test]
+    fn sse_basic_and_split_chunks() {
+        let mut p = SseParser::default();
+        let got = feed(
+            &mut p,
+            &[
+                "event: tok",
+                "en\ndata: こん",
+                "にちは\n",
+                "\nevent: done\ndata:\n\n",
+            ],
+        );
+        assert_eq!(got, vec![ev("token", "こんにちは"), ev("done", "")]);
+    }
+
+    #[test]
+    fn sse_multiline_data_comments_crlf() {
+        let mut p = SseParser::default();
+        let got = feed(
+            &mut p,
+            &[
+                ": keep-alive\r\n\r\n",
+                "data: a\r",
+                "\ndata: b\r\n\r\n",
+                "data:  x\r\r",
+            ],
+        );
+        assert_eq!(got, vec![ev("message", "a\nb"), ev("message", " x")]);
+    }
+
+    #[test]
+    fn sse_incomplete_event_is_held() {
+        let mut p = SseParser::default();
+        assert!(p.push("event: token\ndata: a").is_empty());
+        assert_eq!(p.push("\n\n"), vec![ev("token", "a")]);
+    }
+
+    #[test]
+    fn clip() {
+        assert_eq!(clip_context("short", "s", 10), "short");
+        let ctx = format!("{}TARGET{}", "a".repeat(100), "b".repeat(100));
+        let clipped = clip_context(&ctx, "TARGET", 22);
+        assert_eq!(clipped.chars().count(), 22);
+        assert!(clipped.contains("TARGET"), "{clipped}");
+        assert!(clipped.starts_with('…') && clipped.ends_with('…'));
+        // 見つからなければ先頭から
+        let clipped = clip_context(&"x".repeat(50), "zzz", 10);
+        assert!(clipped.starts_with("xxxx") && clipped.ends_with('…'));
+        assert_eq!(clipped.chars().count(), 9);
+    }
+
+    #[test]
+    fn explain_request_defaults() {
+        let r: ExplainRequest = serde_json::from_str(r#"{"mode":"word","text":"x"}"#).unwrap();
+        assert_eq!(r.context, "");
+        assert!(!r.regenerate);
     }
 
     #[test]

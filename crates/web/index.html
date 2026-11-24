@@ -2,7 +2,15 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- viewport-fit=cover: iPhone のノッチ・ホームインジケーターの下まで描き、余白は CSS の safe-area で取る -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#fffdf9" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#1e1f23" media="(prefers-color-scheme: dark)" />
+  <!-- ホーム画面に追加したとき、ブラウザの枠なしで開く -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="論文リーダー" />
   <title>論文リーダー</title>
   <meta name="color-scheme" content="light dark" />
   <script>
@@ -24,8 +32,8 @@
         <p class="lead">単語は辞書ですぐに、英文は和訳・文構造・文法まで。すべてこの Mac の中で動きます。</p>
         <ol class="steps">
           <li><b>論文を開く</b><span>解説パネルの欄に arXiv の URL・ID、またはキーワードを入れて検索</span></li>
-          <li><b>選ぶ</b><span>単語はダブルクリック、英文はドラッグ（iPhone は長押し）</span></li>
-          <li><b>読み解く</b><span><kbd>E</kbd> で解説、<kbd>Esc</kbd> で選択解除</span></li>
+          <li><b>選ぶ</b><span class="pc-only">単語はダブルクリック、英文はドラッグ</span><span class="mobile-only">単語や英文を長押しして選択（つまみで範囲を調整）</span></li>
+          <li><b>読み解く</b><span class="pc-only"><kbd>E</kbd> で解説、<kbd>Esc</kbd> で選択解除</span><span class="mobile-only">下のパネルの「解説する」。パネルはつまみを上下に動かすかタップで大きさを変えられます</span></li>
         </ol>
       </div>
     </main>

@@ -281,8 +281,135 @@ pub fn watch_shortcuts(on_key: impl Fn(Shortcut) + 'static) -> Result<(), String
     Ok(())
 }
 
-/// ペイン境界（#splitter）のドラッグで論文ペインの大きさを変えられるようにする。
-/// 大きさは CSS 変数 `--paper-size` で指定し、egui の canvas は ResizeObserver で追従する。
+/// スマホ用レイアウトの解説シートの高さ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Sheet {
+    /// 見出しと入力欄だけ（本文を広く読む）
+    Peek,
+    /// 画面の半分
+    Half,
+    /// 上に本文を少し残して全体
+    Full,
+}
+
+impl Sheet {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Peek => "peek",
+            Self::Half => "half",
+            Self::Full => "full",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "peek" => Some(Self::Peek),
+            "half" => Some(Self::Half),
+            "full" => Some(Self::Full),
+            _ => None,
+        }
+    }
+
+    /// シートの高さ（px、ホームインジケーターの余白は含まない）。
+    fn height(self, layout_h: f64) -> f64 {
+        let h = match self {
+            Self::Peek => SHEET_PEEK_PX,
+            Self::Half => layout_h * 0.5,
+            Self::Full => sheet_max(layout_h),
+        };
+        h.clamp(SHEET_PEEK_PX, sheet_max(layout_h))
+    }
+}
+
+/// シートを閉じたときの高さ（解説ペインの見出し + 入力欄が見える）
+const SHEET_PEEK_PX: f64 = 96.0;
+/// シートを全体にしたときに上に残す本文の高さ
+const SHEET_FULL_GAP_PX: f64 = 64.0;
+/// シートのつまみの高さ（paper.css の #splitter と合わせる）
+const SPLITTER_PX: f64 = 26.0;
+
+/// シートの高さの上限（つまみと、上に残す本文の分を引く）。
+fn sheet_max(layout_h: f64) -> f64 {
+    (layout_h - SPLITTER_PX - SHEET_FULL_GAP_PX).max(SHEET_PEEK_PX)
+}
+/// シートの状態を保存する localStorage のキー（PC の幅とは別に保存する）
+const SHEET_STORAGE_KEY: &str = "paper-reader.sheet";
+/// これより動かなければ「タップ」とみなす
+const TAP_SLOP_PX: f64 = 6.0;
+
+thread_local! {
+    static SHEET: Cell<Sheet> = const { Cell::new(Sheet::Half) };
+}
+
+/// スマホ用レイアウト（上下に並ぶ）か。paper.css の @media と同じ条件。
+pub fn is_mobile() -> bool {
+    web_sys::window()
+        .and_then(|w| w.match_media(STACKED_QUERY).ok().flatten())
+        .is_some_and(|m| m.matches())
+}
+
+pub fn sheet() -> Sheet {
+    SHEET.with(Cell::get)
+}
+
+/// シートの高さを変えて保存する（スマホ用レイアウトのときだけ見た目が変わる）。
+pub fn set_sheet(state: Sheet) {
+    SHEET.with(|c| c.set(state));
+    apply_sheet_px(None);
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = storage.set_item(SHEET_STORAGE_KEY, state.as_str());
+    }
+}
+
+/// スマホでシートが `min` より低ければ `min` まで上げる。
+pub fn raise_sheet(min: Sheet) {
+    if is_mobile() && sheet() < min {
+        set_sheet(min);
+    }
+}
+
+/// シートの高さを CSS 変数 `--sheet-h` に入れる。`px` が None なら今の状態の高さ。
+fn apply_sheet_px(px: Option<f64>) {
+    let Some(layout) = document()
+        .and_then(|d| d.get_element_by_id(LAYOUT_ID))
+        .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+    else {
+        return;
+    };
+    let layout_h = f64::from(layout.client_height());
+    if layout_h <= 0.0 {
+        return;
+    }
+    let h = px
+        .unwrap_or_else(|| sheet().height(layout_h))
+        .clamp(SHEET_PEEK_PX, sheet_max(layout_h));
+    let _ = layout
+        .style()
+        .set_property("--sheet-h", &format!("{h:.0}px"));
+    if let Some(body) = document().and_then(|d| d.body()) {
+        let _ = body.set_attribute("data-sheet", sheet().as_str());
+    }
+}
+
+/// 指を離したときの高さに一番近い状態。
+fn nearest_sheet(h: f64, layout_h: f64) -> Sheet {
+    [Sheet::Peek, Sheet::Half, Sheet::Full]
+        .into_iter()
+        .min_by(|a, b| {
+            (a.height(layout_h) - h)
+                .abs()
+                .total_cmp(&(b.height(layout_h) - h).abs())
+        })
+        .unwrap_or(Sheet::Half)
+}
+
+/// ペイン境界（#splitter）のドラッグでペインの大きさを変えられるようにする。
+///
+/// - PC 用（左右に並ぶ）: 論文ペインの幅を CSS 変数 `--paper-size`（%）で指定する
+/// - スマホ用（上下に並ぶ）: 解説ペインを下からのシートにし、高さを `--sheet-h`（px）で指定する。
+///   指を離すと「少し・半分・全体」の近い方にそろい、タップで「少し ⇄ 半分」を切り替える
+///
+/// どちらの大きさも別々に保存する。egui の canvas は ResizeObserver で追従する。
 pub fn init_splitter() -> Result<(), String> {
     let window = web_sys::window().ok_or("window が取得できません")?;
     let doc = window.document().ok_or("document が取得できません")?;
@@ -302,6 +429,14 @@ pub fn init_splitter() -> Result<(), String> {
         .and_then(|v| v.parse::<f64>().ok());
     let current = Rc::new(Cell::new(clamp_split(saved.unwrap_or(SPLIT_DEFAULT))));
     apply_split(&layout, &splitter, current.get());
+    if let Some(state) = storage
+        .as_ref()
+        .and_then(|s| s.get_item(SHEET_STORAGE_KEY).ok().flatten())
+        .and_then(|v| Sheet::parse(&v))
+    {
+        SHEET.with(|c| c.set(state));
+    }
+    apply_sheet_px(None);
 
     let save = {
         let current = current.clone();
@@ -321,29 +456,27 @@ pub fn init_splitter() -> Result<(), String> {
             apply_split(&layout, &splitter, pct);
         }
     };
-    let stacked = {
-        let window = window.clone();
-        move || {
-            window
-                .match_media(STACKED_QUERY)
-                .ok()
-                .flatten()
-                .is_some_and(|m| m.matches())
-        }
-    };
 
-    let dragging = Rc::new(Cell::new(false));
+    // ドラッグ中の状態: 押した位置と、スマホでは押したときのシートの高さ
+    let drag: Rc<Cell<Option<(f64, f64)>>> = Rc::default();
+    let moved = Rc::new(Cell::new(0.0f64));
 
     let on_down = {
-        let dragging = dragging.clone();
+        let drag = drag.clone();
+        let moved = moved.clone();
         let splitter = splitter.clone();
+        let layout = layout.clone();
         let doc = doc.clone();
         Closure::<dyn FnMut(PointerEvent)>::new(move |ev: PointerEvent| {
             if ev.button() != 0 {
                 return;
             }
             ev.prevent_default();
-            dragging.set(true);
+            let sheet_h = f64::from(layout.client_height())
+                - f64::from(splitter.offset_top())
+                - f64::from(splitter.offset_height());
+            drag.set(Some((f64::from(ev.client_y()), sheet_h)));
+            moved.set(0.0);
             // ポインターが canvas や iframe の上に出てもイベントを受け取り続ける
             let _ = splitter.set_pointer_capture(ev.pointer_id());
             if let Some(body) = doc.body() {
@@ -352,43 +485,67 @@ pub fn init_splitter() -> Result<(), String> {
         })
     };
     let on_move = {
-        let dragging = dragging.clone();
+        let drag = drag.clone();
+        let moved = moved.clone();
         let layout = layout.clone();
         let set = set.clone();
-        let stacked = stacked.clone();
         Closure::<dyn FnMut(PointerEvent)>::new(move |ev: PointerEvent| {
-            if !dragging.get() {
+            let Some((start_y, start_h)) = drag.get() else {
                 return;
-            }
-            let rect = layout.get_bounding_client_rect();
-            let pct = if stacked() {
-                (f64::from(ev.client_y()) - rect.top()) / rect.height() * 100.0
-            } else {
-                (f64::from(ev.client_x()) - rect.left()) / rect.width() * 100.0
             };
-            if pct.is_finite() {
-                set(pct);
+            let y = f64::from(ev.client_y());
+            moved.set(moved.get().max((y - start_y).abs()));
+            if is_mobile() {
+                if moved.get() >= TAP_SLOP_PX {
+                    apply_sheet_px(Some(start_h - (y - start_y)));
+                }
+            } else {
+                let rect = layout.get_bounding_client_rect();
+                let pct = (f64::from(ev.client_x()) - rect.left()) / rect.width() * 100.0;
+                if pct.is_finite() {
+                    set(pct);
+                }
             }
         })
     };
     let on_up = {
-        let dragging = dragging.clone();
+        let drag = drag.clone();
+        let moved = moved.clone();
         let save = save.clone();
+        let layout = layout.clone();
         let doc = doc.clone();
-        Closure::<dyn FnMut(PointerEvent)>::new(move |_ev: PointerEvent| {
-            if !dragging.replace(false) {
+        Closure::<dyn FnMut(PointerEvent)>::new(move |ev: PointerEvent| {
+            let Some((start_y, start_h)) = drag.take() else {
                 return;
-            }
+            };
             if let Some(body) = doc.body() {
                 let _ = body.class_list().remove_1("resizing");
             }
-            save();
+            if !is_mobile() {
+                save();
+                return;
+            }
+            if moved.get() < TAP_SLOP_PX {
+                // タップ: 少し ⇄ 半分
+                set_sheet(if sheet() == Sheet::Peek {
+                    Sheet::Half
+                } else {
+                    Sheet::Peek
+                });
+                return;
+            }
+            let layout_h = f64::from(layout.client_height());
+            let h = start_h - (f64::from(ev.client_y()) - start_y);
+            set_sheet(nearest_sheet(h, layout_h));
         })
     };
     let on_dblclick = {
         let set = set.clone();
         let save = save.clone();
         Closure::<dyn FnMut()>::new(move || {
+            if is_mobile() {
+                return;
+            }
             set(SPLIT_DEFAULT);
             save();
         })
@@ -397,7 +554,20 @@ pub fn init_splitter() -> Result<(), String> {
     let on_key = {
         let current = current.clone();
         Closure::<dyn FnMut(KeyboardEvent)>::new(move |ev: KeyboardEvent| {
-            let delta = match ev.key().as_str() {
+            let key = ev.key();
+            if is_mobile() {
+                let next = match (key.as_str(), sheet()) {
+                    ("ArrowUp", Sheet::Peek) => Sheet::Half,
+                    ("ArrowUp", _) => Sheet::Full,
+                    ("ArrowDown", Sheet::Full) => Sheet::Half,
+                    ("ArrowDown", _) => Sheet::Peek,
+                    _ => return,
+                };
+                ev.prevent_default();
+                set_sheet(next);
+                return;
+            }
+            let delta = match key.as_str() {
                 "ArrowLeft" | "ArrowUp" => -2.0,
                 "ArrowRight" | "ArrowDown" => 2.0,
                 _ => return,
@@ -408,6 +578,12 @@ pub fn init_splitter() -> Result<(), String> {
             save();
         })
     };
+    // 画面の回転や PC 用 ⇄ スマホ用の切り替えで、シートの高さを測り直す
+    let on_resize = Closure::<dyn FnMut()>::new(move || apply_sheet_px(None));
+    window
+        .add_event_listener_with_callback("resize", on_resize.as_ref().unchecked_ref())
+        .map_err(|_| "resize を購読できません")?;
+    on_resize.forget();
 
     for (name, cb) in [
         ("pointerdown", on_down.as_ref()),

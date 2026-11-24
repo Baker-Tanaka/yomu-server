@@ -103,6 +103,41 @@ pub fn install(ctx: &egui::Context) {
     }
 }
 
+/// PC 用とスマホ用で、文字の大きさと押せる範囲を切り替える。
+/// スマホでは指で押しやすいよう、ボタンを高く・間隔を広く・文字を少し大きくする。
+pub fn set_mobile(ctx: &egui::Context, mobile: bool) {
+    ctx.all_styles_mut(|style| {
+        let sp = &mut style.spacing;
+        if mobile {
+            sp.item_spacing = Vec2::new(8.0, 9.0);
+            sp.button_padding = Vec2::new(12.0, 7.0);
+            sp.interact_size.y = 36.0;
+            sp.icon_width = 20.0;
+            sp.icon_width_inner = 12.0;
+        } else {
+            sp.item_spacing = Vec2::new(8.0, 7.0);
+            sp.button_padding = Vec2::new(10.0, 4.0);
+            sp.interact_size.y = 26.0;
+            sp.icon_width = 14.0;
+            sp.icon_width_inner = 8.0;
+        }
+        for (text_style, font) in style.text_styles.iter_mut() {
+            font.size = match (text_style, mobile) {
+                (TextStyle::Heading, false) => 19.0,
+                (TextStyle::Heading, true) => 20.0,
+                (TextStyle::Small, false) => 11.5,
+                (TextStyle::Small, true) => 12.5,
+                (TextStyle::Button, false) => 14.0,
+                (TextStyle::Button, true) => 15.5,
+                (TextStyle::Monospace, false) => 13.5,
+                (TextStyle::Monospace, true) => 14.0,
+                (_, false) => 15.0,
+                (_, true) => 16.0,
+            };
+        }
+    });
+}
+
 fn visuals(theme: Theme, p: &Palette) -> egui::Visuals {
     let mut v = match theme {
         Theme::Dark => egui::Visuals::dark(),

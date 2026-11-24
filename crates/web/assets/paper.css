@@ -28,6 +28,7 @@
   --fatal-border: #f5c2bd;
   --figure-bg: transparent;
   --hl-bg: #dfe3ff;
+  --pane-bg: #f4f2ee;
 }
 
 /* ダーク。egui の既定のダーク（背景 #1b1b1b 前後）となじむ色にする */
@@ -58,6 +59,7 @@
     --fatal-border: #7a3a35;
     --figure-bg: #fff;
     --hl-bg: #3a3f7a;
+    --pane-bg: #1a1b1f;
   }
 }
 :root[data-theme="dark"] {
@@ -86,6 +88,7 @@
   --fatal-border: #7a3a35;
   --figure-bg: #fff;
   --hl-bg: #3a3f7a;
+  --pane-bg: #1a1b1f;
 }
 
 html, body {
@@ -127,6 +130,7 @@ html, body {
   flex: 1 1 0;
   min-width: 0;
   position: relative;
+  background: var(--pane-bg);
 }
 
 /* ペインの境界。見た目は 1px の線で、つかめる範囲は左右に広げる */
@@ -417,24 +421,101 @@ body.resizing #paper, body.resizing #explain-pane {
   margin-bottom: 1em;
 }
 
-/* 狭い画面（iPhone など）では上下に並べる */
+/* ───────── スマホ用（幅 800px 以下: iPhone など） ─────────
+   本文を画面いっぱいに出し、解説ペインは下から出るシートにする。
+   シートの高さは dom.rs が --sheet-h（px）で指定し、つまみをドラッグ・タップすると
+   「少し・半分・全体」に切り替わる。ホームインジケーターやノッチの分は safe-area で避ける。 */
 @media (max-width: 800px) {
+  html, body {
+    overscroll-behavior: none;
+  }
+  body {
+    /* ダブルタップでの拡大を止める（ピンチでの拡大はできる） */
+    touch-action: manipulation;
+  }
   #layout { flex-direction: column; }
   #paper {
-    flex: 0 0 var(--paper-size, 60%);
+    flex: 1 1 auto;
     min-height: 0;
-    padding: 1rem 1rem 4rem;
-    font-size: 16px;
+    padding: calc(env(safe-area-inset-top) + 14px)
+      calc(env(safe-area-inset-right) + 18px)
+      28px
+      calc(env(safe-area-inset-left) + 18px);
+    font-size: 17px;
+    line-height: 1.72;
+    -webkit-overflow-scrolling: touch;
   }
+  #paper > * { max-width: none; }
+
+  /* シートのつまみ（上辺の角を丸め、中央に持ち手を出す） */
   #splitter {
-    flex: 0 0 13px;
-    margin: -6px 0;
-    cursor: row-resize;
-    background: linear-gradient(to bottom, transparent 6px, var(--rule) 6px, var(--rule) 7px, transparent 7px);
+    flex: 0 0 26px;
+    margin: 0;
+    position: relative;
+    cursor: grab;
+    background: var(--pane-bg);
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -6px 18px var(--shadow);
+    z-index: 6;
+  }
+  #splitter::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 9px;
+    width: 40px;
+    height: 5px;
+    margin-left: -20px;
+    border-radius: 3px;
+    background: var(--scroll);
   }
   #splitter:hover, #splitter:focus-visible, body.resizing #splitter {
-    background: linear-gradient(to bottom, transparent 5px, var(--accent) 5px, var(--accent) 8px, transparent 8px);
+    background: var(--pane-bg);
   }
-  body.resizing { cursor: row-resize; }
-  #explain-pane { flex: 1 1 0; min-height: 0; }
+  #splitter:focus-visible::after, body.resizing #splitter::after {
+    background: var(--accent);
+  }
+  body.resizing { cursor: grabbing; }
+
+  #explain-pane {
+    flex: 0 0 calc(var(--sheet-h, 50vh) + env(safe-area-inset-bottom));
+    min-height: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    box-sizing: border-box;
+  }
+  /* 指を離したら決まった高さまでなめらかに動かす（ドラッグ中は指に追従） */
+  body:not(.resizing) #explain-pane {
+    transition: flex-basis 0.22s ease-out;
+  }
+
+  /* 本文: 横に長い表・数式は横スクロールにする */
+  #paper table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    font-size: 0.85em;
+  }
+  #paper figure { margin: 1.2em 0; }
+  #paper math[display="block"], #paper .ltx_equation, #paper .ltx_equationgroup {
+    font-size: 0.95em;
+  }
+  #paper .ltx_title_document { font-size: 1.6em; margin-top: 0.3em; }
+  #paper h2 { font-size: 1.25em; }
+  #paper h3 { font-size: 1.08em; }
+  #paper .ltx_authors { font-size: 0.82em; }
+  #paper .ltx_abstract { padding: 0.9em 1.05em 0.2em; margin: 1.2em 0 1.6em; }
+  /* 脚注の吹き出しは画面幅に収める */
+  #paper .ltx_note:hover .ltx_note_outer { width: 80vw; max-width: 80vw; left: -10vw; }
+
+  /* はじめの画面 */
+  .paper-placeholder { margin-top: 4vh !important; }
+  #paper .paper-placeholder h1 { font-size: 1.85em; }
+  .paper-placeholder .lead { font-size: 0.98em; margin-bottom: 1.2em; }
+  .paper-placeholder .steps li { padding: 0.7em 0.85em; }
+  .paper-placeholder .steps span { font-size: 0.88em; }
+  .paper-placeholder .pc-only { display: none; }
+}
+@media (min-width: 801px) {
+  .paper-placeholder .mobile-only { display: none; }
+}
 }

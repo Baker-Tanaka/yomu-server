@@ -306,6 +306,8 @@ pub fn on_select(this: &SharedRef, ctx: &egui::Context, info: SelectionInfo) {
         s.tab = Tab::Explain;
         s.auto_explain
     };
+    // スマホでは解説シートを半分まで上げて結果を見せる
+    dom::raise_sheet(dom::Sheet::Half);
     apply_selection(this, ctx, info, auto);
 }
 
@@ -375,6 +377,8 @@ fn apply_selection(this: &SharedRef, ctx: &egui::Context, info: SelectionInfo, e
 /// 現在の選択の解説を始める（進行中のものがあれば中止してから）。
 /// `regenerate` が true ならキャッシュを使わずに生成し直す。
 pub fn start_explain(this: &SharedRef, ctx: &egui::Context, regenerate: bool) {
+    // スマホでは解説を読みやすいようシートを全体まで上げる
+    dom::raise_sheet(dom::Sheet::Full);
     let (req, seq, signal) = {
         let mut s = this.borrow_mut();
         let Some(sel) = s.selection.clone() else {
@@ -545,6 +549,7 @@ pub fn submit_input(this: &SharedRef, ctx: &egui::Context, input: &str) {
 
 /// 論文を検索する（1 ページ目から）。
 pub fn search(this: &SharedRef, ctx: &egui::Context, query: String, sort: SearchSort) {
+    dom::raise_sheet(dom::Sheet::Full);
     let seq = {
         let mut s = this.borrow_mut();
         s.tab = Tab::Search;
@@ -632,6 +637,10 @@ pub fn open_paper(this: &SharedRef, ctx: &egui::Context, url: String) {
                 s.explain.reset();
                 s.history_stale = true;
                 s.tab = Tab::Explain;
+                // スマホでは本文を広く見せる
+                if dom::is_mobile() {
+                    dom::set_sheet(dom::Sheet::Peek);
+                }
                 s.paper = PaperStatus::Loaded {
                     id: paper.id,
                     title: paper.title,
@@ -794,6 +803,7 @@ pub fn refresh_grammar(this: &SharedRef, ctx: &egui::Context) {
 
 /// フィードバックの画面を開く（書きかけの内容は残す）。
 pub fn open_feedback(this: &SharedRef, ctx: &egui::Context) {
+    dom::raise_sheet(dom::Sheet::Full);
     {
         let mut s = this.borrow_mut();
         let f = &mut s.feedback;

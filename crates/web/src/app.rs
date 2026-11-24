@@ -30,6 +30,8 @@ pub struct PaperReaderApp {
     feedback_resize_frames: u8,
     /// 前の描画で測ったフィードバックの画面の中身の高さ
     feedback_content_h: f32,
+    /// スマホ用レイアウトか（画面幅で決まる。変わったら文字の大きさなどを切り替える）
+    mobile: Option<bool>,
 }
 
 impl PaperReaderApp {
@@ -71,22 +73,30 @@ impl PaperReaderApp {
             feedback_layout: 0,
             feedback_resize_frames: 0,
             feedback_content_h: 300.0,
+            mobile: None,
         }
     }
 
     // ───────────── ヘッダー ─────────────
 
+    fn is_mobile(&self) -> bool {
+        self.mobile.unwrap_or(false)
+    }
+
     fn header(&mut self, ui: &mut egui::Ui) {
         let p = theme::palette(ui.ctx());
+        let mobile = self.is_mobile();
         ui.horizontal(|ui| {
             logo(ui, &p);
             ui.label(
                 RichText::new("論文リーダー")
-                    .size(17.0)
+                    .size(if mobile { 16.0 } else { 17.0 })
                     .strong()
                     .color(p.strong),
             );
-            ui.label(RichText::new("for arXiv").size(11.5).color(p.weak));
+            if !mobile {
+                ui.label(RichText::new("for arXiv").size(11.5).color(p.weak));
+            }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (label, next, tip) = match self.theme {
@@ -104,6 +114,12 @@ impl PaperReaderApp {
                         "クリックで自動（OS の設定）に",
                     ),
                 };
+                // スマホでは記号だけにして幅を節約する
+                let label = if mobile {
+                    label.split(' ').next().unwrap_or(label)
+                } else {
+                    label
+                };
                 if theme::subtle_button(ui, label).on_hover_text(tip).clicked() {
                     self.theme = next;
                     dom::apply_theme(next);
@@ -111,7 +127,14 @@ impl PaperReaderApp {
                 }
                 self.settings_menu(ui);
                 if ui
-                    .add(egui::Button::new(RichText::new("💬").size(14.0)).frame(false))
+                    .add(
+                        egui::Button::new(RichText::new("💬").size(if mobile {
+                            17.0
+                        } else {
+                            14.0
+                        }))
+                        .frame(false),
+                    )
                     .on_hover_text("不具合・要望を送る（GitHub の Issue になります）")
                     .clicked()
                 {
@@ -187,6 +210,12 @@ impl PaperReaderApp {
                         .into(),
                 ),
             },
+        };
+        // スマホでは短く「LLM」だけ（詳しくは押すと再確認、色で状態が分かる）
+        let text = if self.is_mobile() {
+            "LLM".to_string()
+        } else {
+            text
         };
         // 丸 + 文言の角丸ラベルを、内容の大きさぴったりに描く
         let galley = ui
@@ -267,6 +296,11 @@ impl PaperReaderApp {
                 title,
                 source_url,
             } => {
+                // スマホでは出さない（題名は本文の先頭にあり、シートの高さを節約する）
+                if self.is_mobile() {
+                    let _ = (&id, &title, &source_url);
+                    return;
+                }
                 ui.add_space(8.0);
                 theme::card(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -327,11 +361,16 @@ impl PaperReaderApp {
             (s.selection.clone(), s.paper_ref().is_some())
         };
         let Some(sel) = sel else {
-            empty_explain(ui, &p, has_paper);
+            empty_explain(ui, &p, has_paper, self.is_mobile());
             return;
         };
 
-        // 選択中のテキスト
+        // 選択中のテキスト（スマホでは、ここにも「解説する」を出してすぐ押せるようにする）
+        let mobile = self.is_mobile();
+        let can_explain = mobile && {
+            let s = self.shared.borrow();
+            s.explain.phase == ExplainPhase::Idle
+        };
         theme::card(ui, |ui| {
             ui.horizontal(|ui| {
                 match sel.mode {
@@ -339,6 +378,13 @@ impl PaperReaderApp {
                     Mode::Sentence => theme::chip(ui, "英文", p.sentence, p.sentence_soft),
                 };
                 ui.label(RichText::new("選択中").size(12.0).color(p.weak));
+                if can_explain {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if theme::primary_button(ui, "解説する", true).clicked() {
+                            state::start_explain(&self.shared, ui.ctx(), false);
+                        }
+                    });
+                }
             });
             ui.add_space(2.0);
             match sel.mode {
@@ -408,9 +454,17 @@ impl PaperReaderApp {
                         {
                             state::start_explain(&self.shared, &ctx, true);
                         }
-                    } else if theme::primary_button(ui, "解説する  E", true)
-                        .on_hover_text("和訳・文構造・文法を解説します（E キー）")
-                        .clicked()
+                    } else if theme::primary_button(
+                        ui,
+                        if self.mobile == Some(true) {
+                            "解説する"
+                        } else {
+                            "解説する  E"
+                        },
+                        true,
+                    )
+                    .on_hover_text("和訳・文構造・文法を解説します（E キー）")
+                    .clicked()
                     {
                         state::start_explain(&self.shared, &ctx, false);
                     }
@@ -636,32 +690,44 @@ impl PaperReaderApp {
             return;
         }
 
-        ui.horizontal(|ui| {
-            let count = if search.loading && search.items.is_empty() {
-                "検索中…".to_string()
-            } else {
-                format!("約 {} 件", group_digits(search.total))
-            };
-            ui.label(
-                RichText::new(format!("「{}」", search.query))
-                    .strong()
-                    .color(p.strong),
-            );
-            ui.label(RichText::new(count).size(12.5).color(p.weak));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let mut sort = search.sort;
-                if theme::segmented(
-                    ui,
-                    &mut sort,
-                    &[
-                        (SearchSort::Newest, "新着"),
-                        (SearchSort::Relevance, "関連度"),
-                    ],
-                ) {
-                    state::search(&self.shared, &ctx, search.query.clone(), sort);
-                }
+        let count = if search.loading && search.items.is_empty() {
+            "検索中…".to_string()
+        } else {
+            format!("約 {} 件", group_digits(search.total))
+        };
+        let mut sort = search.sort;
+        let sort_options = [
+            (SearchSort::Newest, "新着"),
+            (SearchSort::Relevance, "関連度"),
+        ];
+        let mut sort_changed = false;
+        if self.is_mobile() {
+            // スマホでは検索語と件数を 1 行目、並び順を 2 行目に分ける（横に並べると重なる）
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(format!("「{}」", search.query))
+                        .strong()
+                        .color(p.strong),
+                );
+                ui.label(RichText::new(&count).size(12.5).color(p.weak));
             });
-        });
+            sort_changed = theme::segmented(ui, &mut sort, &sort_options);
+        } else {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!("「{}」", search.query))
+                        .strong()
+                        .color(p.strong),
+                );
+                ui.label(RichText::new(&count).size(12.5).color(p.weak));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    sort_changed = theme::segmented(ui, &mut sort, &sort_options);
+                });
+            });
+        }
+        if sort_changed {
+            state::search(&self.shared, &ctx, search.query.clone(), sort);
+        }
         ui.add_space(6.0);
 
         if let Some(e) = &search.error {
@@ -822,6 +888,16 @@ impl eframe::App for PaperReaderApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // 解説ペインにフォーカスがあるときのショートカット（論文ペイン側は dom::watch_shortcuts）
         let ctx = ui.ctx().clone();
+        // PC 用 ⇄ スマホ用（画面幅で決まる）が変わったら、文字の大きさや押せる範囲を切り替える
+        let mobile = dom::is_mobile();
+        if self.mobile != Some(mobile) {
+            self.mobile = Some(mobile);
+            theme::set_mobile(&ctx, mobile);
+        }
+        // スマホで文字を入力するときは、キーボードに隠れないようシートを全体まで上げる
+        if mobile && ctx.egui_wants_keyboard_input() {
+            dom::raise_sheet(dom::Sheet::Full);
+        }
         let feedback_open = self.shared.borrow().feedback.open;
         if !feedback_open && !ctx.egui_wants_keyboard_input() {
             let (explain, clear) = ctx.input(|i| {
@@ -839,19 +915,25 @@ impl eframe::App for PaperReaderApp {
 
         let p = theme::palette(&ctx);
         egui::CentralPanel::default_margins()
-            .frame(
-                egui::Frame::new()
-                    .fill(p.bg)
-                    .inner_margin(Margin::symmetric(16, 14)),
-            )
+            .frame(egui::Frame::new().fill(p.bg).inner_margin(if mobile {
+                // つまみの下から始まるので上は詰める
+                Margin {
+                    left: 14,
+                    right: 14,
+                    top: 2,
+                    bottom: 8,
+                }
+            } else {
+                Margin::symmetric(16, 14)
+            }))
             .show(ui, |ui| {
                 self.header(ui);
-                ui.add_space(12.0);
+                ui.add_space(if mobile { 8.0 } else { 12.0 });
                 self.input_bar(ui);
                 self.paper_card(ui);
-                ui.add_space(12.0);
+                ui.add_space(if mobile { 10.0 } else { 12.0 });
                 self.tabs(ui);
-                ui.add_space(10.0);
+                ui.add_space(if mobile { 8.0 } else { 10.0 });
                 let tab = self.shared.borrow().tab;
                 egui::ScrollArea::vertical()
                     .id_salt(tab_salt(tab))
@@ -878,10 +960,13 @@ impl PaperReaderApp {
     fn feedback_modal(&mut self, ctx: &egui::Context) {
         let p = theme::palette(ctx);
         // 枠の内側の幅（左右の余白 18 + 画面端からの 16 を引く）
-        let width = (ctx.content_rect().width() - 32.0 - 36.0).clamp(240.0, 520.0);
+        let mobile = self.is_mobile();
+        let edge = if mobile { 8.0 } else { 16.0 };
+        let width = (ctx.content_rect().width() - edge * 2.0 - 36.0).clamp(200.0, 520.0);
         let id = egui::Id::unique("feedback_modal");
         // 中央に置くと下半分しか使えず切れるので、上寄せにする
-        let max_h = (ctx.content_rect().height() - 24.0 - 36.0 - 24.0).max(200.0);
+        let top = if mobile { 8.0 } else { 24.0 };
+        let max_h = (ctx.content_rect().height() - top * 2.0 - 36.0).max(160.0);
         // Area は前の描画の大きさを中身の上限にするので、段階などが変わったら測り直す
         let layout = {
             use std::hash::{Hash, Hasher};
@@ -907,7 +992,7 @@ impl PaperReaderApp {
             ctx.request_repaint();
         }
         let area = egui::Modal::default_area(id)
-            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 24.0))
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, top))
             .default_size(egui::vec2(width + 36.0, max_h + 36.0))
             .sizing_pass(resize);
         // Modal の背景の暗幕は Area の範囲でしか塗られないので、画面全体を下の層で暗くする
@@ -1346,7 +1431,7 @@ fn notice(ui: &mut egui::Ui, p: &Palette, text: &str) {
 }
 
 /// 選択前の案内。
-fn empty_explain(ui: &mut egui::Ui, p: &Palette, has_paper: bool) {
+fn empty_explain(ui: &mut egui::Ui, p: &Palette, has_paper: bool, mobile: bool) {
     theme::card(ui, |ui| {
         ui.add_space(4.0);
         if has_paper {
@@ -1371,22 +1456,36 @@ fn empty_explain(ui: &mut egui::Ui, p: &Palette, has_paper: bool) {
             );
         }
         ui.add_space(8.0);
-        for (key, text) in [
-            ("ダブルクリック", "単語 → 辞書の訳と AI の解説"),
-            ("ドラッグ", "英文 → 和訳・文構造・文法"),
-            ("E", "選択中のテキストを解説"),
-            ("Esc", "選択を解除"),
-        ] {
-            ui.horizontal(|ui| {
+        let steps: &[(&str, &str)] = if mobile {
+            &[
+                ("長押し", "単語 → 辞書の訳と AI の解説"),
+                ("つまみで範囲を広げる", "英文 → 和訳・文構造・文法"),
+                ("解説する", "このパネルのボタンで解説"),
+                ("つまみ", "上下に動かすかタップで、パネルの大きさを変える"),
+            ]
+        } else {
+            &[
+                ("ダブルクリック", "単語 → 辞書の訳と AI の解説"),
+                ("ドラッグ", "英文 → 和訳・文構造・文法"),
+                ("E", "選択中のテキストを解説"),
+                ("Esc", "選択を解除"),
+            ]
+        };
+        for (key, text) in steps {
+            ui.horizontal_wrapped(|ui| {
                 theme::chip(ui, key, p.accent, p.accent_soft);
-                ui.label(RichText::new(text).size(13.5).color(p.text));
+                ui.label(RichText::new(*text).size(13.5).color(p.text));
             });
         }
         ui.add_space(4.0);
         ui.label(
-            RichText::new("iPhone などでは長押しで選択できます。")
-                .size(12.5)
-                .color(p.weak),
+            RichText::new(if mobile {
+                "パネルは下の 3 段階（少し・半分・全体）で止まります。"
+            } else {
+                "iPhone などでは長押しで選択できます。"
+            })
+            .size(12.5)
+            .color(p.weak),
         );
     });
 }

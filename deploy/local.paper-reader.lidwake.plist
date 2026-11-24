@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  蓋を閉じてもスリープしない設定（pmset disablesleep）を、電源接続中だけ有効にする（任意）。
+  deploy/lid.sh auto が /Library/LaunchDaemons に root 所有で入れる（root で動くため、
+  処理はこの plist の中に直接書き、利用者が書き換えられるファイルは実行しない）。
+  15 秒ごとに電源を確かめ、AC 電源なら disablesleep 1、バッテリーなら 0 にする。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.paper-reader.lidwake</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>if /usr/bin/pmset -g ps | /usr/bin/head -n 1 | /usr/bin/grep -q "'AC Power'"; then want=1; else want=0; fi; cur=$(/usr/bin/pmset -g | /usr/bin/awk '/SleepDisabled/{print $2}'); if [ "${cur:-0}" != "$want" ]; then /usr/bin/pmset -a disablesleep "$want"; fi</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>15</integer>
+</dict>
+</plist>

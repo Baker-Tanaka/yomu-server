@@ -45,6 +45,10 @@ GET  /api/paper?url=<arxiv URL> … 論文を取得し、無害化した本文 H
 GET  /api/dict?word=<word>      … ローカル辞書で引いた結果を返す（見出し語、訳のリスト）
 POST /api/explain               … body: { mode: "word" | "sentence", text, context }
                                    レスポンスは text/event-stream（SSE 形式）で解説を逐次送る
+                                   イベント: queued / started / tags（mode=sentence のみ、解説の前に文法タグ）/ token / done / error
+                                   （キャッシュのヒット時は cached → tags → token → done）
+GET  /api/grammar-map           … 文法タグ一覧・カテゴリ・レッスン対応・履歴での出現回数
+POST /api/admin/reload-grammar  … 文法タグとレッスン対応を読み直す（127.0.0.1 から直接の要求のみ。転送ヘッダー付きは拒否）
 GET  /api/health                … サーバーと LLM ランタイムの疎通確認
 
 # 設定（環境変数, .env 可）
@@ -54,6 +58,9 @@ LLM_MODEL=<モデル名>
 DATABASE_URL=sqlite://data/app.db
 STATIC_DIR=crates/web/dist
 ALLOWED_HOSTS=arxiv.org,www.arxiv.org
+GRAMMAR_TAGS_PATH=data/grammar_tags.yaml                # 文法タグのマスター（リポジトリで管理）
+GRAMMAR_MAP_PATH=data/grammar_map.local.yaml            # 講座のレッスン対応（ユーザーが記入。git 管理外）
+GRAMMAR_MAP_TEMPLATE_PATH=data/grammar_map.template.yaml # local が無いときに読むテンプレート
 
 # 守るべきルール
 - セキュリティ
@@ -72,3 +79,8 @@ ALLOWED_HOSTS=arxiv.org,www.arxiv.org
   - server の純粋なロジック（URL 検証、HTML 無害化、辞書の語形処理、キャッシュキー生成）には単体テストを書く
   - web クレートは wasm 専用。clippy は `cargo clippy -p paper-reader-web --target wasm32-unknown-unknown -- -D warnings` でも確認する
 - UI の文言は日本語
+- 講座コンテンツの扱い（スタディサプリENGLISH TOEIC対策コース「パーフェクト講義 英文法編」）
+  - 講座の解説文・動画の内容・テキストは、リポジトリにも LLM のプロンプトにも一切入れない
+  - 扱ってよいのは「カテゴリ名」と「ユーザーが自分で書き写したレッスンのタイトル」だけ。レッスンのタイトルも LLM には渡さない
+  - 解説の中身は LLM が一般的な英文法の知識で書く。講座は「復習先の案内」としてだけ表示する
+  - 文法用語は日本の学校文法の呼び方に揃える（第5文型、分詞構文、関係副詞、仮定法過去完了 など）

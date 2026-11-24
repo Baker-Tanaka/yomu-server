@@ -86,6 +86,11 @@ mv "$app_home/dist.new" "$app_home/dist"
 if [ -f .env ]; then
   cp .env "$app_home/.env"
 fi
+# 文法タグのマスターとレッスン対応（local は記入してあればコピーする。サーバーは配置先の data/ を読む）
+cp data/grammar_tags.yaml data/grammar_map.template.yaml "$app_home/data/"
+if [ -f data/grammar_map.local.yaml ]; then
+  cp data/grammar_map.local.yaml "$app_home/data/"
+fi
 # 初回だけ、開発用のデータベース（辞書・キャッシュ・履歴）を引き継ぐ
 if [ ! -f "$app_home/data/app.db" ] && [ -f data/app.db ]; then
   sqlite3 data/app.db ".backup '$app_home/data/app.db'"

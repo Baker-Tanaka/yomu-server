@@ -5,9 +5,9 @@ use std::rc::Rc;
 
 use eframe::egui;
 use paper_reader_shared::{
-    DictResponse, ExplainRequest, HealthResponse, HistoryEntry, HistoryRecord, MAX_CONTEXT_CHARS,
-    MAX_TEXT_CHARS, Mode, SEARCH_PAGE_SIZE, SearchItem, SearchSort, clip_context,
-    paper_url_from_input, sse_event,
+    DictResponse, ExplainRequest, ExplainTag, GrammarMapResponse, HealthResponse, HistoryEntry,
+    HistoryRecord, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, SEARCH_PAGE_SIZE, SearchItem,
+    SearchSort, clip_context, paper_url_from_input, sse_event,
 };
 use web_sys::AbortController;
 
@@ -69,6 +69,14 @@ pub struct Explain {
     pub target: Option<(Mode, String)>,
     /// サーバーのキャッシュから返された解説か
     pub from_cache: bool,
+    /// 英文で検出した文法項目（tags イベント）
+    pub tags: Vec<ExplainTag>,
+    /// tags イベントを受け取ったか（英文のとき、受け取るまでは「判定中」）
+    pub tags_received: bool,
+    /// クリックで詳しく表示している文法項目
+    pub selected_tag: Option<usize>,
+    /// 選んだ文法項目を本文で見つけてハイライトできたか
+    pub highlight_found: bool,
     /// 解説ごとに増える番号。中止した解説から遅れて届いたイベントを捨てる
     seq: u64,
     controller: Option<AbortController>,
@@ -90,8 +98,38 @@ impl Explain {
         self.markdown.clear();
         self.target = None;
         self.from_cache = false;
+        self.clear_tags();
+    }
+
+    fn clear_tags(&mut self) {
+        self.tags.clear();
+        self.tags_received = false;
+        self.selected_tag = None;
+        self.highlight_found = false;
+        dom::clear_highlight();
     }
 }
+
+/// 文法項目タブのデータの状態。
+#[derive(Debug, Clone, Default)]
+pub enum GrammarStatus {
+    #[default]
+    NotLoaded,
+    Loading,
+    Loaded(GrammarMapResponse),
+    Error(String),
+}
+
+/// 文法項目タブの並び順。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GrammarOrder {
+    #[default]
+    Category,
+    Frequency,
+}
+
+/// 「講座の案内を表示する」設定の localStorage のキー
+const SHOW_COURSE_KEY: &str = "paper-reader.show-course";
 
 /// 履歴の読み込み状態。
 #[derive(Debug, Clone, Default)]
@@ -110,6 +148,7 @@ pub enum Tab {
     Explain,
     Search,
     History,
+    Grammar,
 }
 
 /// 論文検索の状態。
@@ -170,9 +209,36 @@ pub struct Shared {
     pub history_stale: bool,
     /// 履歴の読み込みごとに増える番号（古い応答を捨てる）
     history_seq: u64,
+    pub grammar: GrammarStatus,
+    pub grammar_order: GrammarOrder,
+    /// 出現回数などが変わったので、次に文法項目タブを表示するときに読み直す
+    pub grammar_stale: bool,
+    /// 設定: 講座（パーフェクト英文法）の案内を表示する
+    pub show_course: bool,
 }
 
 impl Shared {
+    pub fn new() -> Self {
+        Self {
+            show_course: dom::load_bool(SHOW_COURSE_KEY, true),
+            grammar_stale: true,
+            ..Self::default()
+        }
+    }
+
+    pub fn set_show_course(&mut self, on: bool) {
+        self.show_course = on;
+        dom::save_bool(SHOW_COURSE_KEY, on);
+    }
+
+    /// 講座の短い名前（文法データを読み込む前は既定の名前）。
+    pub fn course_short(&self) -> String {
+        match &self.grammar {
+            GrammarStatus::Loaded(g) if !g.course_short.is_empty() => g.course_short.clone(),
+            _ => "パーフェクト英文法".into(),
+        }
+    }
+
     /// 表示中の論文の (ID, タイトル)。
     pub fn paper_ref(&self) -> Option<(String, String)> {
         match &self.paper {
@@ -185,7 +251,7 @@ impl Shared {
 /// 本文での新しい選択を反映する。単語なら辞書を引いて履歴に残し、自動解説が有効なら解説も始める。
 pub fn on_select(this: &SharedRef, ctx: &egui::Context, info: SelectionInfo) {
     if info.mode == Mode::Word {
-        record_history(this, ctx, &info);
+        record_history(this, ctx, &info, Vec::new());
     }
     let auto = {
         let mut s = this.borrow_mut();
@@ -269,6 +335,7 @@ pub fn start_explain(this: &SharedRef, ctx: &egui::Context, regenerate: bool) {
         s.explain.abort();
         s.explain.markdown.clear();
         s.explain.from_cache = false;
+        s.explain.clear_tags();
         s.explain.target = Some((sel.mode, sel.text.clone()));
 
         if sel.text.chars().count() > MAX_TEXT_CHARS {
@@ -296,15 +363,12 @@ pub fn start_explain(this: &SharedRef, ctx: &egui::Context, regenerate: bool) {
         (req, s.explain.seq, signal)
     };
     ctx.request_repaint();
-    record_history(
-        this,
-        ctx,
-        &SelectionInfo {
-            text: req.text.clone(),
-            context: req.context.clone(),
-            mode: req.mode,
-        },
-    );
+    let req_info = SelectionInfo {
+        text: req.text.clone(),
+        context: req.context.clone(),
+        mode: req.mode,
+    };
+    record_history(this, ctx, &req_info, Vec::new());
 
     let this = this.clone();
     let ctx = ctx.clone();
@@ -313,6 +377,27 @@ pub fn start_explain(this: &SharedRef, ctx: &egui::Context, regenerate: bool) {
             let this = this.clone();
             let ctx = ctx.clone();
             move |ev: paper_reader_shared::SseEvent| {
+                if ev.event == sse_event::TAGS {
+                    let tags: Vec<ExplainTag> = serde_json::from_str(&ev.data).unwrap_or_default();
+                    let ids: Vec<String> = tags.iter().map(|t| t.tag_id.clone()).collect();
+                    {
+                        let mut s = this.borrow_mut();
+                        if s.explain.seq != seq {
+                            return;
+                        }
+                        let e = &mut s.explain;
+                        e.tags = tags;
+                        e.tags_received = true;
+                        e.selected_tag = None;
+                        s.grammar_stale = true;
+                    }
+                    // 履歴に文法項目を残す（出現回数の集計に使う）
+                    if !ids.is_empty() {
+                        record_history(&this, &ctx, &req_info, ids);
+                    }
+                    ctx.request_repaint();
+                    return;
+                }
                 let mut s = this.borrow_mut();
                 if s.explain.seq != seq {
                     return;
@@ -513,7 +598,8 @@ pub fn open_paper(this: &SharedRef, ctx: &egui::Context, url: String) {
 }
 
 /// 表示中の論文の履歴に追加する（論文を開いていなければ何もしない）。
-fn record_history(this: &SharedRef, ctx: &egui::Context, info: &SelectionInfo) {
+/// `tags` は英文で検出した文法タグの id（空なら既存の値を残す）。
+fn record_history(this: &SharedRef, ctx: &egui::Context, info: &SelectionInfo, tags: Vec<String>) {
     let Some((paper_id, paper_title)) = this.borrow().paper_ref() else {
         return;
     };
@@ -524,6 +610,7 @@ fn record_history(this: &SharedRef, ctx: &egui::Context, info: &SelectionInfo) {
         // 解説のキャッシュキーと揃えるため、解説で送るのと同じ切り詰めをする
         context: clip_context(&info.context, &info.text, MAX_CONTEXT_CHARS),
         text: info.text.clone(),
+        tags,
     };
     if record.text.chars().count() > MAX_TEXT_CHARS {
         return;
@@ -612,4 +699,47 @@ pub fn on_shortcut(this: &SharedRef, ctx: &egui::Context, shortcut: dom::Shortcu
         }
         dom::Shortcut::ClearSelection => clear_selection(this, ctx),
     }
+}
+
+/// 文法項目のチップをクリックしたとき。もう一度押すと閉じる。
+pub fn select_tag(this: &SharedRef, index: usize) {
+    let mut s = this.borrow_mut();
+    let anchor = s
+        .selection
+        .as_ref()
+        .map(|sel| sel.text.clone())
+        .unwrap_or_default();
+    let e = &mut s.explain;
+    if e.selected_tag == Some(index) {
+        e.selected_tag = None;
+        e.highlight_found = false;
+        dom::clear_highlight();
+        return;
+    }
+    let Some(tag) = e.tags.get(index) else {
+        return;
+    };
+    e.highlight_found = dom::highlight_span(&tag.span, &anchor);
+    e.selected_tag = Some(index);
+}
+
+/// 文法項目の一覧（タグ・レッスン・出現回数）を読み込む。
+pub fn refresh_grammar(this: &SharedRef, ctx: &egui::Context) {
+    {
+        let mut s = this.borrow_mut();
+        s.grammar_stale = false;
+        if !matches!(s.grammar, GrammarStatus::Loaded(_)) {
+            s.grammar = GrammarStatus::Loading;
+        }
+    }
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::fetch_grammar_map().await;
+        this.borrow_mut().grammar = match result {
+            Ok(g) => GrammarStatus::Loaded(g),
+            Err(e) => GrammarStatus::Error(e),
+        };
+        ctx.request_repaint();
+    });
 }

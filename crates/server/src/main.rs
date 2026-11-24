@@ -5,14 +5,19 @@ mod db;
 mod dict;
 mod error;
 mod explain;
+mod grammar;
+mod grammar_api;
 mod history;
 mod paper;
 mod prompts;
 mod sanitize;
 mod search;
 mod static_files;
+mod tagger;
 
-use std::sync::Arc;
+use std::net::SocketAddr;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -43,6 +48,27 @@ pub struct AppState {
     /// arXiv API（検索）用（宛先は export.arxiv.org に固定）
     pub search_http: reqwest::Client,
     pub searcher: search::SharedSearcher,
+    /// 文法タグとレッスン対応（/api/admin/reload-grammar で差し替える）
+    grammar: Arc<RwLock<Arc<grammar::GrammarData>>>,
+    /// LLM ランタイムが response_format: json_schema を使えるか
+    pub structured_output: Arc<AtomicBool>,
+}
+
+impl AppState {
+    pub fn grammar(&self) -> Arc<grammar::GrammarData> {
+        match self.grammar.read() {
+            Ok(g) => g.clone(),
+            // 書き込み中に panic したことは無いはずだが、その場合も読めるものを使う
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    pub fn set_grammar(&self, g: Arc<grammar::GrammarData>) {
+        match self.grammar.write() {
+            Ok(mut cur) => *cur = g,
+            Err(poisoned) => *poisoned.into_inner() = g,
+        }
+    }
 }
 
 #[tokio::main]
@@ -61,6 +87,16 @@ async fn main() -> Result<()> {
         ?config,
         prompt_version = prompts::PROMPT_VERSION,
         "starting"
+    );
+
+    // 文法タグとレッスン対応を読み込んで検証する（不正なら起動しない）
+    let grammar_data = grammar::GrammarData::load(&config.grammar_paths())
+        .context("文法タグ・レッスン対応の読み込みに失敗しました")?;
+    tracing::info!(
+        tags = grammar_data.tags.len(),
+        lessons = grammar_data.lessons.len(),
+        source = grammar_data.source.as_str(),
+        "grammar loaded"
     );
 
     let db = db::connect(&config.database_url).await?;
@@ -85,6 +121,8 @@ async fn main() -> Result<()> {
         llm_gate: Arc::new(tokio::sync::Semaphore::new(1)),
         search_http,
         searcher: Arc::default(),
+        grammar: Arc::new(RwLock::new(Arc::new(grammar_data))),
+        structured_output: Arc::new(AtomicBool::new(true)),
     };
 
     let app = router(state, &config);
@@ -92,9 +130,13 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("{} に bind できません", config.bind_addr))?;
     tracing::info!("listening on http://{}", config.bind_addr);
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    // /api/admin/* で接続元を確認するため、接続情報を付ける
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 
@@ -110,6 +152,8 @@ fn router(state: AppState, config: &Config) -> Router {
             get(history::get_history).post(history::post_history),
         )
         .route("/history/{id}", delete(history::delete_history))
+        .route("/grammar-map", get(grammar_api::get_grammar_map))
+        .route("/admin/reload-grammar", post(grammar_api::post_reload))
         .fallback(|| async { AppError::NotFound("API が見つかりません".into()) });
 
     Router::new()

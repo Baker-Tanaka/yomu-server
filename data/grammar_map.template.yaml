@@ -1,0 +1,91 @@
+# 講座のレッスンと文法タグの対応（テンプレート。リポジトリで管理）
+#
+# 使い方:
+#   cp data/grammar_map.template.yaml data/grammar_map.local.yaml
+#   を作り、grammar_map.local.yaml に自分が受講しているレッスンを書き写す（local は git 管理外）。
+#   local が無いあいだはこのテンプレートを読み、レッスンは空としてカテゴリ単位の案内だけを出す。
+#
+# 書き写してよいのは「レッスンのタイトル」だけ。講座の解説文・動画・テキストの内容は書かない
+# （このファイルの内容は LLM のプロンプトにも入らない）。
+#
+# 各レッスン:
+#   id:       レッスンの ID（英数字・ハイフン。自由に付けてよい、重複不可）
+#   category: 下の category と同じ値
+#   title:    レッスンのタイトル（自分で書き写す）
+#   tags:     data/grammar_tags.yaml の id の配列
+#
+# 「講座の範囲内・外」の判定:
+#   - レッスンが 1 つも書かれていないカテゴリのタグは「カテゴリ単位の案内」を出す
+#   - レッスンが書かれたカテゴリで、どのレッスンからも参照されていないタグは「講座の範囲外」
+#   - 「論文構文」カテゴリのタグは常に範囲外
+
+course: スタディサプリENGLISH TOEIC対策コース「パーフェクト講義 英文法編」
+course_short: パーフェクト英文法
+
+categories:
+  - category: 時制
+    lessons: []
+    # 記入例:
+    # lessons:
+    #   - id: tense-01
+    #     category: 時制
+    #     title: "（ここにレッスンのタイトルを書き写す）"
+    #     tags: [present-perfect, past-perfect]
+  - category: 仮定法
+    lessons: []
+    # 記入例:
+    # lessons:
+    #   - id: subjunctive-01
+    #     category: 仮定法
+    #     title: "（レッスンのタイトル）"
+    #     tags: [subjunctive-past, subjunctive-past-perfect]
+  - category: 助動詞
+    lessons: []
+    # 記入例: tags: [modal-inference, modal-have-pp]
+  - category: 不定詞
+    lessons: []
+    # 記入例: tags: [infinitive-noun, infinitive-adjective, infinitive-adverb]
+  - category: 動名詞
+    lessons: []
+    # 記入例: tags: [gerund-subject-object, gerund-vs-infinitive]
+  - category: 分詞
+    lessons: []
+    # 記入例: tags: [participial-construction, perfect-participle]
+  - category: 受動態
+    lessons: []
+    # 記入例: tags: [passive, passive-progressive-perfect]
+  - category: 関係詞
+    lessons: []
+    # 記入例:
+    # lessons:
+    #   - id: relative-03
+    #     category: 関係詞
+    #     title: "（レッスンのタイトル）"
+    #     tags: [relative-pronoun, preposition-relative]
+  - category: 比較
+    lessons: []
+    # 記入例: tags: [comparison-as, comparative, superlative, comparison-idioms]
+  - category: 冠詞・名詞
+    lessons: []
+    # 記入例: tags: [definite-article]
+  - category: 名詞
+    lessons: []
+    # 記入例: tags: [countable-uncountable]
+  - category: 代名詞
+    lessons: []
+    # 記入例: tags: [it-formal, one-another-other, reflexive, those-who]
+  - category: 形容詞
+    lessons: []
+    # 記入例: tags: [adjective-usage]
+  - category: 副詞・語法
+    lessons: []
+    # 記入例: tags: [sentence-adverb, frequency-degree-adverb]
+  - category: 前置詞
+    lessons: []
+    # 記入例: tags: [preposition-meaning, group-preposition]
+  - category: 接続詞
+    lessons: []
+    # 記入例: tags: [coordinating-conjunction, subordinating-conjunction, noun-clause-that-whether]
+  - category: 文型・語法
+    lessons: []
+    # 記入例: tags: [sentence-pattern-1-3, sentence-pattern-4, sentence-pattern-5, causative-perception]

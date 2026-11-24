@@ -27,6 +27,7 @@
   --fatal-fg: #8a1c1c;
   --fatal-border: #f5c2bd;
   --figure-bg: transparent;
+  --hl-bg: #dfe3ff;
 }
 
 /* ダーク。egui の既定のダーク（背景 #1b1b1b 前後）となじむ色にする */
@@ -56,6 +57,7 @@
     --fatal-fg: #ffb4ab;
     --fatal-border: #7a3a35;
     --figure-bg: #fff;
+    --hl-bg: #3a3f7a;
   }
 }
 :root[data-theme="dark"] {
@@ -83,6 +85,7 @@
   --fatal-fg: #ffb4ab;
   --fatal-border: #7a3a35;
   --figure-bg: #fff;
+  --hl-bg: #3a3f7a;
 }
 
 html, body {
@@ -214,6 +217,20 @@ body.resizing #paper, body.resizing #explain-pane {
 #paper p { margin: 0 0 1em; }
 #paper a { color: var(--link); text-decoration: none; }
 #paper a:hover { text-decoration: underline; text-underline-offset: 0.15em; }
+
+/* 文法項目のハイライト（解説ペインのチップをクリックしたとき） */
+#paper mark.grammar-hl {
+  background: var(--hl-bg);
+  color: inherit;
+  border-bottom: 2px solid var(--accent);
+  border-radius: 3px;
+  padding: 0 1px;
+  animation: grammar-hl-in 0.6s ease-out;
+}
+@keyframes grammar-hl-in {
+  from { box-shadow: 0 0 0 6px var(--hl-bg); }
+  to { box-shadow: 0 0 0 0 transparent; }
+}
 
 #paper ::selection { background: var(--selection-bg); color: var(--selection-fg); }
 

@@ -1,0 +1,360 @@
+# 文法タグのマスター（リポジトリで管理）。
+#
+# - id: 英小文字・数字・ハイフン。grammar_map の lessons.tags から参照する
+# - name: 日本語名（日本の学校文法の呼び方に揃える）
+# - category: 講座の 17 分類のいずれか、または「論文構文」
+#     時制 / 仮定法 / 助動詞 / 不定詞 / 動名詞 / 分詞 / 受動態 / 関係詞 / 比較 / 冠詞・名詞 / 名詞 / 代名詞 /
+#     形容詞 / 副詞・語法 / 前置詞 / 接続詞 / 文型・語法 / 論文構文
+# - aliases: 別名（タグ付けの手がかり）
+# - hint: LLM 向けの 1 行説明（一般的な英文法の知識で自作したもの。講座の内容は書かない）
+# - implies: このタグが付いたら一緒に付けるタグ（より一般的な項目。省略可）
+#
+# このファイルを変えると、文の解説キャッシュのキーが変わる（作り直される）。
+
+tags:
+  # ── 時制 ──
+  - id: present-perfect
+    name: 現在完了
+    category: 時制
+    aliases: [have p.p., 継続・経験・完了・結果]
+    hint: "have/has + 過去分詞。過去の出来事が現在とつながっている（継続・経験・完了・結果）ことを表す。"
+  - id: past-perfect
+    name: 過去完了
+    category: 時制
+    aliases: [had p.p., 大過去]
+    hint: "had + 過去分詞。過去のある時点より前の出来事や、その時点までの継続を表す。"
+  - id: future-perfect
+    name: 未来完了
+    category: 時制
+    aliases: [will have p.p.]
+    hint: "will have + 過去分詞。未来のある時点までに完了・継続していることを表す。"
+  - id: progressive
+    name: 進行形
+    category: 時制
+    aliases: [be doing, 現在進行形, 過去進行形]
+    hint: "be + 現在分詞。ある時点で動作が進行中であること、一時的な状態を表す。"
+  - id: time-condition-clause
+    name: 時・条件の副詞節
+    category: 時制
+    aliases: [when/if 節の現在形, 未来のことを現在形で]
+    hint: "when, if, once, until などが導く副詞節では、未来のことでも現在形（現在完了形）を使う。"
+
+  # ── 仮定法 ──
+  - id: subjunctive-past
+    name: 仮定法過去
+    category: 仮定法
+    aliases: [If S 過去形, S would do]
+    hint: "If + S + 過去形, S + would/could + 原形。現在の事実に反する仮定を表す。"
+  - id: subjunctive-past-perfect
+    name: 仮定法過去完了
+    category: 仮定法
+    aliases: [If S had p.p., would have p.p.]
+    hint: "If + S + had 過去分詞, S + would have 過去分詞。過去の事実に反する仮定を表す。"
+  - id: if-omission-inversion
+    name: if の省略と倒置
+    category: 仮定法
+    aliases: [Had S p.p., Were S to, Should S]
+    hint: "仮定法の if を省略すると、Were/Had/Should が主語の前に出る（例: Had we known, ...）。"
+  - id: subjunctive-idioms
+    name: 仮定法を含む慣用表現
+    category: 仮定法
+    aliases: [I wish, as if, it is time, without, but for]
+    hint: "I wish / as if / It is time / without・but for など、仮定法を使う決まった言い方。"
+
+  # ── 助動詞 ──
+  - id: modal-inference
+    name: 推量の助動詞
+    category: 助動詞
+    aliases: [may, might, could, must, should, can't]
+    hint: "may・might・could・must・should・can't などで、確信の度合いを伴う推量を表す。論文では主張を和らげる（ヘッジ）用法が多い。"
+  - id: modal-have-pp
+    name: 助動詞+have p.p.
+    category: 助動詞
+    aliases: [must have p.p., may have p.p., should have p.p.]
+    hint: "助動詞 + have + 過去分詞。過去の事柄についての推量や、実現しなかったことへの後悔・非難を表す。"
+
+  # ── 不定詞 ──
+  - id: infinitive-noun
+    name: 不定詞の名詞的用法
+    category: 不定詞
+    aliases: [to do（〜すること）]
+    hint: "to + 原形が「〜すること」として主語・目的語・補語になる。"
+  - id: infinitive-adjective
+    name: 不定詞の形容詞的用法
+    category: 不定詞
+    aliases: [to do（〜するための・〜すべき）]
+    hint: "to + 原形が直前の名詞を後ろから修飾する（a way to solve ...）。"
+  - id: infinitive-adverb
+    name: 不定詞の副詞的用法
+    category: 不定詞
+    aliases: [目的, 結果, 原因, in order to]
+    hint: "to + 原形が動詞や文を修飾し、目的（〜するために）・結果・原因・判断の根拠などを表す。"
+  - id: infinitive-subject
+    name: 不定詞の意味上の主語
+    category: 不定詞
+    aliases: [for A to do, of A to do]
+    hint: "for + A + to do の形で、不定詞の動作をする人・物を示す。"
+  - id: bare-infinitive
+    name: 原形不定詞
+    category: 不定詞
+    aliases: [help O do, make O do]
+    hint: "to の付かない動詞の原形。使役動詞・知覚動詞・help の後などで使う。"
+
+  # ── 動名詞 ──
+  - id: gerund-subject-object
+    name: 動名詞の主語・目的語用法
+    category: 動名詞
+    aliases: [doing（〜すること）, 前置詞+動名詞]
+    hint: "動詞の -ing 形が名詞として主語・目的語・前置詞の目的語になる（by using ..., Training the model is ...）。"
+  - id: gerund-vs-infinitive
+    name: 動名詞と不定詞の使い分け
+    category: 動名詞
+    aliases: [enjoy doing, decide to do, stop doing / stop to do]
+    hint: "目的語に動名詞をとる動詞と不定詞をとる動詞の区別、どちらもとるが意味が変わる動詞。"
+
+  # ── 分詞 ──
+  - id: present-participle-postmodifier
+    name: 現在分詞の後置修飾
+    category: 分詞
+    aliases: [名詞 + doing]
+    hint: "名詞 + 現在分詞（+ 語句）で「〜している名詞」と後ろから修飾する（models using attention）。"
+  - id: past-participle-postmodifier
+    name: 過去分詞の後置修飾
+    category: 分詞
+    aliases: [名詞 + p.p.]
+    hint: "名詞 + 過去分詞（+ 語句）で「〜された名詞」と後ろから修飾する（the method proposed in [3]）。"
+  - id: participial-construction
+    name: 分詞構文
+    category: 分詞
+    aliases: [doing ..., S V, 付帯状況]
+    hint: "分詞で始まる句が副詞として働き、時・理由・付帯状況・結果などを表す（..., achieving state-of-the-art results）。"
+  - id: perfect-participle
+    name: 完了形の分詞構文
+    category: 分詞
+    aliases: [having p.p., 完了分詞]
+    hint: "Having + 過去分詞 で始まる分詞構文。主節より前に起きたことを表す（Having trained the model, ...）。"
+    implies: [participial-construction]
+  - id: absolute-participial
+    name: 独立分詞構文
+    category: 分詞
+    aliases: [with O doing, 意味上の主語つきの分詞構文]
+    hint: "分詞の前に主節と異なる意味上の主語が置かれた分詞構文（all things considered, with X increasing ...）。"
+    implies: [participial-construction]
+
+  # ── 受動態 ──
+  - id: passive
+    name: 受動態
+    category: 受動態
+    aliases: [be p.p.]
+    hint: "be + 過去分詞。動作を受ける側を主語にする。論文では手順や結果の記述で多用される。"
+  - id: passive-progressive-perfect
+    name: 受動態の進行形・完了形
+    category: 受動態
+    aliases: [be being p.p., have been p.p.]
+    hint: "be being + 過去分詞（進行形）、have been + 過去分詞（完了形）の受動態。"
+    implies: [passive]
+
+  # ── 関係詞 ──
+  - id: relative-pronoun
+    name: 関係代名詞（主格・目的格）
+    category: 関係詞
+    aliases: [who, which, that, 目的格の省略, 接触節]
+    hint: "who/which/that が先行詞を修飾する節を導く。目的格の関係代名詞は省略されることが多い（the method we propose = the method that we propose）。"
+  - id: relative-whose
+    name: 関係代名詞 whose
+    category: 関係詞
+    aliases: [所有格の関係代名詞]
+    hint: "whose + 名詞 で、先行詞の所有するものについて説明する節を導く。"
+  - id: relative-what
+    name: 関係代名詞 what
+    category: 関係詞
+    aliases: [what（〜すること・もの）]
+    hint: "what は先行詞を含み「〜すること・もの」という名詞節を作る。"
+  - id: relative-adverb
+    name: 関係副詞
+    category: 関係詞
+    aliases: [where, when, why, how]
+    hint: "where/when/why/how が場所・時・理由・方法の先行詞を修飾する節を導く。"
+  - id: non-restrictive
+    name: 関係詞の非制限用法
+    category: 関係詞
+    aliases: ["カンマ + which", "カンマ + who", 継続用法]
+    hint: "カンマの後の関係詞節で、先行詞（や前の文全体）に補足説明を加える。"
+  - id: preposition-relative
+    name: 前置詞+関係代名詞
+    category: 関係詞
+    aliases: [in which, by which, of which]
+    hint: "in which / by which など、前置詞が関係代名詞の前に出た形。"
+
+  # ── 比較 ──
+  - id: comparison-as
+    name: 原級比較
+    category: 比較
+    aliases: [as ... as, not as ... as, 倍数表現]
+    hint: "as + 原級 + as で同程度を表す。twice as ... as などの倍数表現も含む。"
+  - id: comparative
+    name: 比較級
+    category: 比較
+    aliases: [-er than, more ... than]
+    hint: "比較級 + than で二者を比べる。much / significantly などで差の大きさを強める。"
+  - id: superlative
+    name: 最上級
+    category: 比較
+    aliases: [the -est, the most]
+    hint: "the + 最上級で三者以上の中で最も〜であることを表す。"
+  - id: comparison-idioms
+    name: 比較の慣用表現
+    category: 比較
+    aliases: [the 比較級, the 比較級, no more than, rather than]
+    hint: "the + 比較級 ..., the + 比較級 ...（〜すればするほど…）や no more than などの決まった比較表現。"
+
+  # ── 冠詞・名詞 / 名詞 ──
+  - id: definite-article
+    name: 定冠詞の用法
+    category: 冠詞・名詞
+    aliases: [the]
+    hint: "the は文脈で特定できるもの、唯一のもの、後ろの修飾語で限定されるものに付く。"
+  - id: countable-uncountable
+    name: 可算・不可算
+    category: 名詞
+    aliases: [数えられる名詞, 数えられない名詞]
+    hint: "数えられる名詞と数えられない名詞の区別。data, information, research などの扱い。"
+
+  # ── 代名詞 ──
+  - id: it-formal
+    name: it の用法（形式主語・形式目的語）
+    category: 代名詞
+    aliases: [It is ... to do, It is ... that, make it possible to]
+    hint: "It が後ろの不定詞・that 節を受ける形式主語、または make it ... to do の形式目的語。"
+  - id: one-another-other
+    name: one / another / the other
+    category: 代名詞
+    aliases: [the others, others]
+    hint: "one（不特定の 1 つ）、another（別の 1 つ）、the other（残りの 1 つ）、the others / others の区別。"
+  - id: reflexive
+    name: 再帰代名詞
+    category: 代名詞
+    aliases: [itself, themselves]
+    hint: "-self / -selves。主語自身を目的語にするときや、強調に使う。"
+  - id: those-who
+    name: those who / that of
+    category: 代名詞
+    aliases: [those of, that of]
+    hint: "those who（〜する人々）、比較で名詞の繰り返しを避ける that of / those of。"
+
+  # ── 形容詞 ──
+  - id: adjective-usage
+    name: 形容詞の叙述用法・限定用法
+    category: 形容詞
+    aliases: [補語の形容詞, 名詞を修飾する形容詞]
+    hint: "名詞を直接修飾する限定用法と、補語になる叙述用法。用法によって意味が変わる形容詞もある。"
+
+  # ── 副詞・語法 ──
+  - id: sentence-adverb
+    name: 文修飾副詞
+    category: 副詞・語法
+    aliases: [Interestingly, Notably, Surprisingly]
+    hint: "文頭などに置かれ、文全体に対する話し手の判断を表す副詞（Notably, ...）。"
+  - id: frequency-degree-adverb
+    name: 頻度・程度の副詞
+    category: 副詞・語法
+    aliases: [often, rarely, largely, slightly]
+    hint: "頻度（often, rarely）や程度（largely, slightly, significantly）を表す副詞とその位置。"
+
+  # ── 前置詞 ──
+  - id: preposition-meaning
+    name: 前置詞の意味（時・場所・手段）
+    category: 前置詞
+    aliases: [by, with, via, in, on]
+    hint: "前置詞が表す時・場所・手段・対象などの意味の使い分け。"
+  - id: group-preposition
+    name: 群前置詞
+    category: 前置詞
+    aliases: [due to, in terms of, in addition to, according to]
+    hint: "due to, in terms of, compared with など、2 語以上で 1 つの前置詞として働く表現。"
+
+  # ── 接続詞 ──
+  - id: coordinating-conjunction
+    name: 等位接続詞
+    category: 接続詞
+    aliases: [and, but, or, both A and B, not only A but also B]
+    hint: "and, but, or などで文法的に対等なものをつなぐ。both A and B などの相関表現も含む。"
+  - id: subordinating-conjunction
+    name: 従属接続詞
+    category: 接続詞
+    aliases: [because, although, while, whereas, since]
+    hint: "because, although, while, whereas などが理由・譲歩・対比などの副詞節を導く。"
+  - id: noun-clause-that-whether
+    name: 名詞節の that / whether
+    category: 接続詞
+    aliases: [that 節, whether 節, if 節（〜かどうか）]
+    hint: "that（〜ということ）、whether / if（〜かどうか）が名詞節を導き、主語・目的語・補語になる（suggests that ...）。"
+
+  # ── 文型・語法 ──
+  - id: sentence-pattern-1-3
+    name: 第1〜第3文型
+    category: 文型・語法
+    aliases: [SV, SVC, SVO]
+    hint: "SV / SVC / SVO の基本の文型。動詞が自動詞か他動詞か、補語をとるかに注目する。"
+  - id: sentence-pattern-4
+    name: 第4文型
+    category: 文型・語法
+    aliases: [SVOO, give O O]
+    hint: "SVOO。動詞の後に「人」と「物」の 2 つの目的語が並ぶ。"
+  - id: sentence-pattern-5
+    name: 第5文型
+    category: 文型・語法
+    aliases: [SVOC, make O C, find O C]
+    hint: "SVOC。目的語の後に、目的語の状態を説明する補語が続く（makes the model robust）。"
+  - id: causative-perception
+    name: 使役動詞・知覚動詞
+    category: 文型・語法
+    aliases: [make O do, let O do, allow O to do, enable O to do]
+    hint: "make / let / have + O + 原形、allow / enable + O + to do、see / hear + O + do/doing の形。"
+
+  # ── 論文構文（講座の範囲外になりやすい、論文に多い構文） ──
+  - id: appositive-that
+    name: 同格の that
+    category: 論文構文
+    aliases: [the fact that, the idea that, the assumption that]
+    hint: "the fact / idea / assumption / evidence など抽象名詞 + that 節で、that 節がその名詞の内容を説明する（the fact that X → X という事実）。関係代名詞と違い that 節は欠けのない完全な文。"
+  - id: inanimate-subject
+    name: 無生物主語
+    category: 論文構文
+    aliases: [物が主語, This result shows]
+    hint: "物や事柄が主語になり、人が主語の日本語に訳し直すと自然になる構文（This finding suggests ... → この結果から〜と分かる）。"
+  - id: nominalization
+    name: 名詞構文
+    category: 論文構文
+    aliases: [名詞化, the application of A to B]
+    hint: "動詞・形容詞から派生した名詞（improvement, application, ability など）+ of などで動作を表す構文。名詞を動詞に戻して訳すと分かりやすい（the improvement of X → X を改善すること）。the fact that ... は名詞構文ではなく同格の that。"
+  - id: cleft
+    name: 強調構文
+    category: 論文構文
+    aliases: [It is ... that, It is ... which]
+    hint: "It is A that ... で A を強調する。It と that を除いても文が成り立つ点で形式主語と区別する。"
+  - id: inversion
+    name: 倒置
+    category: 論文構文
+    aliases: [Not only does, Only then, So ... that]
+    hint: "否定語・only・補語などが文頭に出て、主語と（助）動詞の語順が入れ替わる構文。"
+  - id: parenthetical
+    name: 挿入
+    category: 論文構文
+    aliases: [カンマやダッシュで挟んだ語句, however, in turn]
+    hint: "カンマ・ダッシュ・括弧で挟まれた語句が文の途中に入り、主語と動詞などを離している構文。"
+  - id: ellipsis
+    name: 省略
+    category: 論文構文
+    aliases: [共通語句の省略, while training, if necessary]
+    hint: "前に出た語句や「主語 + be 動詞」が省略された形（while (it is) training, if (it is) necessary）。"
+  - id: long-subject
+    name: 長い主語（主部の特定）
+    category: 論文構文
+    aliases: [主部が長い, 主語と動詞の距離]
+    hint: "修飾語句が付いて主語が長くなり、どこまでが主部で動詞はどれかを見極める必要がある文。"
+  - id: parallelism
+    name: 並列構造の特定
+    category: 論文構文
+    aliases: [A, B, and C, both A and B]
+    hint: "and / or / カンマでつながれた要素のうち、何と何が並列なのかを見極める必要がある文。"

@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
+use crate::grammar::GrammarPaths;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind_addr: SocketAddr,
@@ -15,6 +17,11 @@ pub struct Config {
     pub database_url: String,
     pub static_dir: PathBuf,
     pub allowed_hosts: Vec<String>,
+    /// 文法タグのマスター
+    pub grammar_tags_path: PathBuf,
+    /// 講座のレッスン対応（ユーザーが記入する。無ければテンプレートを読む）
+    pub grammar_map_path: PathBuf,
+    pub grammar_map_template_path: PathBuf,
 }
 
 impl Config {
@@ -30,7 +37,24 @@ impl Config {
             database_url: get("DATABASE_URL", "sqlite://data/app.db"),
             static_dir: get("STATIC_DIR", "crates/web/dist").into(),
             allowed_hosts: parse_hosts(&get("ALLOWED_HOSTS", "arxiv.org,www.arxiv.org")),
+            grammar_tags_path: get("GRAMMAR_TAGS_PATH", "data/grammar_tags.yaml").into(),
+            grammar_map_path: get("GRAMMAR_MAP_PATH", "data/grammar_map.local.yaml").into(),
+            grammar_map_template_path: get(
+                "GRAMMAR_MAP_TEMPLATE_PATH",
+                "data/grammar_map.template.yaml",
+            )
+            .into(),
         })
+    }
+}
+
+impl Config {
+    pub fn grammar_paths(&self) -> GrammarPaths {
+        GrammarPaths {
+            tags: self.grammar_tags_path.clone(),
+            map: self.grammar_map_path.clone(),
+            template: self.grammar_map_template_path.clone(),
+        }
     }
 }
 

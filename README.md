@@ -104,6 +104,14 @@ trunk serve
 
 ### 使い方のヒント
 
+- **文法項目と講座の案内**: 英文を解説すると、解説の前に「どの文法項目が使われているか」がチップで並びます
+  - 「📺 関係詞 › （レッスン名）」… 記入したレッスンに対応する項目
+  - 「📺 関係詞（パーフェクト英文法）」… レッスン未記入のカテゴリ（カテゴリ単位の案内）
+  - 「論文構文：同格の that（講座範囲外）」… 講座の範囲外（論文に多い構文や、記入したレッスンが扱っていない項目）
+  - チップを押すと本文の該当箇所がハイライトされ、項目の説明と対応レッスンが出ます。「文法項目」タブでは、
+    カテゴリ → 項目 → レッスンの一覧と、解説した英文での出現回数（よく出る順）を見られます
+  - 右上の ⚙ で「講座の案内を表示する」をオフにすると、チップは文法項目の名前だけになります
+
 - **論文を開く・探す**: 解説ペイン上部の欄に、arXiv の URL・ID（`1706.03762`、`arXiv:2301.12345v2` など）を入れると「開く」、
   それ以外の語を入れると「検索」になります。検索結果は「検索」タブに並び、「読む」かタイトルで開きます
   - 題名をそのまま入れると題名で探します（`attention is all you need`）。`"..."` で語句、`ti:` `au:` `abs:` `cat:` で欄を指定できます
@@ -125,6 +133,44 @@ trunk serve
 (cd crates/web && trunk build)
 cargo run -p paper-reader-server   # http://127.0.0.1:8080 で UI も配信
 ```
+
+## 文法タグと講座のレッスン対応
+
+英文の解説では、まず LLM が英文の文法項目を判定し（タグ付け）、受講中の講座
+「スタディサプリENGLISH TOEIC対策コース パーフェクト講義 英文法編」の該当カテゴリ・レッスンを**復習先として案内**します。
+
+- **講座の内容はリポジトリにも LLM のプロンプトにも入れません。** 扱うのはカテゴリ名と、自分で書き写したレッスンのタイトルだけです。
+  解説の中身は LLM が一般的な英文法の知識で書きます
+- [data/grammar_tags.yaml](data/grammar_tags.yaml) … 文法タグのマスター（id・日本語名・カテゴリ・別名・LLM 向けの 1 行説明・implies）。
+  講座の 17 分類と「論文構文」に分けた 62 項目。`implies` は「完了形の分詞構文 → 分詞構文」のように一緒に付ける一般的な項目
+- [data/grammar_map.template.yaml](data/grammar_map.template.yaml) … レッスン対応のテンプレート。17 カテゴリごとに `lessons: []` と記入例
+- `data/grammar_map.local.yaml` … 自分で記入する実ファイル（git 管理外）。無ければテンプレートを読み、カテゴリ単位の案内だけを出します
+
+```sh
+cp data/grammar_map.template.yaml data/grammar_map.local.yaml
+# lessons に { id, category, title（書き写したタイトル）, tags: [grammar_tags の id] } を追記する
+curl -X POST http://127.0.0.1:8080/api/admin/reload-grammar   # 開発時: 再起動せずに読み直す
+deploy/install.sh --no-build                                  # 常時稼働の配置先にもコピーして再起動する
+```
+
+- 起動時（と読み直し時）に検証し、存在しないタグ id があれば `data/grammar_map.local.yaml:12: レッスン「…」のタグ「…」は grammar_tags.yaml にありません`
+  のようにファイル名と行を示して起動を止めます（読み直しのときは今のデータを使い続けます）
+- 範囲内・外の判定: 「論文構文」のタグは常に範囲外。レッスンを書いたカテゴリでは、どのレッスンからも参照されていないタグは範囲外。
+  レッスンをまだ書いていないカテゴリのタグはカテゴリ単位の案内を出します
+- `/api/admin/reload-grammar` は Mac 上から直接（127.0.0.1）の要求だけを受け付けます。tailscale serve 経由の要求も接続元は
+  127.0.0.1 になるため、転送ヘッダー（X-Forwarded-For / Forwarded / Tailscale-*）が付いた要求は拒否します
+
+タグ付けの仕組み:
+
+- 解説の前に、ストリーミングなしの問い合わせでタグを判定します（構造化出力 `response_format: json_schema`、`tag_id` はタグ id の enum）。
+  ランタイムが json_schema を受け付けなければ「JSON だけを出力」させてサーバーで検証します。不明な id・壊れた JSON は捨て、
+  タグ無しで解説を続けます。確信度 0.5 未満と重複を除いて最大 5 件
+- タグ付けと解説は一連の処理として LLM の同時実行 1 件に数えます。解説のプロンプトには検出した項目名と該当箇所を渡し、
+  「文法ポイント」ではその名前を小見出しに使わせます
+- 解説キャッシュにはタグも保存し、ヒット時は `tags` も再送します（レッスン対応はその時点の grammar_map で解決し直す）。
+  キャッシュのキーには grammar_tags.yaml の内容のハッシュを含めるので、タグを編集すると英文の解説は作り直されます
+- タグ付けの分だけ、解説が流れ始めるまでが 2〜4 秒ほど延びます（gemma4:e4b-it-qat、モデル読み込み済み）。Ollama は
+  `OLLAMA_NUM_PARALLEL=2` にして、タグ付けと解説のプロンプトがそれぞれキャッシュされるようにしています
 
 ## 運用（常時稼働）
 
@@ -247,7 +293,8 @@ tailscale serve status
     辞書の「goの過去」「childの複数形」のような記述からも原形（go, child）を取り出します
   - 見つからない場合は `headword: null`。辞書が未投入なら 503
 - `POST /api/explain` body: `{ mode: "word" | "sentence", text, context, regenerate? }` → `text/event-stream`
-  - `event: queued`（ほかの解説の生成待ち）→ `event: started` → `event: token`（data は追記する文字列）… → `event: done`
+  - `event: queued`（ほかの解説の生成待ち）→ `event: started` →（英文のみ）`event: tags` → `event: token`（data は追記する文字列）… → `event: done`
+  - `tags` の data: `[{ tag_id, name, category, span, in_scope, lessons: [{ id, category, title }], hint }]`
   - 失敗時は `event: error`（data はエラーメッセージ）。入力の検証エラーは 400 と `{ "error": "..." }`
   - text は 2,000 文字、context は 4,000 文字まで。LLM への同時リクエストは 1 件で、クライアントが切断すると生成も止めます
   - 最後まで生成できた解説は `explain_cache` に保存します。キーは `sha256(LLM_MODEL, mode, text, context, プロンプトのバージョン)`。
@@ -258,6 +305,9 @@ tailscale serve status
   - 語はすべて含む（AND）。is / of などのストップワードは除きます（arXiv では AND に入れると 0 件になるため）。
     3 語以上でストップワードを含む入力は題名とみなし、まず語句として探して、0 件ならキーワードで探し直します。題名が完全に一致する論文は先頭に出します
   - arXiv API の利用規約に従って問い合わせは 3 秒に 1 回までにし、同じ検索は 10 分間メモリにキャッシュします
+- `GET /api/grammar-map` → `{ course, course_short, source: "local" | "template", categories: [{ name, in_course, lesson_count }],
+  tags: [{ id, name, category, aliases, hint, in_scope, lessons: [{ id, category, title }], count }] }`（count は履歴の英文での出現回数）
+- `POST /api/admin/reload-grammar` → `{ tags, lessons, source }`（127.0.0.1 から直接の要求のみ。それ以外は 403）
 - `GET /api/history?paper=<論文 ID>` → `{ entries: [{ id, paper_id, paper_title, mode, text, context, updated_at, has_explanation }] }`
   - 新しい順に最大 200 件。`paper` を省くと全論文。`has_explanation` は今のモデルの解説がキャッシュにあるか
 - `POST /api/history` body: `{ paper_id, paper_title, mode, text, context }` → 204（同じ論文・mode・text なら時刻と文脈を更新）
@@ -268,6 +318,8 @@ tailscale serve status
 
 ```sh
 cargo test
+# 実際の LLM で例文に期待するタグが付くか（Ollama などが必要）
+cargo test -p paper-reader-server -- --ignored --nocapture tagging_examples
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy -p paper-reader-web --target wasm32-unknown-unknown -- -D warnings

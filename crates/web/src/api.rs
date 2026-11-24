@@ -1,8 +1,8 @@
 //! サーバー API の呼び出し（fetch）。
 
 use paper_reader_shared::{
-    DictResponse, ErrorResponse, ExplainRequest, HealthResponse, HistoryRecord, HistoryResponse,
-    PaperResponse, SearchResponse, SearchSort, SseEvent, SseParser,
+    DictResponse, ErrorResponse, ExplainRequest, GrammarMapResponse, HealthResponse, HistoryRecord,
+    HistoryResponse, PaperResponse, SearchResponse, SearchSort, SseEvent, SseParser,
 };
 use serde::de::DeserializeOwned;
 use wasm_bindgen::{JsCast as _, JsValue};
@@ -32,6 +32,10 @@ pub async fn fetch_search(q: &str, start: u32, sort: SearchSort) -> Result<Searc
         "/api/search?q={encoded}&start={start}&sort={sort}"
     ))
     .await
+}
+
+pub async fn fetch_grammar_map() -> Result<GrammarMapResponse, String> {
+    get_json("/api/grammar-map").await
 }
 
 pub async fn fetch_health() -> Result<HealthResponse, String> {

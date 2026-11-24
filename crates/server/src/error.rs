@@ -11,6 +11,8 @@ pub enum AppError {
     #[error("{0}")]
     BadRequest(String),
     #[error("{0}")]
+    Forbidden(String),
+    #[error("{0}")]
     NotFound(String),
     #[error("{0}")]
     Upstream(String),
@@ -26,6 +28,7 @@ impl AppError {
     fn status(&self) -> StatusCode {
         match self {
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            AppError::Forbidden(_) => StatusCode::FORBIDDEN,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Upstream(_) => StatusCode::BAD_GATEWAY,
             AppError::UpstreamTimeout(_) => StatusCode::GATEWAY_TIMEOUT,

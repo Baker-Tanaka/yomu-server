@@ -3,6 +3,8 @@
 //! - LLM への同時リクエストは `AppState::llm_gate`（Semaphore, 1 件）で制限し、待つときは `queued` を送る
 //! - クライアントが切断したら（SSE の受け手が drop されたら）上流のストリームも drop して生成を止める
 //! - 最後まで生成できた解説は explain_cache に保存し、次回は LLM を呼ばずに同じ SSE 形式で返す
+//! - mode=sentence では、解説の前に文法タグ付けを行い `tags` イベントを送る（タグ付け＋解説で Semaphore 1 件）。
+//!   タグ付けに失敗してもタグ無しで解説を続ける
 
 use std::convert::Infallible;
 use std::time::Duration;
@@ -13,7 +15,7 @@ use axum::extract::rejection::JsonRejection;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::Stream;
 use paper_reader_shared::{
-    ExplainRequest, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, SseParser, sse_event,
+    ExplainRequest, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, SseParser, sse_event,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -22,7 +24,9 @@ use crate::AppState;
 use crate::cache::cache_key;
 use crate::db;
 use crate::error::{AppError, AppResult};
-use crate::prompts;
+use crate::grammar::{DetectedTag, GrammarData};
+use crate::prompts::{self, GrammarNote};
+use crate::tagger::Tagger;
 
 /// 1 回の解説の上限時間（順番待ちは含まない）
 const GENERATION_TIMEOUT: Duration = Duration::from_secs(300);
@@ -52,14 +56,21 @@ pub async fn post_explain(
         }
     };
     match cached {
-        Some(markdown) => {
+        Some((markdown, tags)) => {
             tracing::info!(mode = req.mode.as_str(), "explain cache hit");
-            // 3 件だけなのでチャネルの容量内に収まり、待たずに送れる
-            for (event, data) in [
-                (sse_event::CACHED, ""),
-                (sse_event::TOKEN, markdown.as_str()),
-                (sse_event::DONE, ""),
-            ] {
+            let mut events = vec![(sse_event::CACHED, String::new())];
+            if req.mode == Mode::Sentence {
+                // レッスン対応は変わっているかもしれないので、保存したタグを今の grammar_map で解決し直す
+                let detected: Vec<DetectedTag> = tags
+                    .as_deref()
+                    .and_then(|t| serde_json::from_str(t).ok())
+                    .unwrap_or_default();
+                events.push((sse_event::TAGS, tags_event(&state.grammar(), &detected)));
+            }
+            events.push((sse_event::TOKEN, markdown));
+            events.push((sse_event::DONE, String::new()));
+            // 4 件だけなのでチャネルの容量内に収まり、待たずに送れる
+            for (event, data) in events {
                 let _ = tx.try_send(Event::default().event(event).data(data));
             }
             drop(tx);
@@ -97,15 +108,25 @@ pub fn validate(mut req: ExplainRequest) -> AppResult<ExplainRequest> {
     Ok(req)
 }
 
-/// この解説のキャッシュキー。
+/// この解説のキャッシュキー。英文なら grammar_tags.yaml の内容のハッシュも含める。
 pub fn key_for(state: &AppState, req: &ExplainRequest) -> String {
+    let grammar = match req.mode {
+        Mode::Sentence => state.grammar().tags_hash.clone(),
+        Mode::Word => String::new(),
+    };
     cache_key(
         &state.config.llm_model,
         req.mode,
         &req.text,
         &req.context,
         prompts::PROMPT_VERSION,
+        &grammar,
     )
+}
+
+/// tags イベントの data（レッスンを解決したタグの JSON 配列）。
+fn tags_event(g: &GrammarData, detected: &[DetectedTag]) -> String {
+    serde_json::to_string(&g.resolve(detected)).unwrap_or_else(|_| "[]".into())
 }
 
 /// 生成を止めた理由。
@@ -149,11 +170,50 @@ async fn run(state: AppState, req: ExplainRequest, key: String, tx: mpsc::Sender
         return;
     }
 
-    let result = match tokio::time::timeout(GENERATION_TIMEOUT, stream_llm(&state, &req, &tx)).await
-    {
-        Ok(r) => r,
-        Err(_) => Err(StreamError::Llm("解説の生成がタイムアウトしました".into())),
+    // 英文なら文法タグ付け（Semaphore を持ったまま行う）
+    let grammar = state.grammar();
+    let detected: Option<Vec<DetectedTag>> = if req.mode == Mode::Sentence {
+        let tagger = Tagger {
+            http: &state.llm_stream_http,
+            base_url: &state.config.llm_base_url,
+            model: &state.config.llm_model,
+            disable_thinking: state.config.llm_disable_thinking,
+            structured_output: &state.structured_output,
+        };
+        let tags = tokio::select! {
+            t = tagger.tag(&grammar, &req.text) => t,
+            _ = tx.closed() => {
+                tracing::info!("client disconnected during tagging");
+                return;
+            }
+        };
+        if send(&tx, sse_event::TAGS, &tags_event(&grammar, &tags))
+            .await
+            .is_err()
+        {
+            return;
+        }
+        Some(tags)
+    } else {
+        None
     };
+    let notes: Vec<GrammarNote<'_>> = detected
+        .iter()
+        .flatten()
+        .filter_map(|d| {
+            grammar.tag(&d.tag_id).map(|t| GrammarNote {
+                name: &t.name,
+                span: &d.span,
+            })
+        })
+        .collect();
+
+    let result =
+        match tokio::time::timeout(GENERATION_TIMEOUT, stream_llm(&state, &req, &notes, &tx)).await
+        {
+            Ok(r) => r,
+            Err(_) => Err(StreamError::Llm("解説の生成がタイムアウトしました".into())),
+        };
     match result {
         Ok(c) => {
             tracing::info!(
@@ -164,6 +224,9 @@ async fn run(state: AppState, req: ExplainRequest, key: String, tx: mpsc::Sender
             );
             // クライアントへの完了通知より先に保存する（直後に同じ解説を頼まれてもヒットするように）
             if c.complete {
+                let tags_json = detected
+                    .as_ref()
+                    .and_then(|d| serde_json::to_string(d).ok());
                 let entry = db::NewExplanation {
                     key: &key,
                     model: &state.config.llm_model,
@@ -171,6 +234,7 @@ async fn run(state: AppState, req: ExplainRequest, key: String, tx: mpsc::Sender
                     text: &req.text,
                     markdown: &c.text,
                     prompt_version: prompts::PROMPT_VERSION,
+                    tags: tags_json.as_deref(),
                 };
                 if let Err(e) = db::put_explanation(&state.db, &entry).await {
                     tracing::warn!(error = %e, "explain cache write failed");
@@ -196,6 +260,7 @@ async fn send(tx: &mpsc::Sender<Event>, event: &str, data: &str) -> Result<(), S
 async fn stream_llm(
     state: &AppState,
     req: &ExplainRequest,
+    grammar: &[GrammarNote<'_>],
     tx: &mpsc::Sender<Event>,
 ) -> Result<Completion, StreamError> {
     let cfg = &state.config;
@@ -208,7 +273,7 @@ async fn stream_llm(
         "{}/chat/completions",
         cfg.llm_base_url.trim_end_matches('/')
     );
-    let body = request_body(&cfg.llm_model, req, cfg.llm_disable_thinking);
+    let body = request_body(&cfg.llm_model, req, grammar, cfg.llm_disable_thinking);
 
     let send_req = state.llm_stream_http.post(&url).json(&body).send();
     let mut resp = tokio::select! {
@@ -268,7 +333,12 @@ async fn stream_llm(
 }
 
 /// OpenAI 互換 /chat/completions のリクエスト body。
-pub fn request_body(model: &str, req: &ExplainRequest, disable_thinking: bool) -> Value {
+pub fn request_body(
+    model: &str,
+    req: &ExplainRequest,
+    grammar: &[GrammarNote<'_>],
+    disable_thinking: bool,
+) -> Value {
     let mut body = json!({
         "model": model,
         "stream": true,
@@ -276,7 +346,7 @@ pub fn request_body(model: &str, req: &ExplainRequest, disable_thinking: bool) -
         "max_tokens": MAX_TOKENS,
         "messages": [
             { "role": "system", "content": prompts::system_prompt(req.mode) },
-            { "role": "user", "content": prompts::user_message(req) },
+            { "role": "user", "content": prompts::user_message(req, grammar) },
         ],
     });
     if disable_thinking {
@@ -425,7 +495,7 @@ mod tests {
 
     #[test]
     fn body_shape() {
-        let b = request_body("m", &req("We propose.", ""), true);
+        let b = request_body("m", &req("We propose.", ""), &[], true);
         assert_eq!(b["model"], "m");
         assert_eq!(b["stream"], true);
         assert_eq!(b["messages"][0]["role"], "system");
@@ -437,7 +507,7 @@ mod tests {
         );
         assert_eq!(b["reasoning_effort"], "none");
         assert!(
-            request_body("m", &req("x", ""), false)
+            request_body("m", &req("x", ""), &[], false)
                 .get("reasoning_effort")
                 .is_none()
         );

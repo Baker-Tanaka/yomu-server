@@ -43,7 +43,7 @@ pub async fn get_history(
         .map_err(|e| AppError::Internal(e.into()))?;
 
     let mut entries = Vec::with_capacity(rows.len());
-    for (id, paper_id, paper_title, mode, text, context, updated_at) in rows {
+    for (id, paper_id, paper_title, mode, text, context, updated_at, tags) in rows {
         let Some(mode) = parse_mode(&mode) else {
             continue;
         };
@@ -69,6 +69,7 @@ pub async fn get_history(
             context,
             updated_at,
             has_explanation,
+            tags: serde_json::from_str(&tags).unwrap_or_default(),
         });
     }
     Ok(Json(HistoryResponse { entries }))
@@ -116,6 +117,15 @@ pub fn validate(mut r: HistoryRecord) -> AppResult<HistoryRecord> {
     if too_long(&r.paper_title, MAX_TITLE_CHARS) {
         r.paper_title = r.paper_title.chars().take(MAX_TITLE_CHARS).collect();
     }
+    // 文法タグは id の形のものだけ、最大 10 件
+    r.tags.retain(|t| {
+        !t.is_empty()
+            && t.len() <= 64
+            && t.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    });
+    r.tags.dedup();
+    r.tags.truncate(10);
     Ok(r)
 }
 
@@ -130,6 +140,7 @@ mod tests {
             mode: Mode::Word,
             text: text.into(),
             context: context.into(),
+            tags: vec!["passive".into(), "Bad Tag".into(), "x".into()],
         }
     }
 
@@ -139,6 +150,7 @@ mod tests {
         assert_eq!(r.paper_id, "1706.03762v7");
         assert_eq!(r.paper_title, "Title");
         assert_eq!((r.text.as_str(), r.context.as_str()), ("attention", "ctx"));
+        assert_eq!(r.tags, vec!["passive", "x"]);
 
         assert!(validate(rec("", "x", "")).is_err());
         assert!(validate(rec("p", "  ", "")).is_err());

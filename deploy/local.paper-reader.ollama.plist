@@ -30,8 +30,10 @@
     <string>30m</string>
     <key>OLLAMA_MAX_LOADED_MODELS</key>
     <string>1</string>
+    <!-- 同時に処理するのはサーバー側で 1 件に絞っている。スロットを 2 つにするのは、文法タグ付けと解説の
+         プロンプトがそれぞれのスロットにキャッシュされ、交互に使っても読み直しにならないようにするため -->
     <key>OLLAMA_NUM_PARALLEL</key>
-    <string>1</string>
+    <string>2</string>
   </dict>
   <key>StandardOutPath</key>
   <string>__LOG_DIR__/ollama.log</string>

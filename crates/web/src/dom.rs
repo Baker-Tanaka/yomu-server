@@ -6,7 +6,7 @@ use std::rc::Rc;
 use paper_reader_shared::{Mode, normalize_whitespace};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::prelude::Closure;
-use web_sys::{Document, Element, HtmlElement, KeyboardEvent, Node, PointerEvent};
+use web_sys::{Document, Element, HtmlElement, KeyboardEvent, Node, PointerEvent, Text};
 
 const PAPER_ID: &str = "paper";
 const LAYOUT_ID: &str = "layout";
@@ -50,7 +50,12 @@ fn paper_element() -> Option<Element> {
 thread_local! {
     /// 最後に通知した選択。selectionchange と mouseup の重複を除くのに使う
     static LAST_SELECTION: RefCell<Option<SelectionInfo>> = const { RefCell::new(None) };
+    /// 最後の選択を含む段落の要素（文法項目のハイライトで検索する範囲）
+    static CONTEXT_ELEMENT: RefCell<Option<Element>> = const { RefCell::new(None) };
 }
+
+/// 文法項目のハイライトに使う要素のクラス
+const HIGHLIGHT_CLASS: &str = "grammar-hl";
 
 /// ブラウザの選択を解除する。同じ箇所をもう一度選んだときも通知されるようにする。
 pub fn clear_selection() {
@@ -63,6 +68,7 @@ pub fn clear_selection() {
 /// 無害化済みの論文 HTML を #paper に入れる。
 pub fn set_paper_html(html: &str, title: &str) {
     LAST_SELECTION.with(|l| *l.borrow_mut() = None);
+    CONTEXT_ELEMENT.with(|c| *c.borrow_mut() = None);
     if let Some(paper) = paper_element() {
         paper.set_inner_html(html);
         paper.set_scroll_top(0);
@@ -102,11 +108,13 @@ fn capture_selection() -> Option<SelectionInfo> {
     }
 
     let start = range.start_container().ok()?;
-    let context = element_of(&start)
+    let context_el = element_of(&start)
         .and_then(|el| closest_in(&el, &paper, CONTEXT_SELECTOR))
         .or_else(|| {
             element_of(&start).and_then(|el| closest_in(&el, &paper, FALLBACK_CONTEXT_SELECTOR))
-        })
+        });
+    CONTEXT_ELEMENT.with(|c| *c.borrow_mut() = context_el.clone());
+    let context = context_el
         .and_then(|el| el.dyn_into::<HtmlElement>().ok())
         .map(|el| normalize_whitespace(&el.inner_text()))
         .filter(|c| !c.is_empty())
@@ -482,5 +490,195 @@ pub fn apply_theme(choice: ThemeChoice) {
     }
     if let Some(storage) = window.local_storage().ok().flatten() {
         let _ = storage.set_item(THEME_STORAGE_KEY, choice.as_str());
+    }
+}
+
+/// 文法項目のハイライト（<mark class="grammar-hl">）をすべて外す。
+pub fn clear_highlight() {
+    let Some(paper) = paper_element() else {
+        return;
+    };
+    let Ok(marks) = paper.query_selector_all(&format!("mark.{HIGHLIGHT_CLASS}")) else {
+        return;
+    };
+    for i in 0..marks.length() {
+        let Some(mark) = marks.item(i) else {
+            continue;
+        };
+        let Some(parent) = mark.parent_node() else {
+            continue;
+        };
+        while let Some(child) = mark.first_child() {
+            let _ = parent.insert_before(&child, Some(&mark));
+        }
+        let _ = parent.remove_child(&mark);
+        // 分けたテキストノードをつなぎ直す（選択や再検索が正しく動くように）
+        parent.normalize();
+    }
+}
+
+/// 選択した英文の中から `span` を探して <mark> で囲み、見える位置までスクロールする。
+/// 見つかれば true。
+///
+/// 探す範囲は最後に選択した段落（無ければ #paper 全体）。`anchor`（選択した英文）が見つかれば、
+/// その位置から後ろを優先して探す。空白の違いと大文字小文字は無視する。
+pub fn highlight_span(span: &str, anchor: &str) -> bool {
+    clear_highlight();
+    // ブラウザの選択の色がハイライトを覆うので、選択だけ外す（右ペインの選択内容はそのまま）
+    if let Some(Ok(Some(sel))) = web_sys::window().map(|w| w.get_selection()) {
+        let _ = sel.remove_all_ranges();
+    }
+    if span.trim().is_empty() {
+        return false;
+    }
+    let root = CONTEXT_ELEMENT
+        .with(|c| c.borrow().clone())
+        .filter(|el| el.is_connected())
+        .or_else(paper_element);
+    let Some(root) = root else {
+        return false;
+    };
+
+    let mut nodes = Vec::new();
+    collect_text_nodes(&root, &mut nodes);
+    // 空白をまとめ、小文字にした文字列と、その各文字がどのテキストノードの何文字目（UTF-16）かの対応
+    let mut norm: Vec<char> = Vec::new();
+    let mut map: Vec<(usize, u32, u32)> = Vec::new();
+    let mut prev_space = true;
+    for (i, node) in nodes.iter().enumerate() {
+        let mut offset = 0u32;
+        for c in node.data().chars() {
+            let width = c.len_utf16() as u32;
+            if c.is_whitespace() {
+                if !prev_space {
+                    norm.push(' ');
+                    map.push((i, offset, width));
+                    prev_space = true;
+                }
+            } else {
+                norm.push(c.to_lowercase().next().unwrap_or(c));
+                map.push((i, offset, width));
+                prev_space = false;
+            }
+            offset += width;
+        }
+    }
+    let needle = normalize_chars(span);
+    let anchor = normalize_chars(anchor);
+    let from = find_chars(&norm, &anchor, 0).unwrap_or(0);
+    let Some(pos) = find_chars(&norm, &needle, from).or_else(|| find_chars(&norm, &needle, 0))
+    else {
+        return false;
+    };
+    let (start_node, start_off, _) = map[pos];
+    let (end_node, last_off, last_width) = map[pos + needle.len() - 1];
+    let end_off = last_off + last_width;
+
+    let Some(doc) = document() else {
+        return false;
+    };
+    let mut first_mark: Option<Element> = None;
+    for (i, node) in nodes.iter().enumerate().take(end_node + 1).skip(start_node) {
+        let s = if i == start_node { start_off } else { 0 };
+        let e = if i == end_node {
+            end_off
+        } else {
+            node.length()
+        };
+        if e <= s {
+            continue;
+        }
+        if let Some(mark) = wrap_text(&doc, node, s, e) {
+            first_mark.get_or_insert(mark);
+        }
+    }
+    let Some(mark) = first_mark else {
+        return false;
+    };
+    let opts = web_sys::ScrollIntoViewOptions::new();
+    opts.set_block(web_sys::ScrollLogicalPosition::Center);
+    opts.set_behavior(web_sys::ScrollBehavior::Smooth);
+    mark.scroll_into_view_with_scroll_into_view_options(&opts);
+    true
+}
+
+/// テキストノードの [start, end)（UTF-16）を <mark> で囲む。
+fn wrap_text(doc: &Document, node: &Text, start: u32, end: u32) -> Option<Element> {
+    let target = if start > 0 {
+        node.split_text(start).ok()?
+    } else {
+        node.clone()
+    };
+    if end - start < target.length() {
+        target.split_text(end - start).ok()?;
+    }
+    if target.data().trim().is_empty() {
+        return None;
+    }
+    let mark = doc.create_element("mark").ok()?;
+    mark.set_class_name(HIGHLIGHT_CLASS);
+    let parent = target.parent_node()?;
+    parent.replace_child(&mark, &target).ok()?;
+    mark.append_child(&target).ok()?;
+    Some(mark)
+}
+
+/// 要素の中のテキストノードを文書順に集める（数式の注釈など、表示されないものは除く）。
+fn collect_text_nodes(node: &Node, out: &mut Vec<Text>) {
+    let children = node.child_nodes();
+    for i in 0..children.length() {
+        let Some(child) = children.item(i) else {
+            continue;
+        };
+        match child.node_type() {
+            Node::TEXT_NODE => {
+                if let Ok(text) = child.dyn_into::<Text>() {
+                    out.push(text);
+                }
+            }
+            Node::ELEMENT_NODE => {
+                let skip = child.dyn_ref::<Element>().is_some_and(|el| {
+                    matches!(
+                        el.tag_name().to_ascii_lowercase().as_str(),
+                        "annotation" | "annotation-xml" | "script" | "style"
+                    )
+                });
+                if !skip {
+                    collect_text_nodes(&child, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn normalize_chars(s: &str) -> Vec<char> {
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .map(|c| c.to_lowercase().next().unwrap_or(c))
+        .collect()
+}
+
+fn find_chars(haystack: &[char], needle: &[char], from: usize) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    (from..=haystack.len() - needle.len()).find(|&i| haystack[i..i + needle.len()] == *needle)
+}
+
+/// localStorage に保存した真偽値の設定。
+pub fn load_bool(key: &str, default: bool) -> bool {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(key).ok().flatten())
+        .map(|v| v == "true")
+        .unwrap_or(default)
+}
+
+pub fn save_bool(key: &str, value: bool) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = storage.set_item(key, if value { "true" } else { "false" });
     }
 }

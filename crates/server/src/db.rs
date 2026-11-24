@@ -69,12 +69,15 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-pub async fn get_explanation(pool: &SqlitePool, key: &str) -> sqlx::Result<Option<String>> {
-    let row: Option<(String,)> = sqlx::query_as("SELECT markdown FROM explain_cache WHERE key = ?")
+/// キャッシュした解説（Markdown と、英文なら検出した文法タグの JSON）。
+pub async fn get_explanation(
+    pool: &SqlitePool,
+    key: &str,
+) -> sqlx::Result<Option<(String, Option<String>)>> {
+    sqlx::query_as("SELECT markdown, tags FROM explain_cache WHERE key = ?")
         .bind(key)
         .fetch_optional(pool)
-        .await?;
-    Ok(row.map(|(m,)| m))
+        .await
 }
 
 pub struct NewExplanation<'a> {
@@ -84,13 +87,16 @@ pub struct NewExplanation<'a> {
     pub text: &'a str,
     pub markdown: &'a str,
     pub prompt_version: u32,
+    /// 検出した文法タグの JSON（英文のみ）
+    pub tags: Option<&'a str>,
 }
 
 pub async fn put_explanation(pool: &SqlitePool, e: &NewExplanation<'_>) -> sqlx::Result<()> {
     sqlx::query(
-        "INSERT INTO explain_cache (key, model, mode, text, markdown, prompt_version, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET markdown = excluded.markdown, created_at = excluded.created_at",
+        "INSERT INTO explain_cache (key, model, mode, text, markdown, prompt_version, created_at, tags)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET markdown = excluded.markdown, created_at = excluded.created_at,
+           tags = excluded.tags",
     )
     .bind(e.key)
     .bind(e.model)
@@ -99,6 +105,7 @@ pub async fn put_explanation(pool: &SqlitePool, e: &NewExplanation<'_>) -> sqlx:
     .bind(e.markdown)
     .bind(e.prompt_version as i64)
     .bind(now_secs())
+    .bind(e.tags)
     .execute(pool)
     .await?;
     Ok(())
@@ -113,12 +120,15 @@ pub async fn explanation_exists(pool: &SqlitePool, key: &str) -> sqlx::Result<bo
 }
 
 /// 履歴を追加する。同じ論文・mode・text があれば文脈と時刻を更新して先頭に上げる。
+/// 文法タグは空でなければ置き換え、空なら既存の値を残す。
 pub async fn put_history(pool: &SqlitePool, r: &HistoryRecord) -> sqlx::Result<()> {
+    let tags = serde_json::to_string(&r.tags).unwrap_or_else(|_| "[]".into());
     sqlx::query(
-        "INSERT INTO history (paper_id, paper_title, mode, text, context, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+        "INSERT INTO history (paper_id, paper_title, mode, text, context, updated_at, tags)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(paper_id, mode, text) DO UPDATE SET paper_title = excluded.paper_title,
-           context = excluded.context, updated_at = excluded.updated_at",
+           context = excluded.context, updated_at = excluded.updated_at,
+           tags = CASE WHEN excluded.tags = '[]' THEN history.tags ELSE excluded.tags END",
     )
     .bind(&r.paper_id)
     .bind(&r.paper_title)
@@ -126,13 +136,14 @@ pub async fn put_history(pool: &SqlitePool, r: &HistoryRecord) -> sqlx::Result<(
     .bind(&r.text)
     .bind(&r.context)
     .bind(now_secs())
+    .bind(tags)
     .execute(pool)
     .await?;
     Ok(())
 }
 
-/// 履歴の行（has_explanation は呼び出し側で埋める）。
-pub type HistoryRow = (i64, String, String, String, String, String, i64);
+/// 履歴の行（has_explanation は呼び出し側で埋める）。最後は文法タグの JSON。
+pub type HistoryRow = (i64, String, String, String, String, String, i64, String);
 
 pub async fn list_history(
     pool: &SqlitePool,
@@ -140,7 +151,7 @@ pub async fn list_history(
     limit: i64,
 ) -> sqlx::Result<Vec<HistoryRow>> {
     sqlx::query_as(
-        "SELECT id, paper_id, paper_title, mode, text, context, updated_at FROM history
+        "SELECT id, paper_id, paper_title, mode, text, context, updated_at, tags FROM history
          WHERE ?1 IS NULL OR paper_id = ?1
          ORDER BY updated_at DESC, id DESC LIMIT ?2",
     )
@@ -157,4 +168,14 @@ pub async fn delete_history(pool: &SqlitePool, id: i64) -> sqlx::Result<bool> {
         .execute(pool)
         .await?;
     Ok(r.rows_affected() > 0)
+}
+
+/// 文法タグごとの出現回数（そのタグを含む履歴の英文の数）。
+pub async fn tag_counts(pool: &SqlitePool) -> sqlx::Result<Vec<(String, i64)>> {
+    sqlx::query_as(
+        "SELECT j.value, COUNT(*) FROM history, json_each(history.tags) AS j
+         WHERE json_valid(history.tags) GROUP BY j.value",
+    )
+    .fetch_all(pool)
+    .await
 }

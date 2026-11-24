@@ -22,4 +22,5 @@ web-sys = { version = "0.3.107", features = [
   "TextDecoder", "TextDecodeOptions",
   "KeyboardEvent", "PointerEvent", "MouseEvent", "Storage", "DomRect", "DomTokenList",
   "CssStyleDeclaration", "MediaQueryList",
+  "Text", "CharacterData", "NodeList", "ScrollIntoViewOptions", "ScrollBehavior", "ScrollLogicalPosition",
 ] }

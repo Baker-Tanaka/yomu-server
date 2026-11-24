@@ -2,5 +2,9 @@
 /crates/web/dist
 /data/*
 !/data/.gitkeep
+# 文法タグのマスターとレッスン対応のテンプレートは管理する（記入済みの local は管理しない）
+!/data/grammar_tags.yaml
+!/data/grammar_map.template.yaml
+/data/grammar_map.local.yaml
 .env
 .DS_Store

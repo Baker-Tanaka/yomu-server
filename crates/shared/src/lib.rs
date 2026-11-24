@@ -203,6 +203,71 @@ pub fn is_arxiv_id(s: &str) -> bool {
     false
 }
 
+/// 講座の範囲外として扱うカテゴリ（論文に多い構文）
+pub const OUT_OF_COURSE_CATEGORY: &str = "論文構文";
+
+/// 講座のレッスン（タイトルはユーザーが書き写したもの）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LessonRef {
+    pub id: String,
+    pub category: String,
+    pub title: String,
+}
+
+/// 解説した英文で検出した文法項目（SSE の tags イベント）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExplainTag {
+    pub tag_id: String,
+    pub name: String,
+    pub category: String,
+    /// 英文中で該当する部分
+    pub span: String,
+    /// 講座の範囲内か（範囲内ならレッスンかカテゴリ単位の案内を出す）
+    pub in_scope: bool,
+    /// 対応するレッスン（未記入なら空）
+    pub lessons: Vec<LessonRef>,
+    /// タグの説明（grammar_tags.yaml の hint）
+    #[serde(default)]
+    pub hint: String,
+}
+
+/// 文法タグ 1 件（`GET /api/grammar-map`）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GrammarTagInfo {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub aliases: Vec<String>,
+    pub hint: String,
+    pub in_scope: bool,
+    pub lessons: Vec<LessonRef>,
+    /// 履歴に出てきた回数（その文法項目を含む英文の数）
+    pub count: u64,
+}
+
+/// カテゴリ 1 件（`GET /api/grammar-map`）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GrammarCategoryInfo {
+    pub name: String,
+    /// 講座のカテゴリか（論文構文は false）
+    pub in_course: bool,
+    /// 記入済みのレッスン数
+    pub lesson_count: usize,
+}
+
+/// `GET /api/grammar-map` の応答。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GrammarMapResponse {
+    /// 講座名
+    pub course: String,
+    /// 講座の短い名前（チップに出す）
+    pub course_short: String,
+    /// レッスン対応を読んだファイル（"local" か "template"）
+    pub source: String,
+    pub categories: Vec<GrammarCategoryInfo>,
+    pub tags: Vec<GrammarTagInfo>,
+}
+
 /// 履歴の 1 件（調べた単語・解説した文）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HistoryEntry {
@@ -217,6 +282,9 @@ pub struct HistoryEntry {
     pub updated_at: i64,
     /// 現在のモデルで解説がキャッシュされているか
     pub has_explanation: bool,
+    /// 英文で検出した文法タグの id
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// `POST /api/history` の body。同じ論文・mode・text なら時刻と文脈を更新する。
@@ -228,6 +296,9 @@ pub struct HistoryRecord {
     pub text: String,
     #[serde(default)]
     pub context: String,
+    /// 英文で検出した文法タグの id。空なら既存の値を残す
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// `GET /api/history?paper=` のクエリ。`paper` が無ければ全論文。
@@ -255,8 +326,10 @@ pub mod sse_event {
     pub const QUEUED: &str = "queued";
     /// 生成開始（順番待ちが終わった）
     pub const STARTED: &str = "started";
-    /// キャッシュから返す（このあと token と done が続く）
+    /// キャッシュから返す（このあと tags（英文のみ）と token と done が続く）
     pub const CACHED: &str = "cached";
+    /// 英文で使われている文法項目。data は `Vec<ExplainTag>` の JSON（mode=sentence のときだけ、解説の前に送る）
+    pub const TAGS: &str = "tags";
 }
 
 /// SSE の 1 イベント。

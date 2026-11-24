@@ -151,9 +151,18 @@ curl -s http://127.0.0.1:8080/api/health
   `~/Desktop` や `~/Documents` のファイルを読めないため、サーバーのバイナリ・`dist/`・`.env` をそこへコピーします。
   データベースは初回だけ `data/app.db`（辞書・キャッシュ・履歴）をコピーし、以後はそちらを使います
 - ログ: `~/Library/Logs/paper-reader/server.log`, `ollama.log`
+- 一括操作: 登録したあとは [deploy/ctl.sh](deploy/ctl.sh) でまとめて操作できます（`--caffeinate` で入れた caffeinate も対象）
+
+  ```sh
+  deploy/ctl.sh start     # まとめて起動（止まっているものだけ）。最後に /api/health を表示
+  deploy/ctl.sh stop      # まとめて停止（次のログインでまた自動起動する）
+  deploy/ctl.sh restart   # まとめて再起動
+  deploy/ctl.sh status    # 状態と /api/health
+  deploy/ctl.sh logs      # ログを追いかけて表示（Ctrl-C で終了）
+  ```
+
 - 更新するとき: コードを変えたら `deploy/install.sh` をもう一度実行します（データベースはそのまま）
-- 止める・外す: `deploy/uninstall.sh`（配置先のデータとログは残ります）。一時的に止めるだけなら
-  `launchctl bootout gui/$(id -u)/local.paper-reader.server`
+- 自動起動ごと外す: `deploy/uninstall.sh`（配置先のデータとログは残ります）。一時的に止めるだけなら `deploy/ctl.sh stop`
 - Ollama を `brew services start ollama` で動かしたい場合は、`deploy/install.sh --no-ollama` を使います（二重起動しないように）
 - 辞書を入れ直すとき: `DATABASE_URL="sqlite://$HOME/Library/Application Support/paper-reader/data/app.db" cargo run -p import-dict --release`
 

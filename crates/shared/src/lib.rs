@@ -25,6 +25,48 @@ pub struct PaperResponse {
     pub source_url: String,
 }
 
+/// 見た論文 1 件（`GET /api/papers`）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecentPaper {
+    pub id: String,
+    pub title: String,
+    pub source_url: String,
+    /// 最後に開いた時刻（UNIX 秒）
+    pub last_opened_at: i64,
+    /// 開いた回数
+    pub open_count: i64,
+    /// この論文で調べた単語・解説した英文の数（履歴から）
+    pub word_count: i64,
+    pub sentence_count: i64,
+    /// 本文が Mac にキャッシュされているか（されていれば arXiv にアクセスせずに開ける）
+    pub cached: bool,
+}
+
+/// 論文キャッシュの使用量。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PaperCacheStats {
+    pub papers: i64,
+    pub html_bytes: i64,
+    /// 図（画像）の数と大きさ
+    pub assets: i64,
+    pub asset_bytes: i64,
+}
+
+/// `GET /api/papers` の応答（最後に開いた順）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecentPapersResponse {
+    pub papers: Vec<RecentPaper>,
+    pub cache: PaperCacheStats,
+}
+
+/// `DELETE /api/papers?id=&purge=` のクエリ。purge なら本文と図のキャッシュも消す。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeletePaperQuery {
+    pub id: String,
+    #[serde(default)]
+    pub purge: bool,
+}
+
 /// `GET /api/health` の応答。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HealthResponse {

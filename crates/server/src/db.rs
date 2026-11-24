@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use paper_reader_shared::{HistoryRecord, Mode, PaperResponse};
+use paper_reader_shared::{HistoryRecord, Mode, PaperCacheStats, PaperResponse, RecentPaper};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
@@ -178,4 +178,136 @@ pub async fn tag_counts(pool: &SqlitePool) -> sqlx::Result<Vec<(String, i64)>> {
     )
     .fetch_all(pool)
     .await
+}
+
+/// 論文を開いたことを記録する（見た論文の一覧）。
+pub async fn record_visit(pool: &SqlitePool, paper: &PaperResponse) -> sqlx::Result<()> {
+    let now = now_secs();
+    sqlx::query(
+        "INSERT INTO paper_visits (paper_id, title, source_url, first_opened_at, last_opened_at, open_count)
+         VALUES (?, ?, ?, ?, ?, 1)
+         ON CONFLICT(paper_id) DO UPDATE SET title = excluded.title, source_url = excluded.source_url,
+           last_opened_at = excluded.last_opened_at, open_count = paper_visits.open_count + 1",
+    )
+    .bind(&paper.id)
+    .bind(&paper.title)
+    .bind(&paper.source_url)
+    .bind(now)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+type VisitRow = (String, String, String, i64, i64, i64, i64, bool);
+
+/// 見た論文（最後に開いた順）。履歴の単語・英文の数と、本文がキャッシュにあるかも付ける。
+pub async fn list_visits(pool: &SqlitePool, limit: i64) -> sqlx::Result<Vec<RecentPaper>> {
+    let rows: Vec<VisitRow> = sqlx::query_as(
+        "SELECT v.paper_id, v.title, v.source_url, v.last_opened_at, v.open_count,
+           (SELECT COUNT(*) FROM history h WHERE h.paper_id = v.paper_id AND h.mode = 'word'),
+           (SELECT COUNT(*) FROM history h WHERE h.paper_id = v.paper_id AND h.mode = 'sentence'),
+           EXISTS (SELECT 1 FROM paper_cache c WHERE c.id = v.paper_id)
+         FROM paper_visits v ORDER BY v.last_opened_at DESC LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(
+                id,
+                title,
+                source_url,
+                last_opened_at,
+                open_count,
+                word_count,
+                sentence_count,
+                cached,
+            )| {
+                RecentPaper {
+                    id,
+                    title,
+                    source_url,
+                    last_opened_at,
+                    open_count,
+                    word_count,
+                    sentence_count,
+                    cached,
+                }
+            },
+        )
+        .collect())
+}
+
+/// 見た論文から外す。`purge` なら本文と図のキャッシュも消す（単語・英文の履歴は残す）。消えたら true。
+pub async fn delete_visit(pool: &SqlitePool, id: &str, purge: bool) -> sqlx::Result<bool> {
+    let mut tx = pool.begin().await?;
+    let removed = sqlx::query("DELETE FROM paper_visits WHERE paper_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    let mut purged = 0;
+    if purge {
+        purged += sqlx::query("DELETE FROM paper_cache WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        sqlx::query("DELETE FROM paper_assets WHERE paper_id = ?")
+            .bind(crate::arxiv::base_id(id))
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(removed + purged > 0)
+}
+
+pub async fn cache_stats(pool: &SqlitePool) -> sqlx::Result<PaperCacheStats> {
+    let (papers, html_bytes): (i64, i64) =
+        sqlx::query_as("SELECT COUNT(*), COALESCE(SUM(LENGTH(html)), 0) FROM paper_cache")
+            .fetch_one(pool)
+            .await?;
+    let (assets, asset_bytes): (i64, i64) =
+        sqlx::query_as("SELECT COUNT(*), COALESCE(SUM(LENGTH(data)), 0) FROM paper_assets")
+            .fetch_one(pool)
+            .await?;
+    Ok(PaperCacheStats {
+        papers,
+        html_bytes,
+        assets,
+        asset_bytes,
+    })
+}
+
+/// キャッシュした図（Content-Type と中身）。
+pub async fn get_asset(pool: &SqlitePool, url: &str) -> sqlx::Result<Option<(String, Vec<u8>)>> {
+    sqlx::query_as("SELECT content_type, data FROM paper_assets WHERE url = ?")
+        .bind(url)
+        .fetch_optional(pool)
+        .await
+}
+
+pub async fn put_asset(
+    pool: &SqlitePool,
+    url: &str,
+    paper_id: &str,
+    content_type: &str,
+    data: &[u8],
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO paper_assets (url, paper_id, content_type, data, fetched_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(url) DO UPDATE SET content_type = excluded.content_type, data = excluded.data,
+           fetched_at = excluded.fetched_at",
+    )
+    .bind(url)
+    .bind(paper_id)
+    .bind(content_type)
+    .bind(data)
+    .bind(now_secs())
+    .execute(pool)
+    .await?;
+    Ok(())
 }

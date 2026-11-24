@@ -11,3 +11,6 @@ for name in local.paper-reader.server local.paper-reader.ollama local.paper-read
     echo "削除しました: ${name}"
   fi
 done
+if [ -f /Library/LaunchDaemons/local.paper-reader.lidwake.plist ]; then
+  echo "蓋を閉じてもスリープしない設定は残っています。戻すには deploy/lid.sh normal（sudo が必要）"
+fi

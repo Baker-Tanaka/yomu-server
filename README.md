@@ -266,7 +266,28 @@ Mac がスリープすると生成もアクセスも止まります。次のど�
   ```
 
 - どちらの方法でも、**MacBook の蓋を閉じるとスリープします**（外部ディスプレイ・電源・キーボードをつないだクラムシェルモードを除く）。
-  蓋は開けたまま使ってください
+  蓋を閉じて使うときは次の「蓋を閉じても動かし続ける」を設定します
+
+#### 蓋を閉じても動かし続ける（deploy/lid.sh）
+
+外部ディスプレイなしで蓋を閉じても眠らないように、`pmset disablesleep` を使います（管理者権限が必要）。
+
+```sh
+deploy/lid.sh auto     # 電源接続中だけ、蓋を閉じても眠らない（おすすめ）
+deploy/lid.sh status   # 今の状態（モード・電源・蓋を閉じたときに眠るか）
+deploy/lid.sh normal   # 元に戻す
+deploy/lid.sh awake    # 電源に関係なく常に眠らない（非推奨）
+```
+
+- `auto` は root の LaunchDaemon `local.paper-reader.lidwake`（[deploy/local.paper-reader.lidwake.plist](deploy/local.paper-reader.lidwake.plist)）を
+  `/Library/LaunchDaemons` に入れます。15 秒ごとに電源を確かめ、AC 電源なら `disablesleep 1`、バッテリーなら `0` にします。
+  再起動後も有効です。`deploy/uninstall.sh` では外れないので、やめるときは `deploy/lid.sh normal`
+- 蓋を閉じるとディスプレイは消えますが、サーバー・Ollama・Tailscale は動き続け、iPhone から使えます
+- **電源を抜いてから 15 秒ほどは眠らない設定のまま**です。持ち運ぶときは、電源を抜いて少し待ってから蓋を閉じるか、
+  先に `deploy/lid.sh normal` を実行してください。`awake` はバッテリーでも眠らないので、バッグの中で発熱・電池切れになります
+- MacBook Air はファンが無いため、蓋を閉じたまま長い生成を続けると熱で速度が落ちることがあります。風通しのよい場所に置いてください
+- アイドルスリープも防がれるので、`caffeinate` を併用する必要はありません（入れたままでも害はありません）
+- `deploy/ctl.sh status` の最後にも「蓋を閉じると: スリープしない / する」を表示します
 
 ### 4. tailnet 内に HTTPS で公開（tailscale serve）
 

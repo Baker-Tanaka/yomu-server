@@ -114,6 +114,12 @@ cmd_status() {
   if loaded local.paper-reader.server; then
     health || true
   fi
+  # 蓋を閉じたときのスリープ（deploy/lid.sh で設定）
+  if [ "$(pmset -g | awk '/SleepDisabled/{print $2}')" = 1 ]; then
+    echo "蓋を閉じると: スリープしない（deploy/lid.sh status で詳細）"
+  else
+    echo "蓋を閉じると: スリープする（防ぐには deploy/lid.sh auto）"
+  fi
 }
 
 cmd_logs() {

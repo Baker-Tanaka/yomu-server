@@ -8,3 +8,4 @@
 /data/grammar_map.local.yaml
 .env
 .DS_Store
+__pycache__/

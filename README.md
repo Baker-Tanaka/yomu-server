@@ -14,6 +14,7 @@
 | `crates/server` | axum サーバー（静的配信、`/api/paper`、`/api/search`、`/api/dict`、`/api/words`、`/api/explain`、`/api/history`、`/api/health`） |
 | `crates/web` | eframe アプリ（wasm32-unknown-unknown）、`index.html`、`Trunk.toml`、`assets/` |
 | `scripts/import_dict` | 辞書データを SQLite に投入するツール |
+| `scripts/issues.py` | GitHub の Issue を選んで Claude Code に実装させ、PR にするスクリプト（「Issue から開発する」を参照） |
 | `scripts/subset_font.sh` | 日本語フォントを使う文字だけに絞るスクリプト |
 | `deploy/` | 本番ビルド、launchd の plist、インストール用スクリプト |
 | `data/` | 辞書の元データ、SQLite ファイル（git 管理外） |
@@ -230,6 +231,35 @@ GitHub が未設定のとき・送信に失敗したときは、この Mac の S
 - トークンはサーバーにだけ置き、ブラウザや LLM には渡しません。ログの設定表示も `Secret(***)` になります
 - 宛先は `https://api.github.com` 固定です。連続送信は 5 秒あけ、本文は 4,000 文字まで
 - **公開リポジトリの Issue は誰でも読めます。** 個人的な情報は書かず、添付する内容は確認画面で確かめてください
+
+## Issue から開発する（scripts/issues.py）
+
+開いている Issue を一覧にし、選んだものを Claude Code（`claude -p`）に実装させて PR にします。マージは人が行います。
+
+```sh
+scripts/issues.py            # 一覧を出し、実施する番号を入力（例: 5 7）
+scripts/issues.py 5          # #5 を実施
+scripts/issues.py --list     # 一覧だけ
+scripts/issues.py 5 --dry-run  # Claude Code に渡すプロンプトを確かめる
+```
+
+1 件ずつ次の順に進みます。
+
+1. `main` から `issue-<番号>` ブランチを作り、Issue に `claude:working` を付ける
+2. Claude Code が CLAUDE.md のルールに沿って実装する。許すのは編集・`cargo`・`trunk build`・読み取りだけで、
+   コミット・push・`curl`・Web へのアクセスはさせない。費用は 1 件 10 ドルまで（`--max-budget-usd`）
+3. スクリプトが `cargo fmt --check` / clippy（wasm も）/ `cargo test` を実行する
+4. 差分とまとめを見せて確認したら、`Closes #<番号>` を付けてコミットし、push して PR を作る。Issue に PR を知らせ `claude:pr-open` を付ける
+5. 変更が無い・チェックに失敗・中止したときは、ブランチに WIP としてコミットして残し（push しない）、`claude:blocked` を付けて理由をコメントする
+
+- 自分以外が書いた Issue は既定では選べません（本文に悪意ある指示が入りうるため。`--allow-others` で許可）。
+  Issue の本文は「要望のデータ」としてプロンプトに入れ、本文中の指示より CLAUDE.md のルールを優先させます
+- トークン: Issue の読み書きは `.env` の `GITHUB_TOKEN`。PR を作るには、そのリポジトリの **Pull requests: Read and write** だけを持つ
+  Fine-grained token を `.env` の `ISSUES_PR_TOKEN` に入れます（無ければ PR を作る URL を表示）。push はいつもの git の認証で行います。
+  トークンは Claude Code には渡しません
+- 実行の記録（プロンプト・Claude Code の出力・チェックの出力）は `.git/issue-runs/` に残ります
+- 始める前に作業ツリーをきれいにしておきます。`main` に push していないコミットがあると PR に含まれるので、先に push してください
+- `claude` は PATH・`~/.claude/local`・VS Code 拡張の中から探します。別の場所なら `CLAUDE_BIN` で指定します
 
 ## 運用（常時稼働）
 

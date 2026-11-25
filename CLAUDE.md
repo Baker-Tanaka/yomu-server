@@ -15,6 +15,8 @@ MacBook Air
   ├─ LLM ランタイム（Ollama または llama.cpp の llama-server, 127.0.0.1 のみ）
   └─ SQLite（辞書・解説キャッシュ・論文キャッシュ）
 外部: arxiv.org（サーバーからのみアクセス）
+実験モード（既定オフ）: 端末の WebGPU で小さな LLM を動かす。WebLLM とモデルは scripts/fetch_webllm.py で Mac に置き、
+  サーバーが /webllm/ で配信する（端末から外部へは直接アクセスしない）。オフのあいだは関係するファイルを読み込まない
 
 すべて同一オリジンで配信するため CORS 設定は不要。LLM ランタイムを外部に公開してはいけない。
 
@@ -73,6 +75,7 @@ LLM_BASE_URL=http://127.0.0.1:11434/v1   # OpenAI 互換 API（Ollama / llama-se
 LLM_MODEL=<モデル名>
 DATABASE_URL=sqlite://data/app.db
 STATIC_DIR=crates/web/dist
+WEBLLM_DIR=data/webllm                                  # 実験モードの WebLLM とモデル（/webllm/ で配信）
 ALLOWED_HOSTS=arxiv.org,www.arxiv.org
 GRAMMAR_TAGS_PATH=data/grammar_tags.yaml                # 文法タグのマスター（リポジトリで管理）
 GRAMMAR_MAP_PATH=data/grammar_map.local.yaml            # 講座のレッスン対応（ユーザーが記入。git 管理外）

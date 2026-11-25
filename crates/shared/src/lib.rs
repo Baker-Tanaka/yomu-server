@@ -341,6 +341,58 @@ pub struct ExplainRequest {
     /// true ならキャッシュを使わずに生成し直す
     #[serde(default)]
     pub regenerate: bool,
+    /// 英文の解説にスラッシュリーディング（意味のまとまりごとの区切りと直訳）を入れる
+    #[serde(default)]
+    pub slash: bool,
+}
+
+/// 英文の解説のスラッシュリーディングの見出し。
+pub const SLASH_READING_HEADING: &str = "## スラッシュリーディング";
+
+/// Markdown から、`heading` の行から次の「## 」見出しの手前までを取り除く（無ければそのまま）。
+/// スラッシュリーディングを表示しない設定のときに使う。
+pub fn without_section<'a>(markdown: &'a str, heading: &str) -> std::borrow::Cow<'a, str> {
+    let mut lines = markdown.split_inclusive('\n');
+    if !markdown
+        .split_inclusive('\n')
+        .any(|l| l.trim_end() == heading)
+    {
+        return std::borrow::Cow::Borrowed(markdown);
+    }
+    let mut out = String::with_capacity(markdown.len());
+    let mut skipping = false;
+    for line in lines.by_ref() {
+        let t = line.trim_end();
+        if t == heading {
+            skipping = true;
+            continue;
+        }
+        if skipping && t.starts_with("## ") {
+            skipping = false;
+        }
+        if !skipping {
+            out.push_str(line);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// 表示できない LaTeX の矢印（LLM が書きがち）を記号に置き換える。
+pub fn plain_arrows(markdown: &str) -> std::borrow::Cow<'_, str> {
+    const ARROWS: [(&str, &str); 4] = [
+        ("$\\rightarrow$", "→"),
+        ("$\\to$", "→"),
+        ("$\\Rightarrow$", "⇒"),
+        ("$\\leftarrow$", "←"),
+    ];
+    if !markdown.contains('$') {
+        return std::borrow::Cow::Borrowed(markdown);
+    }
+    let mut s = markdown.to_string();
+    for (from, to) in ARROWS {
+        s = s.replace(from, to);
+    }
+    std::borrow::Cow::Owned(s)
 }
 
 /// 検索の並び順。
@@ -861,10 +913,43 @@ mod tests {
     }
 
     #[test]
+    fn section_removal() {
+        let md =
+            "## 和訳\n\n訳\n\n## スラッシュリーディング\nA / B\n- A → あ\n\n## 文構造\n- 主語\n";
+        assert_eq!(
+            without_section(md, SLASH_READING_HEADING),
+            "## 和訳\n\n訳\n\n## 文構造\n- 主語\n"
+        );
+        // 最後の見出しでも消える。無ければそのまま（借用のまま）
+        let md2 = "## 和訳\n訳\n## スラッシュリーディング\nA / B";
+        assert_eq!(without_section(md2, SLASH_READING_HEADING), "## 和訳\n訳\n");
+        assert!(matches!(
+            without_section("## 和訳\n訳", SLASH_READING_HEADING),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        // ### の小見出しでは止まらない
+        let md3 = "## スラッシュリーディング\nA\n### x\nB\n## 語句\nC";
+        assert_eq!(without_section(md3, SLASH_READING_HEADING), "## 語句\nC");
+    }
+
+    #[test]
+    fn arrows() {
+        assert_eq!(plain_arrows("- A $\\rightarrow$ あ"), "- A → あ");
+        assert_eq!(plain_arrows("x $\\to$ y $\\Rightarrow$ z"), "x → y ⇒ z");
+        assert!(matches!(
+            plain_arrows("- A → あ"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        // 数式そのものは触らない
+        assert_eq!(plain_arrows("$x^2$"), "$x^2$");
+    }
+
+    #[test]
     fn explain_request_defaults() {
         let r: ExplainRequest = serde_json::from_str(r#"{"mode":"word","text":"x"}"#).unwrap();
         assert_eq!(r.context, "");
         assert!(!r.regenerate);
+        assert!(!r.slash);
     }
 
     #[test]

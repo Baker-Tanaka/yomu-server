@@ -44,10 +44,21 @@ const NO_GRAMMAR_NOTE: &str = "検出した文法項目: なし（「## 文法�
 /// 和訳の見出し（和訳はサーバーが見出しを付けて先に流す）。
 pub const TRANSLATION_HEADING: &str = "## 和訳\n\n";
 
-const SENTENCE: &str = "\
+/// 英文の解説の書き出し。`{first}` は最初の見出し。
+const SENTENCE_INTRO: &str = "\
 ユーザーが英語論文の中で選択した英文について、次の見出しで解説してください。
-「## 和訳」は先に表示済みなので書かず、「## 文構造」から始めてください。説明はユーザーメッセージの和訳と食い違わないようにしてください。
+「## 和訳」は先に表示済みなので書かず、「{first}」から始めてください。説明はユーザーメッセージの和訳と食い違わないようにしてください。";
 
+/// スラッシュリーディングの見出し（web で表示・非表示を切り替えるときにも使う）。
+pub const SLASH_HEADING: &str = paper_reader_shared::SLASH_READING_HEADING;
+
+/// スラッシュリーディング（意味のまとまりごとに区切り、英語の語順のまま読む補助）。
+const SLASH: &str = "\
+## スラッシュリーディング
+英文を意味のまとまり（チャンク）ごとに「 / 」で区切って 1 行で示し、その下にチャンクごとの直訳を、英文の語順のまま「- **チャンク**：直訳」の箇条書きで示す。
+区切る位置の目安: 長い主部の後、前置詞句・to 不定詞・分詞（分詞構文）・関係詞節・接続詞で始まる節の前、カンマの後。1 チャンクは 2〜7 語ほどにし、冠詞と名詞、助動詞と動詞のように強く結びつく語の間では区切らない。";
+
+const SENTENCE: &str = "\
 ## 文構造
 主語・動詞・目的語・補語と、主な修飾関係を箇条書きで示す（例: 「- 主語: The model」）。
 
@@ -57,13 +68,20 @@ const SENTENCE: &str = "\
 ## 語句
 難しい語や専門用語を「- **英語**: 意味」の形で箇条書きにする。";
 
-/// システムプロンプト。
-pub fn system_prompt(mode: Mode) -> String {
-    let specific = match mode {
-        Mode::Word => WORD,
-        Mode::Sentence => SENTENCE,
-    };
-    format!("{COMMON}\n\n{specific}")
+/// システムプロンプト。`slash` なら英文の解説の先頭にスラッシュリーディングを入れる（単語では無視）。
+pub fn system_prompt(mode: Mode, slash: bool) -> String {
+    match mode {
+        Mode::Word => format!("{COMMON}\n\n{WORD}"),
+        Mode::Sentence => {
+            let first = if slash { SLASH_HEADING } else { "## 文構造" };
+            let intro = SENTENCE_INTRO.replace("{first}", first);
+            if slash {
+                format!("{COMMON}\n\n{intro}\n\n{SLASH}\n\n{SENTENCE}")
+            } else {
+                format!("{COMMON}\n\n{intro}\n\n{SENTENCE}")
+            }
+        }
+    }
 }
 
 /// 英文の和訳のシステムプロンプト。
@@ -188,15 +206,16 @@ mod tests {
             text: text.into(),
             context: context.into(),
             regenerate: false,
+            slash: false,
         }
     }
 
     #[test]
     fn system_prompt_has_sections() {
-        let w = system_prompt(Mode::Word);
+        let w = system_prompt(Mode::Word, false);
         assert!(w.contains("## 文脈での意味") && w.contains("## 品詞と用法"));
         assert!(!w.contains("## 和訳"));
-        let s = system_prompt(Mode::Sentence);
+        let s = system_prompt(Mode::Sentence, false);
         for h in ["## 文構造", "## 文法ポイント", "## 語句"] {
             assert!(s.contains(h), "{h}");
         }
@@ -278,10 +297,30 @@ mod tests {
             "{m}"
         );
         assert!(!m.contains("特になし"));
-        assert!(!system_prompt(Mode::Sentence).contains("特になし"));
+        assert!(!system_prompt(Mode::Sentence, false).contains("特になし"));
         // 単語のときは付けない
         let m = user_message(&req(Mode::Word, "model", ""), &notes, Some("モデル"));
         assert!(!m.contains("分詞構文") && !m.contains("和訳"));
-        assert!(system_prompt(Mode::Sentence).contains("### 項目名"));
+        assert!(system_prompt(Mode::Sentence, false).contains("### 項目名"));
+    }
+
+    #[test]
+    fn slash_reading_section() {
+        let off = system_prompt(Mode::Sentence, false);
+        assert!(!off.contains(SLASH_HEADING));
+        assert!(off.contains("「## 文構造」から始めて"));
+        let on = system_prompt(Mode::Sentence, true);
+        assert!(on.contains("「## スラッシュリーディング」から始めて"));
+        // スラッシュリーディングは文構造より前
+        let (a, b) = (
+            on.find("\n## スラッシュリーディング").unwrap(),
+            on.find("\n## 文構造").unwrap(),
+        );
+        assert!(a < b);
+        // 単語では付けない
+        assert_eq!(
+            system_prompt(Mode::Word, true),
+            system_prompt(Mode::Word, false)
+        );
     }
 }

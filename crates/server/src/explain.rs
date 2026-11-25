@@ -51,14 +51,34 @@ pub async fn post_explain(
     let cached = if req.regenerate {
         None
     } else {
-        match db::get_explanation(&state.db, &key).await {
-            Ok(hit) => hit,
-            Err(e) => {
-                // キャッシュが読めなくても生成はできる
-                tracing::warn!(error = %e, "explain cache read failed");
-                None
+        // 英文でスラッシュリーディングの有無だけが違う解説があれば、それを返す（LLM を待たせない）。
+        // web は設定に合わせて表示を切り替え、足りなければ「付けて解説し直す」を出す
+        let mut keys = vec![key.clone()];
+        if req.mode == Mode::Sentence {
+            keys.push(key_for(
+                &state,
+                &ExplainRequest {
+                    slash: !req.slash,
+                    ..req.clone()
+                },
+            ));
+        }
+        let mut hit = None;
+        for k in &keys {
+            match db::get_explanation(&state.db, k).await {
+                Ok(Some(h)) => {
+                    hit = Some(h);
+                    break;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    // キャッシュが読めなくても生成はできる
+                    tracing::warn!(error = %e, "explain cache read failed");
+                    break;
+                }
             }
         }
+        hit
     };
     match cached {
         Some((markdown, tags)) => {
@@ -133,8 +153,9 @@ pub fn warm_up(state: &AppState) {
         let sample = "We propose a simple method.";
         for system in [
             prompts::translation_system_prompt(),
-            prompts::system_prompt(Mode::Sentence),
-            prompts::system_prompt(Mode::Word),
+            prompts::system_prompt(Mode::Sentence, true),
+            prompts::system_prompt(Mode::Sentence, false),
+            prompts::system_prompt(Mode::Word, false),
         ] {
             let mut body =
                 chat_stream_body(&cfg.llm_model, &system, sample, 1, cfg.llm_disable_thinking);
@@ -191,7 +212,9 @@ pub fn validate(mut req: ExplainRequest) -> AppResult<ExplainRequest> {
 
 /// この解説のキャッシュキー。英文なら grammar_tags.yaml の内容のハッシュも含める。
 pub fn key_for(state: &AppState, req: &ExplainRequest) -> String {
+    // 英文は文法タグの定義と、スラッシュリーディングの有無もキーに含める
     let grammar = match req.mode {
+        Mode::Sentence if req.slash => format!("{}+slash", state.grammar().tags_hash),
         Mode::Sentence => state.grammar().tags_hash.clone(),
         Mode::Word => String::new(),
     };
@@ -324,7 +347,7 @@ async fn generate(
     };
     if req.mode == Mode::Word {
         let b = body(
-            prompts::system_prompt(Mode::Word),
+            prompts::system_prompt(Mode::Word, false),
             prompts::user_message(req, &[], None),
             MAX_TOKENS,
         );
@@ -367,7 +390,7 @@ async fn generate(
 
     // ③ 文構造・文法ポイント・語句
     let b = body(
-        prompts::system_prompt(Mode::Sentence),
+        prompts::system_prompt(Mode::Sentence, req.slash),
         prompts::user_message(req, &notes, Some(&translation.text)),
         MAX_TOKENS,
     );
@@ -571,6 +594,7 @@ mod tests {
             text: text.into(),
             context: context.into(),
             regenerate: false,
+            slash: false,
         }
     }
 

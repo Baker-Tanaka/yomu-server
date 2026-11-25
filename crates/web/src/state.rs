@@ -225,6 +225,8 @@ impl Default for Feedback {
 const SHOW_COURSE_KEY: &str = "paper-reader.show-course";
 /// 「カタカナの読みを表示する」設定の localStorage のキー
 const SHOW_KANA_KEY: &str = "paper-reader.show-kana";
+/// スラッシュリーディングを表示するかの設定を保存する localStorage のキー
+const SHOW_SLASH_KEY: &str = "paper-reader.show-slash";
 
 /// 履歴の読み込み状態。
 #[derive(Debug, Clone, Default)]
@@ -311,6 +313,8 @@ pub struct Shared {
     dict_ai_controller: Option<AbortController>,
     /// 設定: カタカナの読み（AI の推定）を表示する
     pub show_kana: bool,
+    /// 設定: 英文の解説にスラッシュリーディングを付けて表示する
+    pub show_slash: bool,
     pub words: Words,
     /// 単語帳が上限に近い（確かめる画面を出す）
     pub store_warning: Option<WordStoreStats>,
@@ -345,6 +349,7 @@ impl Shared {
         Self {
             show_course: dom::load_bool(SHOW_COURSE_KEY, true),
             show_kana: dom::load_bool(SHOW_KANA_KEY, true),
+            show_slash: dom::load_bool(SHOW_SLASH_KEY, true),
             words: Words {
                 stale: true,
                 prune_count: 1_000,
@@ -359,6 +364,11 @@ impl Shared {
     pub fn set_show_course(&mut self, on: bool) {
         self.show_course = on;
         dom::save_bool(SHOW_COURSE_KEY, on);
+    }
+
+    pub fn set_show_slash(&mut self, on: bool) {
+        self.show_slash = on;
+        dom::save_bool(SHOW_SLASH_KEY, on);
     }
 
     pub fn set_show_kana(&mut self, on: bool) {
@@ -804,6 +814,7 @@ pub fn start_explain(this: &SharedRef, ctx: &egui::Context, regenerate: bool) {
             context: clip_context(&sel.context, &sel.text, MAX_CONTEXT_CHARS),
             text: sel.text,
             regenerate,
+            slash: s.show_slash,
         };
         (req, s.explain.seq, signal)
     };

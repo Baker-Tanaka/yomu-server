@@ -38,6 +38,9 @@
 - `GET /api/papers` → `{ papers: [{ id, title, source_url, last_opened_at, open_count, word_count, sentence_count, cached, bookmarked }], cache: { papers, html_bytes, assets, asset_bytes } }`
   - 開いた論文の記録（paper_visits）。同じ論文の版違い（`2509.19480` と `2509.19480v1`）は 1 件にまとめる
 - `DELETE /api/papers?id=<論文 ID>&purge=<true|false>` → 204（版違いも含めて外す。付箋も消す。purge なら本文と図のキャッシュも消す。単語・英文の履歴は残す）
+- `GET /api/read-later` → `{ items: [{ id, title, authors, added_at }] }`（後で読む論文。後から積んだ順）
+- `PUT /api/read-later` body: `{ paper_id, title, authors }` → 204（一番上に積む。すでにあれば積み直す。版なしの arXiv ID で `read_later` に保存し、上限 200 件を超える追加は 400）
+- `DELETE /api/read-later?paper_id=<論文 ID>` → 204（後で読むから外す）
 - `PUT /api/bookmark` body: `{ paper_id, block, snippet }` → `{ block, snippet, updated_at }`（付箋を貼る。1 論文に 1 枚で、貼り直すと置き換える）
 - `DELETE /api/bookmark?paper_id=<論文 ID>` → 204（付箋をはがす）
   - 付箋は版なしの論文 ID で `paper_bookmarks` に保存する（版違いでも同じ付箋）。block は本文のブロック要素（段落・見出し・リスト項目など）の通し番号、

@@ -7,9 +7,9 @@ use eframe::egui;
 use paper_reader_shared::{
     DictResponse, ExplainRequest, ExplainTag, FeedbackContext, FeedbackDraft, FeedbackItem,
     FeedbackListResponse, FeedbackPreview, FeedbackSubmit, GrammarTagsResponse, HealthResponse,
-    HistoryEntry, HistoryRecord, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, SEARCH_PAGE_SIZE,
-    SearchItem, SearchSort, WordListResponse, WordNote, WordSort, WordStoreStats, WordUpsert,
-    clip_context, paper_url_from_input, sse_event,
+    HistoryEntry, HistoryRecord, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, ReadLaterItem,
+    SEARCH_PAGE_SIZE, SearchItem, SearchSort, WordListResponse, WordNote, WordSort, WordStoreStats,
+    WordUpsert, clip_context, paper_url_from_input, sse_event,
 };
 use web_sys::AbortController;
 
@@ -289,6 +289,40 @@ pub enum PapersStatus {
     Error(String),
 }
 
+/// 検索タブの中の切り替え。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SearchView {
+    /// 検索結果
+    #[default]
+    Results,
+    /// 後で読む論文
+    Later,
+}
+
+/// 後で読む論文。保存の正はサーバーで、操作は先に画面へ反映してから読み直して合わせる。
+#[derive(Debug, Clone, Default)]
+pub struct ReadLater {
+    /// 後から積んだ順
+    pub items: Vec<ReadLaterItem>,
+    /// 一度でも読み込めた
+    pub loaded: bool,
+    loading: bool,
+    /// 次に表示するときに読み直す
+    pub stale: bool,
+    /// 操作ごとに増える番号（操作の前に始めた読み込みの結果を捨てる）
+    seq: u64,
+    /// 読み込みの失敗
+    pub load_error: Option<String>,
+    /// 追加・削除の失敗
+    pub error: Option<String>,
+}
+
+impl ReadLater {
+    pub fn contains(&self, id: &str) -> bool {
+        self.items.iter().any(|i| i.id == id)
+    }
+}
+
 /// LLM の疎通状態。
 #[derive(Debug, Clone, Default)]
 pub enum HealthStatus {
@@ -337,6 +371,8 @@ pub struct Shared {
     /// 履歴の読み込みごとに増える番号（古い応答を捨てる）
     history_seq: u64,
     pub papers: PapersStatus,
+    pub read_later: ReadLater,
+    pub search_view: SearchView,
     /// 表示中の論文の付箋
     pub bookmark: Option<paper_reader_shared::Bookmark>,
     /// 付箋の操作の失敗・注意
@@ -365,6 +401,10 @@ impl Shared {
             },
             grammar_stale: true,
             papers_stale: true,
+            read_later: ReadLater {
+                stale: true,
+                ..ReadLater::default()
+            },
             ..Self::default()
         }
     }
@@ -970,6 +1010,7 @@ pub fn search(this: &SharedRef, ctx: &egui::Context, query: String, sort: Search
     let seq = {
         let mut s = this.borrow_mut();
         s.tab = Tab::Search;
+        s.search_view = SearchView::Results;
         let st = &mut s.search;
         st.seq += 1;
         st.query = query.clone();
@@ -1502,6 +1543,110 @@ pub fn refresh_papers(this: &SharedRef, ctx: &egui::Context) {
         };
         ctx.request_repaint();
     });
+}
+
+/// 後で読む論文を読み込む。
+pub fn refresh_read_later(this: &SharedRef, ctx: &egui::Context) {
+    let seq = {
+        let mut s = this.borrow_mut();
+        let r = &mut s.read_later;
+        if r.loading {
+            return;
+        }
+        r.stale = false;
+        r.loading = true;
+        r.seq
+    };
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::fetch_read_later().await;
+        {
+            let mut s = this.borrow_mut();
+            let r = &mut s.read_later;
+            r.loading = false;
+            if r.seq != seq {
+                // 読み込み中に追加・削除したので、読み直す
+                r.stale = true;
+            } else {
+                match result {
+                    Ok(resp) => {
+                        r.items = resp.items;
+                        r.loaded = true;
+                        r.load_error = None;
+                    }
+                    Err(e) => r.load_error = Some(e),
+                }
+            }
+        }
+        ctx.request_repaint();
+    });
+}
+
+/// 後で読むの一番上に積む。
+pub fn add_read_later(
+    this: &SharedRef,
+    ctx: &egui::Context,
+    req: paper_reader_shared::ReadLaterPut,
+) {
+    {
+        let mut s = this.borrow_mut();
+        let r = &mut s.read_later;
+        r.seq += 1;
+        r.error = None;
+        r.items.retain(|i| i.id != req.paper_id);
+        r.items.insert(
+            0,
+            ReadLaterItem {
+                id: req.paper_id.clone(),
+                title: req.title.clone(),
+                authors: req.authors.clone(),
+                added_at: (js_sys::Date::now() / 1000.0) as i64,
+            },
+        );
+    }
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::put_read_later(&req).await;
+        finish_read_later_change(
+            &this,
+            result.map_err(|e| format!("後で読むに追加できません: {e}")),
+        );
+        ctx.request_repaint();
+    });
+}
+
+/// 後で読むから外す。
+pub fn remove_read_later(this: &SharedRef, ctx: &egui::Context, id: String) {
+    {
+        let mut s = this.borrow_mut();
+        let r = &mut s.read_later;
+        r.seq += 1;
+        r.error = None;
+        r.items.retain(|i| i.id != id);
+    }
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::delete_read_later(&id).await;
+        finish_read_later_change(
+            &this,
+            result.map_err(|e| format!("後で読むから外せません: {e}")),
+        );
+        ctx.request_repaint();
+    });
+}
+
+/// 追加・削除のあとは、成否にかかわらずサーバーの内容に合わせる。
+fn finish_read_later_change(this: &SharedRef, result: Result<(), String>) {
+    let mut s = this.borrow_mut();
+    let r = &mut s.read_later;
+    r.seq += 1;
+    r.stale = true;
+    if let Err(e) = result {
+        r.error = Some(e);
+    }
 }
 
 /// 見た論文から外す（`purge` なら保存した本文と図も消す）。

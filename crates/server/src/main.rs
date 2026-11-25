@@ -14,6 +14,7 @@ mod llm;
 mod paper;
 mod papers;
 mod prompts;
+mod read_later;
 mod sanitize;
 mod search;
 mod static_files;
@@ -174,6 +175,12 @@ fn router(state: AppState, config: &Config) -> Router {
         .route(
             "/bookmark",
             put(bookmark::put_bookmark).delete(bookmark::delete_bookmark),
+        )
+        .route(
+            "/read-later",
+            get(read_later::get_list)
+                .put(read_later::put_item)
+                .delete(read_later::delete_item),
         )
         .route("/dict", get(dict::get_dict))
         .route("/dict/ai", post(words::post_dict_ai))

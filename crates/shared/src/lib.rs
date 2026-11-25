@@ -81,6 +81,41 @@ pub struct BookmarkQuery {
 /// 付箋に残す書き出しの最大文字数
 pub const MAX_BOOKMARK_SNIPPET_CHARS: usize = 80;
 
+/// 「後で読む」に残せる論文の数の上限
+pub const MAX_READ_LATER: i64 = 200;
+
+/// 後で読む論文 1 件。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReadLaterItem {
+    /// 版なしの論文 ID
+    pub id: String,
+    pub title: String,
+    pub authors: Vec<String>,
+    /// 積んだ時刻（UNIX 秒）
+    pub added_at: i64,
+}
+
+/// `GET /api/read-later` の応答（後から積んだ順）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReadLaterResponse {
+    pub items: Vec<ReadLaterItem>,
+}
+
+/// `PUT /api/read-later` の本文。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadLaterPut {
+    pub paper_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub authors: Vec<String>,
+}
+
+/// `DELETE /api/read-later?paper_id=` のクエリ。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadLaterQuery {
+    pub paper_id: String,
+}
+
 /// 見た論文 1 件（`GET /api/papers`）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecentPaper {

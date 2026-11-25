@@ -162,6 +162,26 @@ pub async fn delete_bookmark(paper_id: &str) -> Result<(), String> {
     send_without_body("DELETE", &format!("/api/bookmark?paper_id={encoded}"), None).await
 }
 
+pub async fn fetch_read_later() -> Result<paper_reader_shared::ReadLaterResponse, String> {
+    get_json("/api/read-later").await
+}
+
+/// 後で読むに積む（すでにあれば一番上に移す）。
+pub async fn put_read_later(req: &paper_reader_shared::ReadLaterPut) -> Result<(), String> {
+    let body = serde_json::to_string(req).map_err(|e| e.to_string())?;
+    send_without_body("PUT", "/api/read-later", Some(&body)).await
+}
+
+pub async fn delete_read_later(paper_id: &str) -> Result<(), String> {
+    let encoded = String::from(js_sys::encode_uri_component(paper_id));
+    send_without_body(
+        "DELETE",
+        &format!("/api/read-later?paper_id={encoded}"),
+        None,
+    )
+    .await
+}
+
 pub async fn fetch_grammar_tags() -> Result<GrammarTagsResponse, String> {
     get_json("/api/grammar-tags").await
 }

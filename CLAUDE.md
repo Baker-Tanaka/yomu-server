@@ -46,6 +46,9 @@ GET  /                          … trunk build の成果物（dist/）を配信
 GET  /api/paper?url=<arxiv URL> … 論文を取得し、無害化した本文 HTML とメタ情報を JSON で返す
 GET  /api/papers                … 見た論文の一覧（最後に開いた順、版違いはまとめる）とキャッシュの使用量
 DELETE /api/papers?id=&purge=   … 見た論文から外す（purge なら保存した本文と図も消す）
+GET  /api/read-later            … 後で読む論文の一覧（後から積んだ順）
+PUT  /api/read-later            … 後で読むの一番上に積む。body: { paper_id, title, authors }。版なしの ID で 1 論文 1 件
+DELETE /api/read-later?paper_id= … 後で読むから外す
 PUT  /api/bookmark              … 論文に付箋（どこまで読んだか）を貼る。body: { paper_id, block, snippet }。版なしの ID で 1 論文 1 枚
 DELETE /api/bookmark?paper_id=  … 付箋をはがす（付箋は /api/paper の応答にも含める）
 GET  /api/paper-asset?url=      … 論文の図をサーバー経由で配信し SQLite に保存する（ALLOWED_HOSTS の https で /html/ 以下の画像のみ）

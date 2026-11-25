@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use paper_reader_shared::{
-    Bookmark, HistoryRecord, Mode, PaperCacheStats, PaperResponse, RecentPaper,
+    Bookmark, HistoryRecord, Mode, PaperCacheStats, PaperResponse, ReadLaterItem, RecentPaper,
 };
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
@@ -322,6 +322,63 @@ pub async fn put_bookmark(
 
 pub async fn delete_bookmark(pool: &SqlitePool, base: &str) -> sqlx::Result<bool> {
     let n = sqlx::query("DELETE FROM paper_bookmarks WHERE paper_id = ?")
+        .bind(base)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    Ok(n > 0)
+}
+
+/// 後で読む論文（後から積んだ順）。
+pub async fn list_read_later(pool: &SqlitePool) -> sqlx::Result<Vec<ReadLaterItem>> {
+    let rows: Vec<(String, String, String, i64)> = sqlx::query_as(
+        "SELECT paper_id, title, authors, added_at FROM read_later ORDER BY seq DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, title, authors, added_at)| ReadLaterItem {
+            id,
+            title,
+            authors: serde_json::from_str(&authors).unwrap_or_default(),
+            added_at,
+        })
+        .collect())
+}
+
+/// 後で読む論文を一番上に積む（すでにあれば積み直す）。
+/// 新しい論文で、すでに `max` 件あれば積まずに false。
+pub async fn put_read_later(
+    pool: &SqlitePool,
+    base: &str,
+    title: &str,
+    authors: &[String],
+    max: i64,
+) -> sqlx::Result<bool> {
+    let authors = serde_json::to_string(authors).unwrap_or_else(|_| "[]".into());
+    // 件数の確認と追加を 1 つの文で行い、同時の要求でも上限を超えないようにする
+    let n = sqlx::query(
+        "INSERT INTO read_later (paper_id, title, authors, added_at, seq)
+         SELECT ?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(seq), 0) + 1 FROM read_later)
+         WHERE EXISTS (SELECT 1 FROM read_later WHERE paper_id = ?1)
+            OR (SELECT COUNT(*) FROM read_later) < ?5
+         ON CONFLICT(paper_id) DO UPDATE SET title = excluded.title, authors = excluded.authors,
+           added_at = excluded.added_at, seq = excluded.seq",
+    )
+    .bind(base)
+    .bind(title)
+    .bind(authors)
+    .bind(now_secs())
+    .bind(max)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(n > 0)
+}
+
+pub async fn delete_read_later(pool: &SqlitePool, base: &str) -> sqlx::Result<bool> {
+    let n = sqlx::query("DELETE FROM read_later WHERE paper_id = ?")
         .bind(base)
         .execute(pool)
         .await?

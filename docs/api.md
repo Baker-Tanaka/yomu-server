@@ -2,7 +2,7 @@
 
 型は [crates/shared](../crates/shared) に定義しています。
 
-- `GET /api/paper?url=<arXiv URL>` → `{ id, title, html, source_url, bookmark? }`（bookmark は付箋 `{ block, snippet, updated_at }`）
+- `GET /api/paper?url=<arXiv URL>` → `{ id, title, html, source_url, bookmark? }`（bookmark は付箋 `{ block, offset, snippet, updated_at }`）
   - abs / pdf / html の URL から論文 ID を取り出し、`https://arxiv.org/html/<id>` を取得します
   - HTML 版が無い場合は 404 と `{ "error": "..." }`
   - 結果は SQLite の `paper_cache` に論文 ID をキーとして保存します
@@ -41,9 +41,10 @@
 - `GET /api/read-later` → `{ items: [{ id, title, authors, added_at }] }`（後で読む論文。後から積んだ順）
 - `PUT /api/read-later` body: `{ paper_id, title, authors }` → 204（一番上に積む。すでにあれば積み直す。版なしの arXiv ID で `read_later` に保存し、上限 200 件を超える追加は 400）
 - `DELETE /api/read-later?paper_id=<論文 ID>` → 204（後で読むから外す）
-- `PUT /api/bookmark` body: `{ paper_id, block, snippet }` → `{ block, snippet, updated_at }`（付箋を貼る。1 論文に 1 枚で、貼り直すと置き換える）
+- `PUT /api/bookmark` body: `{ paper_id, block, offset, snippet }` → `{ block, offset, snippet, updated_at }`（付箋を貼る。1 論文に 1 枚で、貼り直すと置き換える）
 - `DELETE /api/bookmark?paper_id=<論文 ID>` → 204（付箋をはがす）
   - 付箋は版なしの論文 ID で `paper_bookmarks` に保存する（版違いでも同じ付箋）。block は本文のブロック要素（段落・見出し・リスト項目など）の通し番号、
+    offset はそのブロックの本文の先頭から数えた文字の位置（UTF-16）で、画面はその文字がある行に印を付ける（以前の付箋は 0）。
     snippet はその書き出し（80 文字まで）。番号がずれたら書き出しで探し直す
 - `GET /api/paper-asset?url=<図の URL>` → 画像
   - `/api/paper` が返す HTML の `<img src>` はこの経路に書き換えてある。初回だけ arXiv から取得して SQLite（paper_assets）に保存する

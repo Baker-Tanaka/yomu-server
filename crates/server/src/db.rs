@@ -282,13 +282,15 @@ pub async fn delete_visit(pool: &SqlitePool, id: &str, purge: bool) -> sqlx::Res
 
 /// 論文の付箋（`base` は版なしの ID）。
 pub async fn get_bookmark(pool: &SqlitePool, base: &str) -> sqlx::Result<Option<Bookmark>> {
-    let row: Option<(i64, String, i64)> =
-        sqlx::query_as("SELECT block, snippet, updated_at FROM paper_bookmarks WHERE paper_id = ?")
-            .bind(base)
-            .fetch_optional(pool)
-            .await?;
-    Ok(row.map(|(block, snippet, updated_at)| Bookmark {
+    let row: Option<(i64, i64, String, i64)> = sqlx::query_as(
+        "SELECT block, char_offset, snippet, updated_at FROM paper_bookmarks WHERE paper_id = ?",
+    )
+    .bind(base)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(block, offset, snippet, updated_at)| Bookmark {
         block: u32::try_from(block).unwrap_or(0),
+        offset: u32::try_from(offset).unwrap_or(0),
         snippet,
         updated_at,
     }))
@@ -299,22 +301,27 @@ pub async fn put_bookmark(
     pool: &SqlitePool,
     base: &str,
     block: u32,
+    offset: u32,
     snippet: &str,
 ) -> sqlx::Result<Bookmark> {
     let now = now_secs();
     sqlx::query(
-        "INSERT INTO paper_bookmarks (paper_id, block, snippet, updated_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT(paper_id) DO UPDATE SET block = excluded.block, snippet = excluded.snippet,
+        "INSERT INTO paper_bookmarks (paper_id, block, char_offset, snippet, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(paper_id) DO UPDATE SET block = excluded.block,
+           char_offset = excluded.char_offset, snippet = excluded.snippet,
            updated_at = excluded.updated_at",
     )
     .bind(base)
     .bind(i64::from(block))
+    .bind(i64::from(offset))
     .bind(snippet)
     .bind(now)
     .execute(pool)
     .await?;
     Ok(Bookmark {
         block,
+        offset,
         snippet: snippet.to_string(),
         updated_at: now,
     })

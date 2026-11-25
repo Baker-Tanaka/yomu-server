@@ -58,10 +58,14 @@ pub struct PaperResponse {
 }
 
 /// 付箋（どこまで読んだか）。本文のブロック要素（段落・見出し・リスト項目など）の通し番号と、
-/// その書き出し（版が変わって番号がずれたときに探し直す手がかり）。
+/// その中の文字の位置（その文字がある行に付ける）、ブロックの書き出し（版が変わって番号がずれたときに
+/// 探し直す手がかり）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Bookmark {
     pub block: u32,
+    /// ブロックの本文の先頭から数えた文字の位置（UTF-16）
+    #[serde(default)]
+    pub offset: u32,
     pub snippet: String,
     /// 貼った時刻（UNIX 秒）
     pub updated_at: i64,
@@ -72,6 +76,8 @@ pub struct Bookmark {
 pub struct BookmarkPut {
     pub paper_id: String,
     pub block: u32,
+    #[serde(default)]
+    pub offset: u32,
     pub snippet: String,
 }
 

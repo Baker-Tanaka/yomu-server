@@ -592,18 +592,27 @@ body.resizing #paper, body.resizing #explain-pane {
 }
 #cite-peek button.cite-close { border: none; padding: 0.3em 0.6em; color: var(--muted); }
 
-/* 付箋（どこまで読んだか）。段落の先頭のアイコンと、本文の下線で位置を示す。
+/* 付箋（どこまで読んだか）。読んだ行を、下線と行の左のアイコンで示す（位置と大きさは dom.rs が指定する）。
    ライト・ダークのどちらでも読める琥珀色 */
-#paper .pr-bookmark {
+#paper .pr-bookmark { position: relative; }
+#paper .pr-bookmark-line {
+  position: absolute;
+  display: block;
+  box-sizing: content-box;
+  /* 本文の選択やタップのじゃまをしない */
+  pointer-events: none;
+  background: rgba(245, 158, 11, 0.12);
+  border-bottom: 2px solid #e08a00;
   scroll-margin-top: 1.2em;
-  text-decoration: underline;
-  text-decoration-color: #e08a00;
-  text-decoration-thickness: 2px;
-  text-underline-offset: 0.3em;
 }
-#paper .pr-bookmark::before {
+#paper .pr-bookmark-line::before {
   content: "📌";
-  /* inline-block にするとアイコンには下線が付かない */
-  display: inline-block;
-  margin-right: 0.35em;
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-right: 1px;
+  font-size: 12px;
+  line-height: 1;
+  text-indent: 0;
 }

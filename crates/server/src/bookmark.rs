@@ -18,6 +18,8 @@ use crate::error::{AppError, AppResult};
 
 /// 本文のブロック要素の番号の上限（大きな論文でも数千程度）
 const MAX_BLOCK: u32 = 1_000_000;
+/// ブロックの中の文字の位置の上限（長い段落でも数万程度）
+const MAX_OFFSET: u32 = 1_000_000;
 
 pub async fn put_bookmark(
     State(state): State<AppState>,
@@ -26,11 +28,11 @@ pub async fn put_bookmark(
     let Json(req) =
         body.map_err(|e| AppError::BadRequest(format!("リクエストを解釈できません: {e}")))?;
     let base = valid_base_id(&req.paper_id)?;
-    if req.block > MAX_BLOCK {
+    if req.block > MAX_BLOCK || req.offset > MAX_OFFSET {
         return Err(AppError::BadRequest("付箋の位置が不正です".into()));
     }
     let snippet = clean_snippet(&req.snippet);
-    let bookmark = db::put_bookmark(&state.db, base, req.block, &snippet)
+    let bookmark = db::put_bookmark(&state.db, base, req.block, req.offset, &snippet)
         .await
         .map_err(|e| AppError::Internal(e.into()))?;
     Ok(Json(bookmark))
@@ -82,6 +84,29 @@ mod tests {
         assert!(valid_base_id("").is_err());
         assert!(valid_base_id("../etc/passwd%").is_err());
         assert!(valid_base_id("a b").is_err());
+    }
+
+    #[tokio::test]
+    async fn stores_the_line_position() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        for offset in [120, 480] {
+            db::put_bookmark(&pool, "2509.19480", 3, offset, "We propose")
+                .await
+                .unwrap();
+            let b = db::get_bookmark(&pool, "2509.19480")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                (b.block, b.offset, b.snippet.as_str()),
+                (3, offset, "We propose")
+            );
+        }
     }
 
     #[test]

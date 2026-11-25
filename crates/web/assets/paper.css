@@ -104,9 +104,17 @@ html, body {
   height: 100dvh;
 }
 
-#paper {
+/* 左（スマホでは上）の列: 直近の単語の 1 行と、本文 */
+#paper-column {
   flex: 0 0 var(--paper-size, 60%);
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#paper {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   box-sizing: border-box;
   padding: 2rem 2.5rem 6rem;
@@ -124,6 +132,48 @@ html, body {
   background: var(--scroll);
   border-radius: 10px;
   border: 3px solid var(--paper-bg);
+}
+
+/* 直近に引いた単語のメモ。1 行に並べ、横スクロールで前の語を見る */
+#recent-words {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  padding: 6px 12px;
+  background: var(--pane-bg);
+  border-bottom: 1px solid var(--rule);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  white-space: nowrap;
+}
+#recent-words::-webkit-scrollbar { display: none; }
+#recent-words[hidden] { display: none; }
+#recent-words .recent-label { flex: none; font-size: 11.5px; color: var(--muted); }
+#recent-words button {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font: inherit;
+  color: var(--paper-fg);
+  background: var(--paper-bg);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+#recent-words button.active { background: var(--accent-soft); border-color: var(--accent); }
+#recent-words .recent-word { font-size: 13px; font-weight: 600; color: var(--heading); }
+#recent-words button.active .recent-word { color: var(--accent); }
+#recent-words .recent-meaning {
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 #explain-pane {
@@ -456,9 +506,19 @@ body.resizing #paper, body.resizing #explain-pane {
     touch-action: manipulation;
   }
   #layout { flex-direction: column; }
-  #paper {
+  #paper-column {
     flex: 1 1 auto;
     min-height: 0;
+  }
+  /* 画面のいちばん上になるので、ノッチ・Dynamic Island を避ける */
+  #recent-words {
+    padding: calc(env(safe-area-inset-top) + 6px)
+      calc(env(safe-area-inset-right) + 12px)
+      6px
+      calc(env(safe-area-inset-left) + 12px);
+  }
+  #recent-words button { padding: 6px 10px; }
+  #paper {
     padding: calc(env(safe-area-inset-top) + 14px)
       calc(env(safe-area-inset-right) + 18px)
       28px
@@ -468,6 +528,7 @@ body.resizing #paper, body.resizing #explain-pane {
     -webkit-overflow-scrolling: touch;
   }
   #paper > * { max-width: none; }
+  #recent-words:not([hidden]) + #paper { padding-top: 14px; }
 
   /* シートのつまみ（上辺の角を丸め、中央に持ち手を出す） */
   #splitter {

@@ -42,7 +42,7 @@ impl RecentWords {
         Self { items }
     }
 
-    pub fn items(&self) -> impl Iterator<Item = &RecentWord> {
+    pub fn items(&self) -> impl Iterator<Item = &RecentWord> + Clone {
         self.items.iter()
     }
 

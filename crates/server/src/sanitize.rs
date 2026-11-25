@@ -16,7 +16,18 @@ pub struct Extracted {
 }
 
 /// アプリ側の DOM と衝突させないために論文側で使わせない id。
-const RESERVED_IDS: &[&str] = &["paper", "egui_canvas", "app", "layout", "explain-pane"];
+const RESERVED_IDS: &[&str] = &[
+    "paper",
+    "paper-column",
+    "recent-words",
+    "egui_canvas",
+    "app",
+    "layout",
+    "splitter",
+    "explain-pane",
+    "search-input",
+    "cite-peek",
+];
 
 /// MathML の要素（ammonia は名前空間を検証したうえで許可する）。
 const MATHML_TAGS: &[&str] = &[

@@ -12,6 +12,9 @@ enum WordAction {
     Edit(WordNote),
 }
 
+/// 絞り込みの欄の右に並び順の切り替えを置ける最小の幅
+const SORT_BESIDE_MIN_WIDTH: f32 = 430.0;
+
 /// 単語帳タブ。
 pub fn words_tab(shared: &SharedRef, ui: &mut egui::Ui) {
     let p = theme::palette(ui.ctx());
@@ -25,9 +28,22 @@ pub fn words_tab(shared: &SharedRef, ui: &mut egui::Ui) {
         let mut s = shared.borrow_mut();
         let w = &mut s.words;
         let mut changed = false;
-        ui.horizontal(|ui| {
+        // 狭い画面では、並び順の切り替えが右にはみ出さないよう 2 行に分ける
+        let narrow = ui.available_width() < SORT_BESIDE_MIN_WIDTH;
+        let layout = if narrow {
+            egui::Layout::top_down(egui::Align::Min)
+        } else {
+            egui::Layout::left_to_right(egui::Align::Center)
+        };
+        let size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+        ui.allocate_ui_with_layout(size, layout, |ui| {
+            let width = if narrow {
+                ui.available_width()
+            } else {
+                ui.available_width() - 210.0
+            };
             let edit = ui.add_sized(
-                [(ui.available_width() - 190.0).max(120.0), 30.0],
+                [width, 30.0],
                 egui::TextEdit::singleline(&mut w.query)
                     .hint_text("単語を絞り込む（前方一致）")
                     .margin(Margin::symmetric(8, 6)),
@@ -280,37 +296,47 @@ fn word_form(shared: &SharedRef, ui: &mut egui::Ui, p: &Palette, busy: bool) {
 fn word_row(ui: &mut egui::Ui, p: &Palette, item: &WordNote, selected: bool) -> Option<WordAction> {
     let mut action = None;
     theme::card(ui, |ui| {
-        ui.horizontal(|ui| {
-            let mut on = selected;
-            if ui.checkbox(&mut on, "").changed() {
-                action = Some(WordAction::Toggle(item.word.clone(), on));
-            }
-            ui.label(
-                RichText::new(&item.word)
-                    .size(16.5)
-                    .strong()
-                    .color(p.strong),
-            );
-            if let Some(kana) = &item.kana {
-                ui.label(RichText::new(kana).size(13.0).color(p.weak));
-            }
-            if item.is_user() {
-                theme::chip(ui, "自分で登録", p.accent, p.accent_soft);
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
+        let edit_or_toggle = egui::Sides::new().shrink_left().truncate().show(
+            ui,
+            |ui| {
+                let mut on = selected;
+                let toggled = ui
+                    .checkbox(&mut on, "")
+                    .changed()
+                    .then(|| WordAction::Toggle(item.word.clone(), on));
+                ui.label(
+                    RichText::new(&item.word)
+                        .size(16.5)
+                        .strong()
+                        .color(p.strong),
+                );
+                toggled
+            },
+            |ui| {
+                let edit = ui
                     .add(egui::Button::new(RichText::new("編集").size(12.5)).frame(false))
                     .clicked()
-                {
-                    action = Some(WordAction::Edit(item.clone()));
-                }
+                    .then(|| WordAction::Edit(item.clone()));
                 ui.label(
                     RichText::new(format!("{} 回", item.lookup_count))
                         .size(12.0)
                         .color(p.weak),
                 );
+                edit
+            },
+        );
+        action = edit_or_toggle.0.or(edit_or_toggle.1);
+        // 読みは長くなるので、見出しの行とは分ける（同じ行だと右のボタンに重なる）
+        if item.kana.is_some() || item.is_user() {
+            ui.horizontal_wrapped(|ui| {
+                if let Some(kana) = &item.kana {
+                    ui.label(RichText::new(kana).size(13.0).color(p.weak));
+                }
+                if item.is_user() {
+                    theme::chip(ui, "自分で登録", p.accent, p.accent_soft);
+                }
             });
-        });
+        }
         let (text, tag) = if !item.meanings.is_empty() {
             (
                 item.meanings.join("；"),

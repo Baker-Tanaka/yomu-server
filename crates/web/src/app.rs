@@ -22,6 +22,11 @@ use crate::state::{
 };
 use crate::theme::{self, Palette};
 
+/// タブの余白を詰める幅（これより狭いと、いつもの余白では 5 つのタブが入らない）
+const NARROW_TABS_WIDTH: f32 = 340.0;
+/// ヘッダーの副題（for arXiv）を出すのに要る、題名の右の残り幅
+const SUBTITLE_MIN_WIDTH: f32 = 56.0;
+
 pub struct PaperReaderApp {
     shared: SharedRef,
     input: String,
@@ -92,7 +97,8 @@ impl PaperReaderApp {
     fn header(&mut self, ui: &mut egui::Ui) {
         let p = theme::palette(ui.ctx());
         let mobile = self.is_mobile();
-        ui.horizontal(|ui| {
+        // 右の操作を先に置き、題名は残りの幅に収める（狭い画面で重ならないように）
+        let title = |ui: &mut egui::Ui| {
             logo(ui, &p);
             ui.label(
                 RichText::new("論文リーダー")
@@ -100,11 +106,19 @@ impl PaperReaderApp {
                     .strong()
                     .color(p.strong),
             );
-            if !mobile {
+            // 中途半端に省略するくらいなら出さない
+            if !mobile && ui.available_width() >= SUBTITLE_MIN_WIDTH {
                 ui.label(RichText::new("for arXiv").size(11.5).color(p.weak));
             }
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        };
+        egui::Sides::new()
+            .shrink_left()
+            .truncate()
+            .spacing(4.0)
+            .show(ui, title, |ui| {
+                if mobile {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                }
                 let (label, next, tip) = match self.theme {
                     dom::ThemeChoice::System => (
                         "◐ 自動",
@@ -149,7 +163,6 @@ impl PaperReaderApp {
                 }
                 self.llm_status(ui, &p);
             });
-        });
     }
 
     /// 設定（⚙）。
@@ -409,36 +422,41 @@ impl PaperReaderApp {
             )
         };
         let mut expand = false;
-        ui.horizontal(|ui| {
-            let r = match &dict {
-                DictStatus::Loaded(r) => Some(r),
-                _ => None,
-            };
-            let head = r
-                .map(|r| r.headword.as_deref().unwrap_or(&r.query))
-                .unwrap_or(&word);
-            ui.label(RichText::new(head).size(18.0).strong().color(p.strong));
-            speak_button(ui, p, head);
-            if let Some(kana) = r
-                .filter(|_| show_kana)
-                .and_then(|r| r.note.as_ref())
-                .and_then(|n| n.kana.as_deref())
-            {
-                ui.label(RichText::new(kana).size(13.5).color(p.weak));
-            }
-            if let Some((head, meanings)) = r.map(entry_meanings) {
-                let summary = pos_summary(head, meanings);
-                if !summary.is_empty() {
-                    let text = summary
-                        .iter()
-                        .map(|pos| pos.short())
-                        .collect::<Vec<_>>()
-                        .join("・");
-                    ui.label(RichText::new(text).size(13.0).color(p.word))
-                        .on_hover_text(POS_HINT);
+        let r = match &dict {
+            DictStatus::Loaded(r) => Some(r),
+            _ => None,
+        };
+        let head = r
+            .map(|r| r.headword.as_deref().unwrap_or(&r.query))
+            .unwrap_or(&word);
+        // 右のボタンを先に置き、見出し・読み・品詞は残りの幅で省略する（重ならないように）
+        egui::Sides::new().shrink_left().truncate().show(
+            ui,
+            |ui| {
+                ui.label(RichText::new(head).size(18.0).strong().color(p.strong));
+                speak_button(ui, p, head);
+                // 品詞は短いので先に出し、長くなる読みを最後にする
+                if let Some((head, meanings)) = r.map(entry_meanings) {
+                    let summary = pos_summary(head, meanings);
+                    if !summary.is_empty() {
+                        let text = summary
+                            .iter()
+                            .map(|pos| pos.short())
+                            .collect::<Vec<_>>()
+                            .join("・");
+                        ui.label(RichText::new(text).size(13.0).color(p.word))
+                            .on_hover_text(POS_HINT);
+                    }
                 }
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(kana) = r
+                    .filter(|_| show_kana)
+                    .and_then(|r| r.note.as_ref())
+                    .and_then(|n| n.kana.as_deref())
+                {
+                    ui.label(RichText::new(kana).size(13.5).color(p.weak));
+                }
+            },
+            |ui| {
                 expand = theme::subtle_button(ui, "詳しく").clicked();
                 if r.is_some_and(|r| {
                     r.headword.is_none()
@@ -448,8 +466,8 @@ impl PaperReaderApp {
                 }) {
                     theme::chip(ui, "AI 訳", p.sentence, p.sentence_soft);
                 }
-            });
-        });
+            },
+        );
         let (text, weak) = match (&dict, &ai) {
             (DictStatus::Loading, _) => ("辞書を検索中…".to_string(), true),
             (DictStatus::Error(e), _) => (format!("辞書: {e}"), true),
@@ -649,17 +667,25 @@ impl PaperReaderApp {
                 format!("検索 {}", s.search.items.len())
             }
         };
-        let changed = theme::segmented(
-            ui,
-            &mut tab,
-            &[
-                (Tab::Explain, "解説"),
-                (Tab::Search, search_label.as_str()),
-                (Tab::History, "履歴"),
-                (Tab::Grammar, "文法項目"),
-                (Tab::Words, "単語帳"),
-            ],
-        );
+        let changed = ui
+            .scope(|ui| {
+                // 狭い画面（iPhone の拡大表示など）では、タブが右にはみ出さないよう余白を詰める
+                if ui.available_width() < NARROW_TABS_WIDTH {
+                    ui.spacing_mut().button_padding.x = 4.0;
+                }
+                theme::segmented(
+                    ui,
+                    &mut tab,
+                    &[
+                        (Tab::Explain, "解説"),
+                        (Tab::Search, search_label.as_str()),
+                        (Tab::History, "履歴"),
+                        (Tab::Grammar, "文法項目"),
+                        (Tab::Words, "単語帳"),
+                    ],
+                )
+            })
+            .inner;
         if changed {
             let mut s = self.shared.borrow_mut();
             s.tab = tab;
@@ -1144,22 +1170,21 @@ impl PaperReaderApp {
         };
 
         let mut new_order = order;
-        ui.horizontal(|ui| {
-            theme::segmented(
-                ui,
-                &mut new_order,
-                &[
-                    (GrammarOrder::Category, "カテゴリ順"),
-                    (GrammarOrder::Frequency, "よく出る順"),
-                ],
-            );
-            let total: u64 = g.tags.iter().map(|t| t.count).sum();
-            ui.label(
-                RichText::new(format!("解説した英文での出現 計 {total} 回"))
-                    .size(12.0)
-                    .color(p.weak),
-            );
-        });
+        theme::segmented(
+            ui,
+            &mut new_order,
+            &[
+                (GrammarOrder::Category, "カテゴリ順"),
+                (GrammarOrder::Frequency, "よく出る順"),
+            ],
+        );
+        // 切り替えの横に並べると、狭い画面で右にはみ出す
+        let total: u64 = g.tags.iter().map(|t| t.count).sum();
+        ui.label(
+            RichText::new(format!("解説した英文での出現 計 {total} 回"))
+                .size(12.0)
+                .color(p.weak),
+        );
         if new_order != order {
             self.shared.borrow_mut().grammar_order = new_order;
         }
@@ -1513,13 +1538,14 @@ impl eframe::App for PaperReaderApp {
                             .is_some_and(|sel| sel.mode == Mode::Word),
                     )
                 };
-                // 直近に引いた単語のメモ（1 行。横にスワイプで前の語）
-                self.recent_strip(ui, &p);
-                // スマホでシートを下げているときに単語を選んだら、見出しの代わりに小さく和訳を出す
+                // スマホでシートを下げているときに単語を選んだら、見出しの代わりに小さく和訳を出す。
+                // ほかは何も出さない（高さが足りず、和訳が画面の外に出たり、下の部品が半分だけ見えたりするため）
                 if mobile && word_selected && dom::sheet() == dom::Sheet::Peek {
                     self.word_strip(ui, &p);
-                    ui.add_space(8.0);
+                    return;
                 }
+                // 直近に引いた単語のメモ（1 行。横にスワイプで前の語）
+                self.recent_strip(ui, &p);
                 self.header(ui);
                 ui.add_space(if mobile { 8.0 } else { 12.0 });
                 // 論文を読んでいる間は入力欄を隠す（読むモード）。「検索」タブで出す（検索モード）
@@ -2308,7 +2334,10 @@ fn dict_view(
                 ui.label(RichText::new(headword).size(21.0).strong().color(p.strong));
                 speak_button(ui, p, headword);
                 if let Some((kana, source)) = kana {
-                    let resp = ui.label(RichText::new(kana).size(15.0).color(p.text));
+                    // 語の途中で折り返さず、入らなければまとめて次の行に送る
+                    let resp = ui.add(
+                        egui::Label::new(RichText::new(kana).size(15.0).color(p.text)).extend(),
+                    );
                     if source == Some(WordSource::Llm) {
                         resp.on_hover_text(
                             "読みはローカル LLM の推定です（正確な発音とは異なることがあります）",

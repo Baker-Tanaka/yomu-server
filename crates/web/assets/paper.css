@@ -163,6 +163,28 @@ body.resizing #paper, body.resizing #explain-pane {
   outline: none;
 }
 
+/* 検索欄。長押しのコピー・ペーストが使えるよう、canvas の上に HTML の入力欄を重ねる
+   （位置と大きさは search_input.rs が egui のレイアウトに合わせて指定する） */
+#search-input {
+  display: none;
+  position: absolute;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--paper-bg);
+  color: var(--paper-fg);
+  /* 16px より小さいと、iPhone は入力するときに画面を拡大する */
+  font: 16px -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  text-overflow: ellipsis;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+#search-input::placeholder { color: var(--placeholder); }
+#search-input:focus { border-color: var(--accent); }
+
 /* 本文 */
 #paper > * {
   max-width: 46rem;

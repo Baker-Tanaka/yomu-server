@@ -21,7 +21,7 @@ web-sys = { version = "0.3.107", features = [
   "AbortController", "AbortSignal", "ReadableStream", "ReadableStreamDefaultReader",
   "TextDecoder", "TextDecodeOptions",
   "KeyboardEvent", "PointerEvent", "MouseEvent", "Storage", "DomRect", "DomTokenList",
-  "CssStyleDeclaration", "MediaQueryList",
+  "CssStyleDeclaration", "MediaQueryList", "HtmlInputElement",
   "Text", "CharacterData", "NodeList", "ScrollIntoViewOptions", "ScrollBehavior", "ScrollLogicalPosition",
   "Navigator", "SpeechSynthesis", "SpeechSynthesisUtterance",
 ] }

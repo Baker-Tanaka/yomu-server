@@ -118,7 +118,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::grammar::{GrammarPaths, tests::sample};
+    use crate::grammar::tests::sample;
 
     #[test]
     fn body_shape() {
@@ -165,13 +165,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "LLM ランタイムが必要"]
     async fn tagging_examples() {
-        let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
-        let g = GrammarData::load(&GrammarPaths {
-            tags: data.join("grammar_tags.yaml"),
-            map: data.join("grammar_map.local.yaml"),
-            template: data.join("grammar_map.template.yaml"),
-        })
-        .unwrap();
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/grammar_tags.yaml");
+        let g = GrammarData::load(&path).unwrap();
         let base_url =
             std::env::var("LLM_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:11434/v1".into());
         let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "gemma4:e4b-it-qat".into());

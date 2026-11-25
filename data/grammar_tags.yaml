@@ -1,12 +1,12 @@
 # 文法タグのマスター（リポジトリで管理）。
 #
-# - id: 英小文字・数字・ハイフン。grammar_map の lessons.tags から参照する
+# - id: 英小文字・数字・ハイフン。解説の履歴とキャッシュに保存するので、むやみに変えない
 # - name: 日本語名（日本の学校文法の呼び方に揃える）
-# - category: 講座の 17 分類のいずれか、または「論文構文」
+# - category: 次のいずれか（文法項目タブはこの順に並べる。追加は crates/server/src/grammar.rs の CATEGORIES）
 #     時制 / 仮定法 / 助動詞 / 不定詞 / 動名詞 / 分詞 / 受動態 / 関係詞 / 比較 / 冠詞・名詞 / 名詞 / 代名詞 /
 #     形容詞 / 副詞・語法 / 前置詞 / 接続詞 / 文型・語法 / 論文構文
 # - aliases: 別名（タグ付けの手がかり）
-# - hint: LLM 向けの 1 行説明（一般的な英文法の知識で自作したもの。講座の内容は書かない）
+# - hint: LLM 向けの 1 行説明（一般的な英文法の知識で自作したもの。市販の教材の内容は書かない）
 # - implies: このタグが付いたら一緒に付けるタグ（より一般的な項目。省略可）
 #
 # このファイルを変えると、文の解説キャッシュのキーが変わる（作り直される）。
@@ -31,8 +31,8 @@ tags:
   - id: progressive
     name: 進行形
     category: 時制
-    aliases: [be doing, 現在進行形, 過去進行形]
-    hint: "be + 現在分詞。ある時点で動作が進行中であること、一時的な状態を表す。"
+    aliases: [be doing, 現在進行形, 過去進行形, 予定を表す進行形]
+    hint: "be + 現在分詞。ある時点で動作が進行中であること、一時的な状態、すでに準備が進んでいる予定を表す。状態を表す動詞はふつう進行形にしない。"
   - id: time-condition-clause
     name: 時・条件の副詞節
     category: 時制
@@ -44,7 +44,7 @@ tags:
     name: 仮定法過去
     category: 仮定法
     aliases: [If S 過去形, S would do]
-    hint: "If + S + 過去形, S + would/could + 原形。現在の事実に反する仮定を表す。"
+    hint: "If + S + 過去形, S + would/could + 原形。現在の事実に反する仮定を表す。be 動詞は主語にかかわらず were を使うことが多い。"
   - id: subjunctive-past-perfect
     name: 仮定法過去完了
     category: 仮定法
@@ -54,7 +54,7 @@ tags:
     name: if の省略と倒置
     category: 仮定法
     aliases: [Had S p.p., Were S to, Should S]
-    hint: "仮定法の if を省略すると、Were/Had/Should が主語の前に出る（例: Had we known, ...）。"
+    hint: "仮定法の if を省略すると、Were/Had/Should が主語の前に出る（例: Had we known, ... / Should any error occur, ...）。"
   - id: subjunctive-idioms
     name: 仮定法を含む慣用表現
     category: 仮定法
@@ -72,6 +72,11 @@ tags:
     category: 助動詞
     aliases: [must have p.p., may have p.p., should have p.p.]
     hint: "助動詞 + have + 過去分詞。過去の事柄についての推量や、実現しなかったことへの後悔・非難を表す。"
+  - id: modal-will
+    name: will の用法
+    category: 助動詞
+    aliases: [意志, 予測, 習性, 拒絶, "won't"]
+    hint: "will は意志・確信のある予測・習性を表し、否定の won't は拒絶（どうしても〜しない）も表す。"
 
   # ── 不定詞 ──
   - id: infinitive-noun
@@ -99,6 +104,16 @@ tags:
     category: 不定詞
     aliases: [help O do, make O do]
     hint: "to の付かない動詞の原形。使役動詞・知覚動詞・help の後などで使う。"
+  - id: infinitive-so-as-to
+    name: so as to / so ... as to
+    category: 不定詞
+    aliases: [so as to do, so ~ as to do, 目的, 結果・程度]
+    hint: "so as to + 原形は目的（〜するために）、so + 形容詞・副詞 + as to + 原形は程度・結果（〜するほど…）を表す。"
+  - id: infinitive-idioms
+    name: 不定詞を含む慣用表現
+    category: 不定詞
+    aliases: [be supposed to, be likely to, All S have to do is]
+    hint: "be supposed to（〜することになっている）、be likely to（〜しそうだ）、All S have to do is (to) do（S は〜しさえすればよい）などの決まった言い方。"
 
   # ── 動名詞 ──
   - id: gerund-subject-object
@@ -111,6 +126,11 @@ tags:
     category: 動名詞
     aliases: [enjoy doing, decide to do, stop doing / stop to do]
     hint: "目的語に動名詞をとる動詞と不定詞をとる動詞の区別、どちらもとるが意味が変わる動詞。"
+  - id: gerund-idioms
+    name: 動名詞の慣用表現
+    category: 動名詞
+    aliases: [on doing, spend time doing, be busy doing, have difficulty doing]
+    hint: "on doing（〜するとすぐに）、spend 時間 (in) doing（〜して時間を費やす）、have difficulty (in) doing（〜するのに苦労する）などの決まった言い方。"
 
   # ── 分詞 ──
   - id: present-participle-postmodifier
@@ -140,6 +160,11 @@ tags:
     aliases: [with O doing, 意味上の主語つきの分詞構文]
     hint: "分詞の前に主節と異なる意味上の主語が置かれた分詞構文（all things considered, with X increasing ...）。"
     implies: [participial-construction]
+  - id: emotion-participle
+    name: 感情を表す分詞
+    category: 分詞
+    aliases: [surprising / surprised, interesting / interested, confusing / confused]
+    hint: "感情を引き起こす意味の他動詞の分詞。-ing は「（人を）〜させるような」、-ed は「〜させられた（〜している）」を表す。"
 
   # ── 受動態 ──
   - id: passive
@@ -284,6 +309,11 @@ tags:
     category: 接続詞
     aliases: [because, although, while, whereas, since]
     hint: "because, although, while, whereas などが理由・譲歩・対比などの副詞節を導く。"
+  - id: so-that
+    name: so that / so ... that 構文
+    category: 接続詞
+    aliases: [so that S can do, so ~ that, such ~ that]
+    hint: "so that + S + V は目的（〜するように）や結果、so + 形容詞・副詞 + that / such + 名詞 + that は「とても〜なので…」を表す。"
   - id: noun-clause-that-whether
     name: 名詞節の that / whether
     category: 接続詞
@@ -312,7 +342,7 @@ tags:
     aliases: [make O do, let O do, allow O to do, enable O to do]
     hint: "make / let / have + O + 原形、allow / enable + O + to do、see / hear + O + do/doing の形。"
 
-  # ── 論文構文（講座の範囲外になりやすい、論文に多い構文） ──
+  # ── 論文構文（論文に多い構文） ──
   - id: appositive-that
     name: 同格の that
     category: 論文構文

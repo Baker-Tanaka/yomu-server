@@ -1,25 +1,19 @@
-//! 文法タグ（data/grammar_tags.yaml）と、講座のレッスン対応（data/grammar_map.*.yaml）。
+//! 文法タグ（data/grammar_tags.yaml）の読み込みと、LLM によるタグ付けの入出力。
 //!
-//! - 講座の解説文・動画・テキストは扱わない。扱うのはカテゴリ名と、ユーザーが書き写したレッスンのタイトルだけ
-//! - LLM に渡すのはタグの id / name / hint（このリポジトリで自作したもの）だけで、レッスンのタイトルは渡さない
-//!
-//! 範囲内・外の判定（[`GrammarData::scope`]）:
-//! - 「論文構文」カテゴリのタグは常に範囲外
-//! - レッスンが 1 つも書かれていないカテゴリのタグは、カテゴリ単位の案内を出す（範囲内・レッスン無し）
-//! - レッスンが書かれたカテゴリで、どのレッスンからも参照されていないタグは範囲外
+//! LLM に渡すのはタグの id / name / hint（このリポジトリで自作したもの）だけ。
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
-use paper_reader_shared::{ExplainTag, LessonRef, OUT_OF_COURSE_CATEGORY};
+use paper_reader_shared::ExplainTag;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::llm::extract_json_object;
 
-/// 講座の 17 分類と「論文構文」（表示の順番）。
+/// タグのカテゴリ（表示の順番）。
 pub const CATEGORIES: &[&str] = &[
     "時制",
     "仮定法",
@@ -38,7 +32,7 @@ pub const CATEGORIES: &[&str] = &[
     "前置詞",
     "接続詞",
     "文型・語法",
-    OUT_OF_COURSE_CATEGORY,
+    "論文構文",
 ];
 
 /// タグ付けで残す最小の確信度
@@ -64,121 +58,32 @@ struct TagsFile {
     tags: Vec<TagDef>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct Lesson {
-    pub id: String,
-    pub category: String,
-    pub title: String,
-    #[serde(default)]
-    pub tags: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct MapCategory {
-    category: String,
-    #[serde(default)]
-    lessons: Vec<Lesson>,
-}
-
-#[derive(Debug, Deserialize)]
-struct MapFile {
-    #[serde(default)]
-    course: String,
-    #[serde(default)]
-    course_short: String,
-    #[serde(default)]
-    categories: Vec<MapCategory>,
-}
-
-/// レッスン対応をどのファイルから読んだか。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MapSource {
-    Local,
-    Template,
-}
-
-impl MapSource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Local => "local",
-            Self::Template => "template",
-        }
-    }
-}
-
-/// タグの範囲内・外。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Scope {
-    /// 対応するレッスンがある
-    Lessons(Vec<LessonRef>),
-    /// カテゴリにレッスンが未記入（カテゴリ単位の案内）
-    CategoryOnly,
-    OutOfCourse,
-}
-
 /// 読み込み済みの文法データ。
 #[derive(Debug, Clone)]
 pub struct GrammarData {
     pub tags: Vec<TagDef>,
     index: HashMap<String, usize>,
-    pub lessons: Vec<Lesson>,
-    pub course: String,
-    pub course_short: String,
-    pub source: MapSource,
     /// grammar_tags.yaml の内容の sha256（解説キャッシュのキーに含める）
     pub tags_hash: String,
 }
 
-/// 読み込むファイルの場所。
-#[derive(Debug, Clone)]
-pub struct GrammarPaths {
-    pub tags: PathBuf,
-    pub map: PathBuf,
-    pub template: PathBuf,
-}
-
 impl GrammarData {
-    /// ファイルから読み込んで検証する。local が無ければテンプレートを読む。
-    pub fn load(paths: &GrammarPaths) -> Result<Self> {
-        let tags_text = read(&paths.tags)?;
-        let (map_path, source) = if paths.map.exists() {
-            (&paths.map, MapSource::Local)
-        } else {
-            (&paths.template, MapSource::Template)
-        };
-        let map_text = read(map_path)?;
-        Self::from_texts(
-            &tags_text,
-            &paths.tags.display().to_string(),
-            &map_text,
-            &map_path.display().to_string(),
-            source,
-        )
+    /// ファイルから読み込んで検証する。
+    pub fn load(path: &Path) -> Result<Self> {
+        Self::from_text(&read(path)?, &path.display().to_string())
     }
 
-    pub fn from_texts(
-        tags_text: &str,
-        tags_name: &str,
-        map_text: &str,
-        map_name: &str,
-        source: MapSource,
-    ) -> Result<Self> {
-        let tags = parse_tags(tags_text, tags_name)?;
-        let index: HashMap<String, usize> = tags
+    pub fn from_text(text: &str, name: &str) -> Result<Self> {
+        let tags = parse_tags(text, name)?;
+        let index = tags
             .iter()
             .enumerate()
             .map(|(i, t)| (t.id.clone(), i))
             .collect();
-        let map = parse_map(map_text, map_name, &index)?;
-        let lessons = map.categories.into_iter().flat_map(|c| c.lessons).collect();
         Ok(Self {
             tags,
             index,
-            lessons,
-            course: map.course,
-            course_short: map.course_short,
-            source,
-            tags_hash: sha256_hex(tags_text),
+            tags_hash: sha256_hex(text),
         })
     }
 
@@ -190,58 +95,17 @@ impl GrammarData {
         self.tags.iter().map(|t| t.id.as_str()).collect()
     }
 
-    /// カテゴリに書かれたレッスンの数。
-    pub fn lesson_count(&self, category: &str) -> usize {
-        self.lessons
-            .iter()
-            .filter(|l| l.category == category)
-            .count()
-    }
-
-    pub fn scope(&self, tag_id: &str) -> Scope {
-        let Some(tag) = self.tag(tag_id) else {
-            return Scope::OutOfCourse;
-        };
-        if tag.category == OUT_OF_COURSE_CATEGORY {
-            return Scope::OutOfCourse;
-        }
-        let lessons: Vec<LessonRef> = self
-            .lessons
-            .iter()
-            .filter(|l| l.tags.iter().any(|t| t == tag_id))
-            .map(|l| LessonRef {
-                id: l.id.clone(),
-                category: l.category.clone(),
-                title: l.title.clone(),
-            })
-            .collect();
-        if !lessons.is_empty() {
-            Scope::Lessons(lessons)
-        } else if self.lesson_count(&tag.category) == 0 {
-            Scope::CategoryOnly
-        } else {
-            Scope::OutOfCourse
-        }
-    }
-
-    /// 検出したタグに名前・カテゴリ・レッスンを付ける（不明な id は捨てる）。
+    /// 検出したタグに名前・カテゴリ・説明を付ける（不明な id は捨てる）。
     pub fn resolve(&self, detected: &[DetectedTag]) -> Vec<ExplainTag> {
         detected
             .iter()
             .filter_map(|d| {
                 let tag = self.tag(&d.tag_id)?;
-                let (in_scope, lessons) = match self.scope(&d.tag_id) {
-                    Scope::Lessons(l) => (true, l),
-                    Scope::CategoryOnly => (true, Vec::new()),
-                    Scope::OutOfCourse => (false, Vec::new()),
-                };
                 Some(ExplainTag {
                     tag_id: tag.id.clone(),
                     name: tag.name.clone(),
                     category: tag.category.clone(),
                     span: d.span.clone(),
-                    in_scope,
-                    lessons,
                     hint: tag.hint.clone(),
                 })
             })
@@ -318,62 +182,6 @@ fn parse_tags(text: &str, name: &str) -> Result<Vec<TagDef>> {
         }
     }
     Ok(file.tags)
-}
-
-fn parse_map(text: &str, name: &str, tags: &HashMap<String, usize>) -> Result<MapFile> {
-    let map: MapFile = serde_yaml_ng::from_str(text).map_err(|e| yaml_error(name, e))?;
-    let mut lesson_ids = HashSet::new();
-    for cat in &map.categories {
-        let cat_line = find_line(text, &cat.category, 0).unwrap_or(0);
-        if !CATEGORIES.contains(&cat.category.as_str()) || cat.category == OUT_OF_COURSE_CATEGORY {
-            bail!(
-                "{name}:{cat_line}: カテゴリ「{}」は講座のカテゴリではありません",
-                cat.category
-            );
-        }
-        for lesson in &cat.lessons {
-            let line = lesson_line(text, &lesson.id).unwrap_or(cat_line);
-            if lesson.id.trim().is_empty() {
-                bail!("{name}:{line}: レッスンの id が空です");
-            }
-            if !lesson_ids.insert(lesson.id.as_str()) {
-                bail!(
-                    "{name}:{line}: レッスン id「{}」が重複しています",
-                    lesson.id
-                );
-            }
-            if lesson.category != cat.category {
-                bail!(
-                    "{name}:{line}: レッスン「{}」の category「{}」が、置かれているカテゴリ「{}」と違います",
-                    lesson.id,
-                    lesson.category,
-                    cat.category
-                );
-            }
-            if lesson.title.trim().is_empty() {
-                bail!("{name}:{line}: レッスン「{}」の title が空です", lesson.id);
-            }
-            for tag in &lesson.tags {
-                if !tags.contains_key(tag) {
-                    let tag_line = find_line(text, tag, line.saturating_sub(1)).unwrap_or(line);
-                    bail!(
-                        "{name}:{tag_line}: レッスン「{}」のタグ「{tag}」は grammar_tags.yaml にありません",
-                        lesson.id
-                    );
-                }
-            }
-        }
-    }
-    Ok(map)
-}
-
-/// `id: <lesson_id>` の行番号（1 始まり）。
-fn lesson_line(text: &str, lesson_id: &str) -> Option<usize> {
-    text.lines().enumerate().find_map(|(i, line)| {
-        let t = line.trim_start().trim_start_matches("- ").trim();
-        let value = t.strip_prefix("id:")?.trim().trim_matches(['"', '\'']);
-        (value == lesson_id && !line.trim_start().starts_with('#')).then_some(i + 1)
-    })
 }
 
 /// `from_line`（0 始まりの行）以降で、`word` を語として含む最初のコメント以外の行（1 始まり）。
@@ -574,116 +382,41 @@ tags:
     implies: [relative-pronoun]
 "#;
 
-    const MAP: &str = r#"
-course: テスト講座
-course_short: テスト
-categories:
-  - category: 関係詞
-    lessons:
-      - id: rel-01
-        category: 関係詞
-        title: "第1講 関係代名詞"
-        tags: [relative-pronoun]
-  - category: 受動態
-    lessons: []
-"#;
-
     pub fn sample() -> GrammarData {
-        GrammarData::from_texts(TAGS, "tags.yaml", MAP, "map.yaml", MapSource::Local).unwrap()
-    }
-
-    fn repo_file(name: &str) -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../data")
-            .join(name)
+        GrammarData::from_text(TAGS, "tags.yaml").unwrap()
     }
 
     #[test]
-    fn repository_files_are_valid() {
-        let paths = GrammarPaths {
-            tags: repo_file("grammar_tags.yaml"),
-            map: repo_file("does-not-exist.local.yaml"),
-            template: repo_file("grammar_map.template.yaml"),
-        };
-        let g = GrammarData::load(&paths).unwrap();
-        assert_eq!(g.source, MapSource::Template);
-        assert!(g.lessons.is_empty());
+    fn repository_file_is_valid() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/grammar_tags.yaml");
+        let g = GrammarData::load(&path).unwrap();
         assert!(g.tags.len() >= 60, "{}", g.tags.len());
-        // 講座の 17 分類（と論文構文）すべてにタグがある
+        // すべてのカテゴリにタグがある
         for cat in CATEGORIES {
             assert!(g.tags.iter().any(|t| t.category == *cat), "{cat}");
         }
-        // local が無ければカテゴリ単位の案内、論文構文は範囲外
-        assert_eq!(g.scope("relative-pronoun"), Scope::CategoryOnly);
-        assert_eq!(g.scope("appositive-that"), Scope::OutOfCourse);
         assert_eq!(g.tags_hash.len(), 64);
     }
 
     #[test]
-    fn scope_rules() {
-        let g = sample();
-        assert_eq!(
-            g.scope("relative-pronoun"),
-            Scope::Lessons(vec![LessonRef {
-                id: "rel-01".into(),
-                category: "関係詞".into(),
-                title: "第1講 関係代名詞".into()
-            }])
-        );
-        // 関係詞にはレッスンがあるが、関係副詞を参照するレッスンは無い → 範囲外
-        assert_eq!(g.scope("relative-adverb"), Scope::OutOfCourse);
-        // 受動態はレッスン未記入 → カテゴリ単位の案内
-        assert_eq!(g.scope("passive"), Scope::CategoryOnly);
-        // 論文構文は常に範囲外
-        assert_eq!(g.scope("appositive-that"), Scope::OutOfCourse);
-        assert_eq!(g.scope("unknown"), Scope::OutOfCourse);
-    }
-
-    #[test]
-    fn unknown_tag_in_lesson_reports_file_and_line() {
-        let map = MAP.replace(
-            "tags: [relative-pronoun]",
-            "tags: [relative-pronoun, no-such-tag]",
-        );
-        let err =
-            GrammarData::from_texts(TAGS, "tags.yaml", &map, "map.local.yaml", MapSource::Local)
-                .unwrap_err()
-                .to_string();
-        assert!(err.contains("map.local.yaml:10:"), "{err}");
-        assert!(err.contains("no-such-tag"), "{err}");
-    }
-
-    #[test]
     fn invalid_files() {
-        let bad = |tags: &str, map: &str| {
-            GrammarData::from_texts(tags, "t.yaml", map, "m.yaml", MapSource::Local)
+        let bad = |tags: &str| {
+            GrammarData::from_text(tags, "t.yaml")
                 .unwrap_err()
                 .to_string()
         };
         // 不明なカテゴリ
-        let e = bad(&TAGS.replace("category: 受動態", "category: 受け身"), MAP);
+        let e = bad(&TAGS.replace("category: 受動態", "category: 受け身"));
         assert!(e.contains("t.yaml:") && e.contains("受け身"), "{e}");
         // id の形式
-        let e = bad(&TAGS.replace("id: passive", "id: Passive"), MAP);
+        let e = bad(&TAGS.replace("id: passive", "id: Passive"));
         assert!(e.contains("Passive"), "{e}");
         // id の重複
-        let e = bad(&TAGS.replace("id: relative-adverb", "id: passive"), MAP);
+        let e = bad(&TAGS.replace("id: relative-adverb", "id: passive"));
         assert!(e.contains("重複"), "{e}");
-        // レッスンのカテゴリ違い
-        let e = bad(
-            TAGS,
-            &MAP.replace("        category: 関係詞", "        category: 受動態"),
-        );
-        assert!(e.contains("m.yaml:") && e.contains("rel-01"), "{e}");
-        // 講座に無いカテゴリ（論文構文はレッスンを持てない）
-        let e = bad(
-            TAGS,
-            &MAP.replace("  - category: 受動態", "  - category: 論文構文"),
-        );
-        assert!(e.contains("論文構文"), "{e}");
         // YAML の構文エラーは行番号つき
-        let e = bad(TAGS, "categories: [\n  - x");
-        assert!(e.starts_with("m.yaml:"), "{e}");
+        let e = bad("tags: [\n  - x");
+        assert!(e.starts_with("t.yaml:"), "{e}");
     }
 
     #[test]
@@ -730,7 +463,7 @@ categories:
         assert_eq!(tags.len(), 2);
         // implies に不明な id があればエラー
         let bad = TAGS.replace("implies: [relative-pronoun]", "implies: [nope]");
-        assert!(GrammarData::from_texts(&bad, "t", MAP, "m", MapSource::Local).is_err());
+        assert!(GrammarData::from_text(&bad, "t").is_err());
     }
 
     #[test]
@@ -758,9 +491,7 @@ categories:
                 format!("  - id: t{i}\n    name: n{i}\n    category: 時制\n    hint: h\n")
             }))
             .collect();
-        let g =
-            GrammarData::from_texts(&tags_yaml, "t", "categories: []", "m", MapSource::Template)
-                .unwrap();
+        let g = GrammarData::from_text(&tags_yaml, "t").unwrap();
         let items: Vec<String> = (0..8)
             .map(|i| {
                 format!(
@@ -794,8 +525,8 @@ categories:
             },
         ]);
         assert_eq!(resolved.len(), 2);
-        assert!(resolved[0].in_scope && resolved[0].lessons[0].title == "第1講 関係代名詞");
-        assert!(!resolved[1].in_scope && resolved[1].category == "論文構文");
+        assert_eq!(resolved[0].name, "関係代名詞（主格・目的格）");
+        assert_eq!(resolved[1].category, "論文構文");
 
         let schema = tagging_schema(&g);
         let ids = &schema["json_schema"]["schema"]["properties"]["tags"]["items"]["properties"]["tag_id"]
@@ -803,14 +534,11 @@ categories:
         assert_eq!(ids.as_array().unwrap().len(), 5);
         let prompt = tagging_system_prompt(&g);
         assert!(prompt.contains("relative-adverb: 関係副詞"));
-        // レッスンのタイトル（講座の内容）はプロンプトに入れない
-        assert!(!prompt.contains("第1講"));
     }
 
     #[test]
     fn line_helpers() {
         let text = "a:\n  # tags: [x]\n  - id: l1\n    tags: [x-y, x]\n";
-        assert_eq!(lesson_line(text, "l1"), Some(3));
         assert_eq!(find_line(text, "x", 2), Some(4));
         assert!(contains_word("[x-y, x]", "x"));
         assert!(!contains_word("[x-y]", "x"));

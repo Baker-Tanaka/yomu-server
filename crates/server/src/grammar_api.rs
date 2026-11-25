@@ -1,4 +1,4 @@
-//! `GET /api/grammar-map` と `POST /api/admin/reload-grammar`。
+//! `GET /api/grammar-tags` と `POST /api/admin/reload-grammar`。
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -7,67 +7,47 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::{ConnectInfo, State};
 use axum::http::HeaderMap;
-use paper_reader_shared::{
-    GrammarCategoryInfo, GrammarMapResponse, GrammarTagInfo, OUT_OF_COURSE_CATEGORY,
-};
+use paper_reader_shared::{GrammarTagInfo, GrammarTagsResponse};
 use serde_json::{Value, json};
 
 use crate::AppState;
 use crate::db;
 use crate::error::{AppError, AppResult};
-use crate::grammar::{CATEGORIES, GrammarData, Scope};
+use crate::grammar::{CATEGORIES, GrammarData};
 
-/// タグ一覧・カテゴリ・レッスンと、履歴での出現回数。
-pub async fn get_grammar_map(State(state): State<AppState>) -> AppResult<Json<GrammarMapResponse>> {
+/// タグ一覧・カテゴリと、履歴での出現回数。
+pub async fn get_grammar_tags(
+    State(state): State<AppState>,
+) -> AppResult<Json<GrammarTagsResponse>> {
     let g = state.grammar();
     let counts: HashMap<String, i64> = db::tag_counts(&state.db)
         .await
         .map_err(|e| AppError::Internal(e.into()))?
         .into_iter()
         .collect();
-    Ok(Json(map_response(&g, &counts)))
+    Ok(Json(tags_response(&g, &counts)))
 }
 
-pub fn map_response(g: &GrammarData, counts: &HashMap<String, i64>) -> GrammarMapResponse {
-    let categories = CATEGORIES
-        .iter()
-        .map(|c| GrammarCategoryInfo {
-            name: (*c).to_string(),
-            in_course: *c != OUT_OF_COURSE_CATEGORY,
-            lesson_count: g.lesson_count(c),
-        })
-        .collect();
+pub fn tags_response(g: &GrammarData, counts: &HashMap<String, i64>) -> GrammarTagsResponse {
     let tags = g
         .tags
         .iter()
-        .map(|t| {
-            let (in_scope, lessons) = match g.scope(&t.id) {
-                Scope::Lessons(l) => (true, l),
-                Scope::CategoryOnly => (true, Vec::new()),
-                Scope::OutOfCourse => (false, Vec::new()),
-            };
-            GrammarTagInfo {
-                id: t.id.clone(),
-                name: t.name.clone(),
-                category: t.category.clone(),
-                aliases: t.aliases.clone(),
-                hint: t.hint.clone(),
-                in_scope,
-                lessons,
-                count: counts.get(&t.id).copied().unwrap_or(0).max(0) as u64,
-            }
+        .map(|t| GrammarTagInfo {
+            id: t.id.clone(),
+            name: t.name.clone(),
+            category: t.category.clone(),
+            aliases: t.aliases.clone(),
+            hint: t.hint.clone(),
+            count: counts.get(&t.id).copied().unwrap_or(0).max(0) as u64,
         })
         .collect();
-    GrammarMapResponse {
-        course: g.course.clone(),
-        course_short: g.course_short.clone(),
-        source: g.source.as_str().to_string(),
-        categories,
+    GrammarTagsResponse {
+        categories: CATEGORIES.iter().map(|c| (*c).to_string()).collect(),
         tags,
     }
 }
 
-/// 文法タグとレッスン対応を読み直す（開発用）。127.0.0.1 から直接来たものだけ受け付ける。
+/// 文法タグを読み直す（開発用）。127.0.0.1 から直接来たものだけ受け付ける。
 ///
 /// tailscale serve などのリバースプロキシ経由の要求も接続元は 127.0.0.1 になるため、
 /// 転送ヘッダー（X-Forwarded-For / Forwarded / Tailscale-*）が付いていれば拒否する。
@@ -81,17 +61,13 @@ pub async fn post_reload(
             "この操作はサーバーの Mac から直接（127.0.0.1）しか行えません".into(),
         ));
     }
-    let paths = state.config.grammar_paths();
-    let g = tokio::task::spawn_blocking(move || GrammarData::load(&paths))
+    let path = state.config.grammar_tags_path.clone();
+    let g = tokio::task::spawn_blocking(move || GrammarData::load(&path))
         .await
         .map_err(|e| AppError::Internal(e.into()))?
         // 読み込めなければ今のデータを使い続ける
         .map_err(|e| AppError::BadRequest(format!("{e:#}")))?;
-    let summary = json!({
-        "tags": g.tags.len(),
-        "lessons": g.lessons.len(),
-        "source": g.source.as_str(),
-    });
+    let summary = json!({ "tags": g.tags.len() });
     tracing::info!(%summary, "grammar reloaded");
     state.set_grammar(Arc::new(g));
     Ok(Json(summary))
@@ -126,17 +102,13 @@ mod tests {
     }
 
     #[test]
-    fn response_has_counts_and_scope() {
+    fn response_has_counts() {
         let g = sample();
         let counts = HashMap::from([("passive".to_string(), 3)]);
-        let r = map_response(&g, &counts);
-        assert_eq!(r.source, "local");
+        let r = tags_response(&g, &counts);
         assert_eq!(r.categories.len(), CATEGORIES.len());
-        let rel = r.categories.iter().find(|c| c.name == "関係詞").unwrap();
-        assert_eq!(rel.lesson_count, 1);
         let passive = r.tags.iter().find(|t| t.id == "passive").unwrap();
-        assert_eq!((passive.count, passive.in_scope), (3, true));
-        let app = r.tags.iter().find(|t| t.id == "appositive-that").unwrap();
-        assert!(!app.in_scope);
+        assert_eq!(passive.count, 3);
+        assert!(r.tags.iter().any(|t| t.count == 0));
     }
 }

@@ -660,17 +660,6 @@ pub const MAX_FEEDBACK_BODY_CHARS: usize = 4_000;
 /// フィードバックのタイトルの上限（文字数）
 pub const MAX_FEEDBACK_TITLE_CHARS: usize = 120;
 
-/// 講座の範囲外として扱うカテゴリ（論文に多い構文）
-pub const OUT_OF_COURSE_CATEGORY: &str = "論文構文";
-
-/// 講座のレッスン（タイトルはユーザーが書き写したもの）。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LessonRef {
-    pub id: String,
-    pub category: String,
-    pub title: String,
-}
-
 /// 解説した英文で検出した文法項目（SSE の tags イベント）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExplainTag {
@@ -679,16 +668,12 @@ pub struct ExplainTag {
     pub category: String,
     /// 英文中で該当する部分
     pub span: String,
-    /// 講座の範囲内か（範囲内ならレッスンかカテゴリ単位の案内を出す）
-    pub in_scope: bool,
-    /// 対応するレッスン（未記入なら空）
-    pub lessons: Vec<LessonRef>,
     /// タグの説明（grammar_tags.yaml の hint）
     #[serde(default)]
     pub hint: String,
 }
 
-/// 文法タグ 1 件（`GET /api/grammar-map`）。
+/// 文法タグ 1 件（`GET /api/grammar-tags`）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GrammarTagInfo {
     pub id: String,
@@ -696,32 +681,15 @@ pub struct GrammarTagInfo {
     pub category: String,
     pub aliases: Vec<String>,
     pub hint: String,
-    pub in_scope: bool,
-    pub lessons: Vec<LessonRef>,
     /// 履歴に出てきた回数（その文法項目を含む英文の数）
     pub count: u64,
 }
 
-/// カテゴリ 1 件（`GET /api/grammar-map`）。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct GrammarCategoryInfo {
-    pub name: String,
-    /// 講座のカテゴリか（論文構文は false）
-    pub in_course: bool,
-    /// 記入済みのレッスン数
-    pub lesson_count: usize,
-}
-
-/// `GET /api/grammar-map` の応答。
+/// `GET /api/grammar-tags` の応答。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct GrammarMapResponse {
-    /// 講座名
-    pub course: String,
-    /// 講座の短い名前（チップに出す）
-    pub course_short: String,
-    /// レッスン対応を読んだファイル（"local" か "template"）
-    pub source: String,
-    pub categories: Vec<GrammarCategoryInfo>,
+pub struct GrammarTagsResponse {
+    /// カテゴリ名（表示の順番）
+    pub categories: Vec<String>,
     pub tags: Vec<GrammarTagInfo>,
 }
 

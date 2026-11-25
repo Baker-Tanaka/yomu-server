@@ -55,7 +55,7 @@ pub struct AppState {
     /// arXiv API（検索）用（宛先は export.arxiv.org に固定）
     pub search_http: reqwest::Client,
     pub searcher: search::SharedSearcher,
-    /// 文法タグとレッスン対応（/api/admin/reload-grammar で差し替える）
+    /// 文法タグ（/api/admin/reload-grammar で差し替える）
     grammar: Arc<RwLock<Arc<grammar::GrammarData>>>,
     /// LLM ランタイムが response_format: json_schema を使えるか
     pub structured_output: Arc<AtomicBool>,
@@ -99,15 +99,10 @@ async fn main() -> Result<()> {
         "starting"
     );
 
-    // 文法タグとレッスン対応を読み込んで検証する（不正なら起動しない）
-    let grammar_data = grammar::GrammarData::load(&config.grammar_paths())
-        .context("文法タグ・レッスン対応の読み込みに失敗しました")?;
-    tracing::info!(
-        tags = grammar_data.tags.len(),
-        lessons = grammar_data.lessons.len(),
-        source = grammar_data.source.as_str(),
-        "grammar loaded"
-    );
+    // 文法タグを読み込んで検証する（不正なら起動しない）
+    let grammar_data = grammar::GrammarData::load(&config.grammar_tags_path)
+        .context("文法タグの読み込みに失敗しました")?;
+    tracing::info!(tags = grammar_data.tags.len(), "grammar loaded");
 
     let db = db::connect(&config.database_url).await?;
     let http = paper::build_client(config.allowed_hosts.clone())?;
@@ -192,7 +187,7 @@ fn router(state: AppState, config: &Config) -> Router {
             get(history::get_history).post(history::post_history),
         )
         .route("/history/{id}", delete(history::delete_history))
-        .route("/grammar-map", get(grammar_api::get_grammar_map))
+        .route("/grammar-tags", get(grammar_api::get_grammar_tags))
         .route(
             "/feedback",
             get(feedback::get_feedback).post(feedback::post_submit),

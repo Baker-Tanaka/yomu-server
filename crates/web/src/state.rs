@@ -6,7 +6,7 @@ use std::rc::Rc;
 use eframe::egui;
 use paper_reader_shared::{
     DictResponse, ExplainRequest, ExplainTag, FeedbackContext, FeedbackDraft, FeedbackItem,
-    FeedbackListResponse, FeedbackPreview, FeedbackSubmit, GrammarMapResponse, HealthResponse,
+    FeedbackListResponse, FeedbackPreview, FeedbackSubmit, GrammarTagsResponse, HealthResponse,
     HistoryEntry, HistoryRecord, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, SEARCH_PAGE_SIZE,
     SearchItem, SearchSort, WordListResponse, WordNote, WordSort, WordStoreStats, WordUpsert,
     clip_context, paper_url_from_input, sse_event,
@@ -163,7 +163,7 @@ pub enum GrammarStatus {
     #[default]
     NotLoaded,
     Loading,
-    Loaded(GrammarMapResponse),
+    Loaded(GrammarTagsResponse),
     Error(String),
 }
 
@@ -221,8 +221,6 @@ impl Default for Feedback {
     }
 }
 
-/// 「講座の案内を表示する」設定の localStorage のキー
-const SHOW_COURSE_KEY: &str = "paper-reader.show-course";
 /// 「カタカナの読みを表示する」設定の localStorage のキー
 const SHOW_KANA_KEY: &str = "paper-reader.show-kana";
 /// スラッシュリーディングを表示するかの設定を保存する localStorage のキー
@@ -349,15 +347,12 @@ pub struct Shared {
     pub grammar_order: GrammarOrder,
     /// 出現回数などが変わったので、次に文法項目タブを表示するときに読み直す
     pub grammar_stale: bool,
-    /// 設定: 講座（パーフェクト英文法）の案内を表示する
-    pub show_course: bool,
     pub feedback: Feedback,
 }
 
 impl Shared {
     pub fn new() -> Self {
         Self {
-            show_course: dom::load_bool(SHOW_COURSE_KEY, true),
             show_kana: dom::load_bool(SHOW_KANA_KEY, true),
             recent: crate::recent::RecentWords::load(),
             show_recent: dom::load_bool(crate::recent::SHOW_KEY, true),
@@ -372,11 +367,6 @@ impl Shared {
             papers_stale: true,
             ..Self::default()
         }
-    }
-
-    pub fn set_show_course(&mut self, on: bool) {
-        self.show_course = on;
-        dom::save_bool(SHOW_COURSE_KEY, on);
     }
 
     pub fn set_show_slash(&mut self, on: bool) {
@@ -415,14 +405,6 @@ impl Shared {
         self.words.stale = true;
         self.recent.record(&r);
         self.dict = DictStatus::Loaded(r);
-    }
-
-    /// 講座の短い名前（文法データを読み込む前は既定の名前）。
-    pub fn course_short(&self) -> String {
-        match &self.grammar {
-            GrammarStatus::Loaded(g) if !g.course_short.is_empty() => g.course_short.clone(),
-            _ => "パーフェクト英文法".into(),
-        }
     }
 
     /// 表示中の論文の (ID, タイトル)。
@@ -1317,7 +1299,7 @@ pub fn select_tag(this: &SharedRef, index: usize) {
     e.selected_tag = Some(index);
 }
 
-/// 文法項目の一覧（タグ・レッスン・出現回数）を読み込む。
+/// 文法項目の一覧（タグ・出現回数）を読み込む。
 pub fn refresh_grammar(this: &SharedRef, ctx: &egui::Context) {
     {
         let mut s = this.borrow_mut();
@@ -1329,7 +1311,7 @@ pub fn refresh_grammar(this: &SharedRef, ctx: &egui::Context) {
     let this = this.clone();
     let ctx = ctx.clone();
     wasm_bindgen_futures::spawn_local(async move {
-        let result = crate::api::fetch_grammar_map().await;
+        let result = crate::api::fetch_grammar_tags().await;
         this.borrow_mut().grammar = match result {
             Ok(g) => GrammarStatus::Loaded(g),
             Err(e) => GrammarStatus::Error(e),

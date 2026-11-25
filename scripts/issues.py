@@ -246,7 +246,7 @@ def build_prompt(issue: dict, comments: list[dict], base: str) -> str:
         "",
         "## 進め方",
         "- まず CLAUDE.md と README.md・docs/ と関係するコードを読み、既存の設計・書き方・UI の文言（日本語）に合わせて実装する",
-        "- CLAUDE.md の「守るべきルール」を必ず守る（セキュリティ、unwrap 禁止、講座コンテンツの扱い、テスト など）",
+        "- CLAUDE.md の「守るべきルール」を必ず守る（セキュリティ、unwrap 禁止、市販教材の扱い、テスト など）",
         "- server の純粋なロジックを足したら単体テストも書く。API や設定を変えたら docs/ と CLAUDE.md の該当箇所も直す（README.md は紹介と始め方だけにし、詳しい説明は docs/ に書く）",
         "- 終わる前に次を実行し、すべて通るまで直す:",
         "  cargo fmt --all / cargo clippy --workspace --all-targets -- -D warnings /",

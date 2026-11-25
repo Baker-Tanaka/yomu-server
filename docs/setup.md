@@ -104,8 +104,6 @@ cargo run -p paper-reader-server   # http://127.0.0.1:8080 で UI も配信
 | `WEBLLM_DIR` | `data/webllm` | 実験モード（端末の LLM）の WebLLM とモデル。`/webllm/` で配信する（`scripts/fetch_webllm.py` が置く） |
 | `ALLOWED_HOSTS` | `arxiv.org,www.arxiv.org` | 論文取得を許可するホスト（https のみ） |
 | `GRAMMAR_TAGS_PATH` | `data/grammar_tags.yaml` | 文法タグのマスター |
-| `GRAMMAR_MAP_PATH` | `data/grammar_map.local.yaml` | 講座のレッスン対応（git 管理外） |
-| `GRAMMAR_MAP_TEMPLATE_PATH` | `data/grammar_map.template.yaml` | `GRAMMAR_MAP_PATH` が無いときに読むテンプレート |
 | `GITHUB_REPO` | （空） | フィードバックを Issue にするリポジトリ `owner/name`。`scripts/setup_env.sh` が git remote から入れる |
 | `GITHUB_TOKEN` | （空） | Fine-grained token（そのリポジトリの Issues: Read and write だけ）。ブラウザ・LLM・ログには出さない |
 | `WORD_STORE_MAX` | `20000` | 単語帳に残す語数の上限（100〜1,000,000）。超えたら検索回数の少ない語から消す |

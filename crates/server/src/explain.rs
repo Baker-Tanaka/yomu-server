@@ -85,7 +85,7 @@ pub async fn post_explain(
             tracing::info!(mode = req.mode.as_str(), "explain cache hit");
             let mut events = vec![(sse_event::CACHED, String::new())];
             if req.mode == Mode::Sentence {
-                // レッスン対応は変わっているかもしれないので、保存したタグを今の grammar_map で解決し直す
+                // 保存するのはタグの id と該当箇所だけなので、名前と説明を付け直す
                 let detected: Vec<DetectedTag> = tags
                     .as_deref()
                     .and_then(|t| serde_json::from_str(t).ok())
@@ -228,7 +228,7 @@ pub fn key_for(state: &AppState, req: &ExplainRequest) -> String {
     )
 }
 
-/// tags イベントの data（レッスンを解決したタグの JSON 配列）。
+/// tags イベントの data（名前と説明を付けたタグの JSON 配列）。
 fn tags_event(g: &GrammarData, detected: &[DetectedTag]) -> String {
     serde_json::to_string(&g.resolve(detected)).unwrap_or_else(|_| "[]".into())
 }

@@ -98,7 +98,7 @@ http://127.0.0.1:8080 を開き、`https://arxiv.org/abs/1706.03762` を貼っ�
 | [使い方](docs/usage.md) | 操作と機能のすべて |
 | [セットアップ](docs/setup.md) | 必要な環境、辞書、モデルの選び方、設定 |
 | [常時稼働](docs/operations.md) | 自動起動・自動更新、iPhone から使う |
-| [文法タグと講座の案内](docs/grammar.md) | レッスン対応の書き方と仕組み |
+| [文法タグ](docs/grammar.md) | 文法項目の定義と、判定の仕組み |
 | [不具合・要望の送信](docs/feedback.md) | アプリから GitHub の Issue を作る |
 | [実験モード](docs/webllm.md) | iPhone などの GPU で LLM を動かす |
 | [API](docs/api.md) | サーバーの API |

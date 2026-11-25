@@ -60,8 +60,8 @@ POST /api/explain               … body: { mode: "word" | "sentence", text, con
                                    イベント: queued / started / token / tags / done / error
                                    （mode=sentence は token で和訳を先に流し、tags（文法タグ）を送ってから残りの解説の token を流す）
                                    （キャッシュのヒット時は cached → tags → token → done）
-GET  /api/grammar-map           … 文法タグ一覧・カテゴリ・レッスン対応・履歴での出現回数
-POST /api/admin/reload-grammar  … 文法タグとレッスン対応を読み直す（127.0.0.1 から直接の要求のみ。転送ヘッダー付きは拒否）
+GET  /api/grammar-tags          … 文法タグ一覧・カテゴリ・履歴での出現回数
+POST /api/admin/reload-grammar  … 文法タグを読み直す（127.0.0.1 から直接の要求のみ。転送ヘッダー付きは拒否）
 GET  /api/feedback              … 送信先の設定（GitHub）・ラベル定義・送ったフィードバックの一覧
 POST /api/feedback/preview      … 不具合・要望の下書きに LLM がラベル（種類・機能の場所）とタイトルを付け、Issue の本文を組み立てて返す（まだ送らない）
 POST /api/feedback              … 確認した内容を保存し、GitHub が設定されていれば Issue を作る（未設定・失敗なら未送信として残す）
@@ -78,8 +78,6 @@ STATIC_DIR=crates/web/dist
 WEBLLM_DIR=data/webllm                                  # 実験モードの WebLLM とモデル（/webllm/ で配信）
 ALLOWED_HOSTS=arxiv.org,www.arxiv.org
 GRAMMAR_TAGS_PATH=data/grammar_tags.yaml                # 文法タグのマスター（リポジトリで管理）
-GRAMMAR_MAP_PATH=data/grammar_map.local.yaml            # 講座のレッスン対応（ユーザーが記入。git 管理外）
-GRAMMAR_MAP_TEMPLATE_PATH=data/grammar_map.template.yaml # local が無いときに読むテンプレート
 WORD_STORE_MAX=20000                                    # 単語帳に残す語数の上限
 GITHUB_REPO=<owner/name>                                # フィードバックを Issue にするリポジトリ（未設定なら保存だけ）
 GITHUB_TOKEN=<fine-grained token>                       # そのリポジトリの Issues: Read and write だけを持つトークン
@@ -126,7 +124,6 @@ UI の反応と結果の表示をできるだけ速くする。ただし速さ�
   - server の純粋なロジック（URL 検証、HTML 無害化、辞書の語形処理、キャッシュキー生成）には単体テストを書く
   - web クレートは wasm 専用。clippy は `cargo clippy -p paper-reader-web --target wasm32-unknown-unknown -- -D warnings` でも確認する
 - UI の文言は日本語
-  - 講座の解説文・動画の内容・テキストは、リポジトリにも LLM のプロンプトにも一切入れない
-  - 扱ってよいのは「カテゴリ名」と「ユーザーが自分で書き写したレッスンのタイトル」だけ。レッスンのタイトルも LLM には渡さない
-  - 解説の中身は LLM が一般的な英文法の知識で書く。講座は「復習先の案内」としてだけ表示する
+  - 市販の教材や講座の本文・解説は、リポジトリにも LLM のプロンプトにも一切入れない
+  - 解説の中身は LLM が一般的な英文法の知識で書く
   - 文法用語は日本の学校文法の呼び方に揃える（第5文型、分詞構文、関係副詞、仮定法過去完了 など）

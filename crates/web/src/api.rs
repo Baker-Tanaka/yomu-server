@@ -2,7 +2,7 @@
 
 use paper_reader_shared::{
     DictResponse, ErrorResponse, ExplainRequest, FeedbackDraft, FeedbackItem, FeedbackListResponse,
-    FeedbackPreview, FeedbackSubmit, GrammarMapResponse, HealthResponse, HistoryRecord,
+    FeedbackPreview, FeedbackSubmit, GrammarTagsResponse, HealthResponse, HistoryRecord,
     HistoryResponse, PaperResponse, SearchResponse, SearchSort, SseEvent, SseParser, WordDelete,
     WordDeleteResult, WordListResponse, WordNote, WordPrune, WordSort, WordUpsert,
 };
@@ -162,8 +162,8 @@ pub async fn delete_bookmark(paper_id: &str) -> Result<(), String> {
     send_without_body("DELETE", &format!("/api/bookmark?paper_id={encoded}"), None).await
 }
 
-pub async fn fetch_grammar_map() -> Result<GrammarMapResponse, String> {
-    get_json("/api/grammar-map").await
+pub async fn fetch_grammar_tags() -> Result<GrammarTagsResponse, String> {
+    get_json("/api/grammar-tags").await
 }
 
 pub async fn fetch_health() -> Result<HealthResponse, String> {

@@ -59,7 +59,7 @@ deploy/update.sh --force    # 今の版をビルドし直して反映する
 - `origin/main` が今の版を含むとき（早送りできるとき）だけ取り込みます。手元で反映した未 push のコミットを巻き戻さないためです（ログに「main を push してください」と出ます）
 - ビルドに失敗したら入れ替えず、今の版のまま動き続けます（同じコミットは `--force` まで試し直さない）。反映後に `/api/health` が返らなければ前の版に戻します
 - 電源につながっていないときは自動では更新しません。反映・失敗は macOS の通知で知らせ、反映したコミットの `Closes #N` の Issue に「反映しました」とコメントします
-- `.env` と `data/grammar_map.local.yaml` は git 管理外なので、変えたら `deploy/update.sh --setup` をもう一度実行するか、配置先に直接コピーします
+- `.env` は git 管理外なので、変えたら `deploy/update.sh --setup` をもう一度実行するか、配置先に直接コピーします
 - ログ: `~/Library/Logs/paper-reader/update.log`（ビルドは `update-build.log`、配置は `update-install.log`）
 
 ## 3. スリープ防止

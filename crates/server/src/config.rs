@@ -5,8 +5,6 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::grammar::GrammarPaths;
-
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind_addr: SocketAddr,
@@ -21,9 +19,6 @@ pub struct Config {
     pub allowed_hosts: Vec<String>,
     /// 文法タグのマスター
     pub grammar_tags_path: PathBuf,
-    /// 講座のレッスン対応（ユーザーが記入する。無ければテンプレートを読む）
-    pub grammar_map_path: PathBuf,
-    pub grammar_map_template_path: PathBuf,
     /// フィードバックを Issue にするリポジトリ（owner/name）。未設定なら送信せずに保存だけする
     pub github_repo: Option<String>,
     /// Issue を作る GitHub のトークン（Fine-grained token、そのリポジトリの Issues: Read and write だけ）
@@ -63,12 +58,6 @@ impl Config {
             webllm_dir: get("WEBLLM_DIR", "data/webllm").into(),
             allowed_hosts: parse_hosts(&get("ALLOWED_HOSTS", "arxiv.org,www.arxiv.org")),
             grammar_tags_path: get("GRAMMAR_TAGS_PATH", "data/grammar_tags.yaml").into(),
-            grammar_map_path: get("GRAMMAR_MAP_PATH", "data/grammar_map.local.yaml").into(),
-            grammar_map_template_path: get(
-                "GRAMMAR_MAP_TEMPLATE_PATH",
-                "data/grammar_map.template.yaml",
-            )
-            .into(),
             github_repo: parse_repo(&get("GITHUB_REPO", ""))?,
             github_token: Some(get("GITHUB_TOKEN", ""))
                 .map(|t| t.trim().to_string())
@@ -97,16 +86,6 @@ fn parse_repo(s: &str) -> Result<Option<String>> {
         _ => anyhow::bail!(
             "GITHUB_REPO は owner/name の形で指定してください（例: octocat/hello）: {s}"
         ),
-    }
-}
-
-impl Config {
-    pub fn grammar_paths(&self) -> GrammarPaths {
-        GrammarPaths {
-            tags: self.grammar_tags_path.clone(),
-            map: self.grammar_map_path.clone(),
-            template: self.grammar_map_template_path.clone(),
-        }
     }
 }
 

@@ -117,7 +117,7 @@ pub const LABELS: &[LabelDef] = &[
     LabelDef {
         name: "area:grammar",
         color: "c5def5",
-        description: "文法項目のタグ・講座の案内・文法項目タブ",
+        description: "文法項目のタグ・文法項目タブ",
         kind: LabelKind::Area,
     },
     LabelDef {

@@ -59,7 +59,6 @@ if [ "$mode" = setup ]; then
   # git 管理外の設定は開発用の repo からコピーする（.env はトークンを含むので 600）
   if [ "$dev" != "$src" ]; then
     [ -f "$dev/.env" ] && install -m 600 "$dev/.env" "$app_home/.env" && echo ".env をコピーしました"
-    [ -f "$dev/data/grammar_map.local.yaml" ] && cp "$dev/data/grammar_map.local.yaml" "$app_home/data/"
   fi
   path="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   esc() { printf '%s' "$1" | sed 's/[&|\\]/\\&/g'; }

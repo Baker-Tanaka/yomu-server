@@ -8,7 +8,7 @@ use eframe::egui::{self, Margin, RichText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use paper_reader_shared::{
     APP_VERSION, DictEntry, DictResponse, ExplainTag, FeedbackItem, FeedbackLabel,
-    FeedbackListResponse, GIT_HASH, GrammarMapResponse, GrammarTagInfo, HistoryEntry,
+    FeedbackListResponse, GIT_HASH, GrammarTagInfo, GrammarTagsResponse, HistoryEntry,
     MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode, SLASH_READING_HEADING, SearchItem,
     SearchSort, WordSource, build_version_label, paper_url_from_input, plain_arrows, pos_groups,
     pos_summary, version_label, without_section,
@@ -66,8 +66,6 @@ impl PaperReaderApp {
         state::refresh_health(&shared, &cc.egui_ctx);
         // 実験モード（端末の LLM）を前回オンにしていれば読み込む（既定はオフで、何も読まない）
         crate::local_llm::resume(&shared, &cc.egui_ctx);
-        // 講座の名前やカテゴリ（チップの表示に使う）
-        state::refresh_grammar(&shared, &cc.egui_ctx);
 
         let theme = dom::load_theme();
         set_theme(&cc.egui_ctx, theme);
@@ -161,17 +159,6 @@ impl PaperReaderApp {
             ui.label(RichText::new("設定").strong());
             ui.separator();
             let mut s = self.shared.borrow_mut();
-            let mut show = s.show_course;
-            if ui
-                .checkbox(&mut show, "講座の案内を表示する")
-                .on_hover_text(format!(
-                    "文法項目のチップに、対応する「{}」のカテゴリ・レッスンを表示します",
-                    s.course_short()
-                ))
-                .changed()
-            {
-                s.set_show_course(show);
-            }
             let mut auto = s.auto_explain;
             if ui.checkbox(&mut auto, "選択したら自動で解説").changed() {
                 s.auto_explain = auto;
@@ -1073,15 +1060,13 @@ impl PaperReaderApp {
 
     /// 文法項目のチップと、選んだ項目の詳細。
     fn grammar_chips(&mut self, ui: &mut egui::Ui, p: &Palette) {
-        let (tags, received, selected, found, show_course, course_short, running) = {
+        let (tags, received, selected, found, running) = {
             let s = self.shared.borrow();
             (
                 s.explain.tags.clone(),
                 s.explain.tags_received,
                 s.explain.selected_tag,
                 s.explain.highlight_found,
-                s.show_course,
-                s.course_short(),
                 s.explain.phase.is_running(),
             )
         };
@@ -1102,27 +1087,18 @@ impl PaperReaderApp {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
             for (i, tag) in tags.iter().enumerate() {
-                let label = chip_label(tag, show_course, &course_short);
-                let (fg, bg) = if tag.in_scope || !show_course {
-                    (p.accent, p.accent_soft)
-                } else {
-                    (p.weak, p.card_stroke)
-                };
                 let is_selected = selected == Some(i);
-                let button = egui::Button::new(RichText::new(label).size(12.5).color(fg))
-                    .fill(bg)
+                let button = egui::Button::new(RichText::new(&tag.name).size(12.5).color(p.accent))
+                    .fill(p.accent_soft)
                     .stroke(if is_selected {
-                        egui::Stroke::new(1.5, fg)
+                        egui::Stroke::new(1.5, p.accent)
                     } else {
                         egui::Stroke::NONE
                     })
                     .corner_radius(egui::CornerRadius::same(13));
                 if ui
                     .add(button)
-                    .on_hover_text(format!(
-                        "{}（クリックで本文の該当箇所と説明を表示）",
-                        tag.name
-                    ))
+                    .on_hover_text("クリックで本文の該当箇所と説明を表示")
                     .clicked()
                 {
                     clicked = Some(i);
@@ -1134,7 +1110,7 @@ impl PaperReaderApp {
         }
         if let Some(tag) = selected.and_then(|i| tags.get(i)) {
             ui.add_space(4.0);
-            tag_detail(ui, p, tag, found, show_course, &course_short);
+            tag_detail(ui, p, tag, found);
         }
         ui.add_space(4.0);
     }
@@ -1144,9 +1120,9 @@ impl PaperReaderApp {
     fn grammar_tab(&mut self, ui: &mut egui::Ui) {
         let p = theme::palette(ui.ctx());
         let ctx = ui.ctx().clone();
-        let (stale, order, show_course) = {
+        let (stale, order) = {
             let s = self.shared.borrow();
-            (s.grammar_stale, s.grammar_order, s.show_course)
+            (s.grammar_stale, s.grammar_order)
         };
         if stale {
             state::refresh_grammar(&self.shared, &ctx);
@@ -1166,30 +1142,6 @@ impl PaperReaderApp {
             }
             GrammarStatus::Loaded(g) => g,
         };
-
-        if show_course {
-            theme::card(ui, |ui| {
-                ui.label(RichText::new(&g.course).size(13.0).strong().color(p.strong));
-                let lessons: usize = g.categories.iter().map(|c| c.lesson_count).sum();
-                if g.source == "template" || lessons == 0 {
-                    ui.label(
-                        RichText::new(
-                            "レッスン名はまだ記入されていません。data/grammar_map.local.yaml に書き写すと、\
-                             ここと解説のチップにレッスン名が出ます（今はカテゴリ単位の案内だけ）。",
-                        )
-                        .size(12.5)
-                        .color(p.weak),
-                    );
-                } else {
-                    ui.label(
-                        RichText::new(format!("記入済みのレッスン: {lessons} 件"))
-                            .size(12.5)
-                            .color(p.weak),
-                    );
-                }
-            });
-            ui.add_space(8.0);
-        }
 
         let mut new_order = order;
         ui.horizontal(|ui| {
@@ -1214,8 +1166,8 @@ impl PaperReaderApp {
         ui.add_space(8.0);
 
         match new_order {
-            GrammarOrder::Category => grammar_by_category(ui, &p, &g, show_course),
-            GrammarOrder::Frequency => grammar_by_frequency(ui, &p, &g, show_course),
+            GrammarOrder::Category => grammar_by_category(ui, &p, &g),
+            GrammarOrder::Frequency => grammar_by_frequency(ui, &p, &g),
         }
     }
 
@@ -2612,38 +2564,8 @@ fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// チップの文言。
-/// - 範囲内でレッスンあり: 「📺 関係詞 › 第3講 …」
-/// - 範囲内でレッスン未記入: 「📺 関係詞（パーフェクト英文法）」
-/// - 範囲外: 「論文構文：同格の that（講座範囲外）」
-/// - 講座の案内がオフ: 文法項目の名前だけ
-fn chip_label(tag: &ExplainTag, show_course: bool, course_short: &str) -> String {
-    if !show_course {
-        return tag.name.clone();
-    }
-    match (tag.in_scope, tag.lessons.as_slice()) {
-        (true, [first, rest @ ..]) => {
-            let more = if rest.is_empty() {
-                String::new()
-            } else {
-                format!(" ほか {} 件", rest.len())
-            };
-            format!("📺 {} › {}{more}", tag.category, first.title)
-        }
-        (true, []) => format!("📺 {}（{course_short}）", tag.category),
-        (false, _) => format!("{}：{}（講座範囲外）", tag.category, tag.name),
-    }
-}
-
-/// 選んだ文法項目の説明と、対応するレッスン。
-fn tag_detail(
-    ui: &mut egui::Ui,
-    p: &Palette,
-    tag: &ExplainTag,
-    found: bool,
-    show_course: bool,
-    course_short: &str,
-) {
+/// 選んだ文法項目の説明。
+fn tag_detail(ui: &mut egui::Ui, p: &Palette, tag: &ExplainTag, found: bool) {
     egui::Frame::new()
         .fill(p.accent_soft.gamma_multiply(0.6))
         .corner_radius(egui::CornerRadius::same(10))
@@ -2671,81 +2593,29 @@ fn tag_detail(
             }
             ui.add_space(2.0);
             ui.label(RichText::new(&tag.hint).size(13.5).color(p.text));
-            if show_course {
-                ui.add_space(4.0);
-                lessons_block(
-                    ui,
-                    p,
-                    tag.in_scope,
-                    &tag.lessons,
-                    &tag.category,
-                    course_short,
-                );
-            }
         });
 }
 
-/// 対応するレッスン（無ければカテゴリ単位の案内か、範囲外の旨）。
-fn lessons_block(
-    ui: &mut egui::Ui,
-    p: &Palette,
-    in_scope: bool,
-    lessons: &[paper_reader_shared::LessonRef],
-    category: &str,
-    course_short: &str,
-) {
-    if !in_scope {
-        let text = if category == paper_reader_shared::OUT_OF_COURSE_CATEGORY {
-            format!("{course_short}の範囲外の項目です（論文でよく出る構文）。")
-        } else {
-            format!("記入済みの「{category}」のレッスンには含まれていません（講座範囲外）。")
-        };
-        ui.label(RichText::new(text).size(12.5).color(p.weak));
-    } else if lessons.is_empty() {
-        ui.label(
-            RichText::new(format!("📺 {course_short}「{category}」で復習できます"))
-                .size(12.5)
-                .color(p.accent),
-        );
-    } else {
-        for l in lessons {
-            ui.label(
-                RichText::new(format!("📺 {} › {}", l.category, l.title))
-                    .size(12.5)
-                    .color(p.accent),
-            );
-        }
-    }
-}
-
-/// カテゴリ → タグ → 対応レッスン。
-fn grammar_by_category(ui: &mut egui::Ui, p: &Palette, g: &GrammarMapResponse, show_course: bool) {
+/// カテゴリ → タグ。
+fn grammar_by_category(ui: &mut egui::Ui, p: &Palette, g: &GrammarTagsResponse) {
     for cat in &g.categories {
-        let tags: Vec<&GrammarTagInfo> = g.tags.iter().filter(|t| t.category == cat.name).collect();
+        let tags: Vec<&GrammarTagInfo> = g.tags.iter().filter(|t| &t.category == cat).collect();
         if tags.is_empty() {
             continue;
         }
         let total: u64 = tags.iter().map(|t| t.count).sum();
-        let mut title = cat.name.clone();
-        if !cat.in_course {
-            title.push_str("（講座範囲外）");
-        }
-        let mut meta = format!("出現 {total}");
-        if show_course && cat.in_course {
-            meta.push_str(&format!(" · レッスン {}", cat.lesson_count));
-        }
         theme::card(ui, |ui| {
             egui::CollapsingHeader::new(
-                RichText::new(format!("{title}   {meta}"))
+                RichText::new(format!("{cat}   出現 {total}"))
                     .strong()
-                    .color(if cat.in_course { p.strong } else { p.weak }),
+                    .color(p.strong),
             )
             // 出現回数が 0 から増えたら開き直すよう、有無を ID に含める
-            .id_salt(("grammar-cat", &cat.name, total > 0))
+            .id_salt(("grammar-cat", cat, total > 0))
             .default_open(total > 0)
             .show(ui, |ui| {
                 for tag in tags {
-                    grammar_tag_row(ui, p, tag, show_course, &g.course_short, false);
+                    grammar_tag_row(ui, p, tag, false);
                 }
             });
         });
@@ -2754,7 +2624,7 @@ fn grammar_by_category(ui: &mut egui::Ui, p: &Palette, g: &GrammarMapResponse, s
 }
 
 /// 出現回数の多い順（出てきたものだけ）。
-fn grammar_by_frequency(ui: &mut egui::Ui, p: &Palette, g: &GrammarMapResponse, show_course: bool) {
+fn grammar_by_frequency(ui: &mut egui::Ui, p: &Palette, g: &GrammarTagsResponse) {
     let mut tags: Vec<&GrammarTagInfo> = g.tags.iter().filter(|t| t.count > 0).collect();
     if tags.is_empty() {
         ui.label(
@@ -2772,19 +2642,12 @@ fn grammar_by_frequency(ui: &mut egui::Ui, p: &Palette, g: &GrammarMapResponse, 
         );
         for tag in tags {
             ui.separator();
-            grammar_tag_row(ui, p, tag, show_course, &g.course_short, true);
+            grammar_tag_row(ui, p, tag, true);
         }
     });
 }
 
-fn grammar_tag_row(
-    ui: &mut egui::Ui,
-    p: &Palette,
-    tag: &GrammarTagInfo,
-    show_course: bool,
-    course_short: &str,
-    with_category: bool,
-) {
+fn grammar_tag_row(ui: &mut egui::Ui, p: &Palette, tag: &GrammarTagInfo, with_category: bool) {
     ui.horizontal_wrapped(|ui| {
         let (fg, bg) = if tag.count > 0 {
             (p.on_accent, p.accent)
@@ -2798,18 +2661,6 @@ fn grammar_tag_row(
             theme::chip(ui, &tag.category, p.accent, p.accent_soft);
         }
     });
-    if show_course {
-        ui.indent(("lessons", &tag.id), |ui| {
-            lessons_block(
-                ui,
-                p,
-                tag.in_scope,
-                &tag.lessons,
-                &tag.category,
-                course_short,
-            );
-        });
-    }
 }
 
 enum PaperAction {

@@ -68,6 +68,32 @@ impl Tagger<'_> {
     }
 }
 
+impl Tagger<'_> {
+    /// タグ付けのプロンプト（3,000 トークンほど）を LLM に読み込ませておく。結果は使わない。
+    /// プロンプトのキャッシュが冷えていると、最初のタグ付けだけで 15 秒ほどかかるため。
+    pub async fn warm_up(&self, g: &GrammarData) {
+        let chat = JsonChat {
+            http: self.http,
+            base_url: self.base_url,
+            model: self.model,
+            disable_thinking: self.disable_thinking,
+            structured_output: self.structured_output,
+        };
+        let system = tagging_system_prompt(g);
+        let user = tagging_user_message("We propose a simple method.");
+        let req = JsonRequest {
+            system: &system,
+            user: &user,
+            response_format: tagging_schema(g),
+            max_tokens: 1,
+            timeout: TAGGING_TIMEOUT,
+        };
+        if let Err(e) = chat.complete(&req).await {
+            tracing::debug!(error = %e, "tagging warm-up failed");
+        }
+    }
+}
+
 /// タグ付けのリクエスト body（テスト用に構造を確かめる）。
 #[cfg(test)]
 fn request_body(

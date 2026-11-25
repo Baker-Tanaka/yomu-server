@@ -3,10 +3,11 @@
 //! - LLM への同時リクエストは `AppState::llm_gate`（Semaphore, 1 件）で制限し、待つときは `queued` を送る
 //! - クライアントが切断したら（SSE の受け手が drop されたら）上流のストリームも drop して生成を止める
 //! - 最後まで生成できた解説は explain_cache に保存し、次回は LLM を呼ばずに同じ SSE 形式で返す
-//! - mode=sentence では、解説の前に文法タグ付けを行い `tags` イベントを送る（タグ付け＋解説で Semaphore 1 件）。
-//!   タグ付けに失敗してもタグ無しで解説を続ける
+//! - mode=sentence では、和訳を先に流してから文法タグ付けを行い `tags` イベントを送り、続けて残りの解説を流す
+//!   （和訳・タグ付け・解説で Semaphore 1 件）。タグ付けに失敗してもタグ無しで解説を続ける
 
 use std::convert::Infallible;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use axum::Json;
@@ -32,6 +33,10 @@ use crate::tagger::Tagger;
 const GENERATION_TIMEOUT: Duration = Duration::from_secs(300);
 /// 生成する最大トークン数
 const MAX_TOKENS: u32 = 1_500;
+/// 和訳の最大トークン数（英文は 2,000 文字まで）
+const TRANSLATION_MAX_TOKENS: u32 = 1_000;
+/// 和訳と、そのあとの解説のあいだ
+const SECTION_BREAK: &str = "\n\n";
 
 pub async fn post_explain(
     State(state): State<AppState>,
@@ -84,6 +89,82 @@ pub async fn post_explain(
         rx.recv().await.map(|ev| (Ok(ev), rx))
     });
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+/// プロンプトを温め直す間隔（Ollama が使わないモデルを外すまでの時間より短くする）
+const WARM_UP_INTERVAL_SECS: i64 = 5 * 60;
+
+/// 論文を開いたときに、解説で使うプロンプトを LLM に読み込ませておく（プロンプトのキャッシュを温める）。
+///
+/// 冷えた状態では、最初の英文の解説でタグ付けのプロンプトの読み込みだけに 15 秒ほどかかる。
+/// LLM が空いているときだけ行い（Semaphore を待たない）、5 分に 1 回まで。
+pub fn warm_up(state: &AppState) {
+    if state.config.llm_model.is_empty() {
+        return;
+    }
+    let now = now_secs();
+    let last = state.warmed_at.load(Ordering::Relaxed);
+    if now - last < WARM_UP_INTERVAL_SECS {
+        return;
+    }
+    let Ok(permit) = state.llm_gate.clone().try_acquire_owned() else {
+        return;
+    };
+    state.warmed_at.store(now, Ordering::Relaxed);
+    let state = state.clone();
+    tokio::spawn(async move {
+        let _permit = permit;
+        let started = std::time::Instant::now();
+        let cfg = &state.config;
+        let grammar = state.grammar();
+        Tagger {
+            http: &state.llm_stream_http,
+            base_url: &cfg.llm_base_url,
+            model: &cfg.llm_model,
+            disable_thinking: cfg.llm_disable_thinking,
+            structured_output: &state.structured_output,
+        }
+        .warm_up(&grammar)
+        .await;
+        let url = format!(
+            "{}/chat/completions",
+            cfg.llm_base_url.trim_end_matches('/')
+        );
+        let sample = "We propose a simple method.";
+        for system in [
+            prompts::translation_system_prompt(),
+            prompts::system_prompt(Mode::Sentence),
+            prompts::system_prompt(Mode::Word),
+        ] {
+            let mut body =
+                chat_stream_body(&cfg.llm_model, &system, sample, 1, cfg.llm_disable_thinking);
+            body["stream"] = json!(false);
+            let sent = state
+                .llm_stream_http
+                .post(&url)
+                .json(&body)
+                .timeout(WARM_UP_TIMEOUT)
+                .send()
+                .await;
+            if let Err(e) = sent.and_then(|r| r.error_for_status()) {
+                tracing::debug!(error = %e, "prompt warm-up failed");
+                return;
+            }
+        }
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "llm prompts warmed up"
+        );
+    });
+}
+
+const WARM_UP_TIMEOUT: Duration = Duration::from_secs(60);
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// 文字数の上限などを検証する。
@@ -170,52 +251,12 @@ async fn run(state: AppState, req: ExplainRequest, key: String, tx: mpsc::Sender
         return;
     }
 
-    // 英文なら文法タグ付け（Semaphore を持ったまま行う）
-    let grammar = state.grammar();
-    let detected: Option<Vec<DetectedTag>> = if req.mode == Mode::Sentence {
-        let tagger = Tagger {
-            http: &state.llm_stream_http,
-            base_url: &state.config.llm_base_url,
-            model: &state.config.llm_model,
-            disable_thinking: state.config.llm_disable_thinking,
-            structured_output: &state.structured_output,
-        };
-        let tags = tokio::select! {
-            t = tagger.tag(&grammar, &req.text) => t,
-            _ = tx.closed() => {
-                tracing::info!("client disconnected during tagging");
-                return;
-            }
-        };
-        if send(&tx, sse_event::TAGS, &tags_event(&grammar, &tags))
-            .await
-            .is_err()
-        {
-            return;
-        }
-        Some(tags)
-    } else {
-        None
+    let result = match tokio::time::timeout(GENERATION_TIMEOUT, generate(&state, &req, &tx)).await {
+        Ok(r) => r,
+        Err(_) => Err(StreamError::Llm("解説の生成がタイムアウトしました".into())),
     };
-    let notes: Vec<GrammarNote<'_>> = detected
-        .iter()
-        .flatten()
-        .filter_map(|d| {
-            grammar.tag(&d.tag_id).map(|t| GrammarNote {
-                name: &t.name,
-                span: &d.span,
-            })
-        })
-        .collect();
-
-    let result =
-        match tokio::time::timeout(GENERATION_TIMEOUT, stream_llm(&state, &req, &notes, &tx)).await
-        {
-            Ok(r) => r,
-            Err(_) => Err(StreamError::Llm("解説の生成がタイムアウトしました".into())),
-        };
     match result {
-        Ok(c) => {
+        Ok((c, detected)) => {
             tracing::info!(
                 mode = req.mode.as_str(),
                 chars = c.text.chars().count(),
@@ -256,26 +297,109 @@ async fn send(tx: &mpsc::Sender<Event>, event: &str, data: &str) -> Result<(), S
         .map_err(|_| StreamError::ClientGone)
 }
 
-/// LLM にストリーミングで問い合わせ、断片を token イベントとして送る。生成した全文を返す。
-async fn stream_llm(
+/// 解説を生成して流す。英文は ① 和訳 → ② 文法タグ付け → ③ 文構造・文法ポイント・語句 の順に行う。
+///
+/// 和訳はタグに依らないので、短いプロンプトで先に流して最初の文字が出るまでを短くする
+/// （タグ付けは 100 トークンほどの JSON を生成するので数秒かかる）。③ には和訳と検出したタグを渡す。
+/// 3 回の問い合わせは同じ Semaphore の中で順に行う（同時には投げない）。
+async fn generate(
     state: &AppState,
     req: &ExplainRequest,
-    grammar: &[GrammarNote<'_>],
     tx: &mpsc::Sender<Event>,
-) -> Result<Completion, StreamError> {
+) -> Result<(Completion, Option<Vec<DetectedTag>>), StreamError> {
     let cfg = &state.config;
     if cfg.llm_model.is_empty() {
         return Err(StreamError::Llm(
             "LLM_MODEL が設定されていません（.env を確認してください）".into(),
         ));
     }
+    let body = |system: String, user: String, max_tokens: u32| {
+        chat_stream_body(
+            &cfg.llm_model,
+            &system,
+            &user,
+            max_tokens,
+            cfg.llm_disable_thinking,
+        )
+    };
+    if req.mode == Mode::Word {
+        let b = body(
+            prompts::system_prompt(Mode::Word),
+            prompts::user_message(req, &[], None),
+            MAX_TOKENS,
+        );
+        return Ok((stream_llm(state, &b, tx).await?, None));
+    }
+
+    // ① 和訳
+    send(tx, sse_event::TOKEN, prompts::TRANSLATION_HEADING).await?;
+    let b = body(
+        prompts::translation_system_prompt(),
+        prompts::translation_user_message(req),
+        TRANSLATION_MAX_TOKENS,
+    );
+    let translation = stream_llm(state, &b, tx).await?;
+    send(tx, sse_event::TOKEN, SECTION_BREAK).await?;
+
+    // ② 文法タグ付け（失敗してもタグ無しで続ける）
+    let grammar = state.grammar();
+    let tagger = Tagger {
+        http: &state.llm_stream_http,
+        base_url: &cfg.llm_base_url,
+        model: &cfg.llm_model,
+        disable_thinking: cfg.llm_disable_thinking,
+        structured_output: &state.structured_output,
+    };
+    let tags = tokio::select! {
+        t = tagger.tag(&grammar, &req.text) => t,
+        _ = tx.closed() => return Err(StreamError::ClientGone),
+    };
+    send(tx, sse_event::TAGS, &tags_event(&grammar, &tags)).await?;
+    let notes: Vec<GrammarNote<'_>> = tags
+        .iter()
+        .filter_map(|d| {
+            grammar.tag(&d.tag_id).map(|t| GrammarNote {
+                name: &t.name,
+                span: &d.span,
+            })
+        })
+        .collect();
+
+    // ③ 文構造・文法ポイント・語句
+    let b = body(
+        prompts::system_prompt(Mode::Sentence),
+        prompts::user_message(req, &notes, Some(&translation.text)),
+        MAX_TOKENS,
+    );
+    let rest = stream_llm(state, &b, tx).await?;
+    let complete = translation.complete && rest.complete;
+    Ok((
+        Completion {
+            // クライアントに送った順のとおりにつなぐ（キャッシュから返すときも同じ表示になる）
+            text: format!(
+                "{}{}{SECTION_BREAK}{}",
+                prompts::TRANSLATION_HEADING,
+                translation.text,
+                rest.text
+            ),
+            complete,
+        },
+        Some(tags),
+    ))
+}
+
+/// LLM にストリーミングで問い合わせ、断片を token イベントとして送る。生成した全文を返す。
+async fn stream_llm(
+    state: &AppState,
+    body: &Value,
+    tx: &mpsc::Sender<Event>,
+) -> Result<Completion, StreamError> {
+    let cfg = &state.config;
     let url = format!(
         "{}/chat/completions",
         cfg.llm_base_url.trim_end_matches('/')
     );
-    let body = request_body(&cfg.llm_model, req, grammar, cfg.llm_disable_thinking);
-
-    let send_req = state.llm_stream_http.post(&url).json(&body).send();
+    let send_req = state.llm_stream_http.post(&url).json(body).send();
     let mut resp = tokio::select! {
         r = send_req => r.map_err(|e| StreamError::Llm(describe_reqwest(&e, &cfg.llm_base_url)))?,
         _ = tx.closed() => return Err(StreamError::ClientGone),
@@ -332,21 +456,22 @@ async fn stream_llm(
     }
 }
 
-/// OpenAI 互換 /chat/completions のリクエスト body。
-pub fn request_body(
+/// OpenAI 互換 /chat/completions のストリーミングのリクエスト body。
+pub fn chat_stream_body(
     model: &str,
-    req: &ExplainRequest,
-    grammar: &[GrammarNote<'_>],
+    system: &str,
+    user: &str,
+    max_tokens: u32,
     disable_thinking: bool,
 ) -> Value {
     let mut body = json!({
         "model": model,
         "stream": true,
         "temperature": 0.3,
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": max_tokens,
         "messages": [
-            { "role": "system", "content": prompts::system_prompt(req.mode) },
-            { "role": "user", "content": prompts::user_message(req, grammar) },
+            { "role": "system", "content": system },
+            { "role": "user", "content": user },
         ],
     });
     if disable_thinking {
@@ -495,8 +620,9 @@ mod tests {
 
     #[test]
     fn body_shape() {
-        let b = request_body("m", &req("We propose.", ""), &[], true);
+        let b = chat_stream_body("m", "sys", "We propose.", 99, true);
         assert_eq!(b["model"], "m");
+        assert_eq!(b["max_tokens"], 99);
         assert_eq!(b["stream"], true);
         assert_eq!(b["messages"][0]["role"], "system");
         assert!(
@@ -507,7 +633,7 @@ mod tests {
         );
         assert_eq!(b["reasoning_effort"], "none");
         assert!(
-            request_body("m", &req("x", ""), &[], false)
+            chat_stream_body("m", "s", "x", 1, false)
                 .get("reasoning_effort")
                 .is_none()
         );

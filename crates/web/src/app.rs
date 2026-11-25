@@ -586,7 +586,7 @@ impl PaperReaderApp {
                     ui.horizontal(|ui| {
                         ui.spinner();
                         ui.label(
-                            RichText::new("順番待ち中…（ほかの解説を生成しています）")
+                            RichText::new("順番待ち中…（LLM がほかの処理をしています）")
                                 .color(p.weak),
                         );
                     });

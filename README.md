@@ -190,7 +190,11 @@ deploy/install.sh --no-build                                  # 常時稼働の�
   「文法ポイント」ではその名前を小見出しに使わせます
 - 解説キャッシュにはタグも保存し、ヒット時は `tags` も再送します（レッスン対応はその時点の grammar_map で解決し直す）。
   キャッシュのキーには grammar_tags.yaml の内容のハッシュを含めるので、タグを編集すると英文の解説は作り直されます
-- タグ付けの分だけ、解説が流れ始めるまでが 2〜4 秒ほど延びます（gemma4:e4b-it-qat、モデル読み込み済み）。Ollama は
+- 英文は ① 和訳（短いプロンプト）→ ② 文法タグ付け → ③ 文構造・文法ポイント・語句（和訳とタグを渡す）の順に、同じ順番待ちの中で問い合わせます。
+  和訳はタグに依らないので先に流し、最初の文字が出るまでを約 1 秒にしています（以前はタグ付けの JSON の生成を待つため 7〜13 秒）。
+  チップはタグ付けが終わった時点（7〜15 秒ほど）で出ます（gemma4:e4b-it-qat、M2 16GB で計測）
+- 論文を開いたとき、LLM が空いていれば、タグ付け（約 3,000 トークン）と解説のプロンプトを LLM に読み込ませておきます（5 分に 1 回まで）。
+  プロンプトのキャッシュが冷えていると、最初のタグ付けだけで 15 秒ほどかかるためです。Ollama は
   `OLLAMA_NUM_PARALLEL=2` にして、タグ付けと解説のプロンプトがそれぞれキャッシュされるようにしています
 
 ## 不具合・要望を送る（GitHub Issue）
@@ -439,7 +443,8 @@ tailscale serve status
 - `POST /api/words/delete` body: `{ words: [string] }` → `{ deleted, store }`（1,000 語まで）
 - `POST /api/words/prune` body: `{ count }` → `{ deleted, store }`（検索回数の少ない順・同じなら古い順に消す。自分で登録した語は残す）
 - `POST /api/explain` body: `{ mode: "word" | "sentence", text, context, regenerate? }` → `text/event-stream`
-  - `event: queued`（ほかの解説の生成待ち）→ `event: started` →（英文のみ）`event: tags` → `event: token`（data は追記する文字列）… → `event: done`
+  - `event: queued`（ほかの解説の生成待ち）→ `event: started` → `event: token`（data は追記する文字列）… → `event: done`
+  - 英文は `token`（「## 和訳」と和訳）… → `event: tags` → `token`（文構造・文法ポイント・語句）… の順。キャッシュのヒット時は `cached` → `tags` → `token`（全文）
   - `tags` の data: `[{ tag_id, name, category, span, in_scope, lessons: [{ id, category, title }], hint }]`
   - 失敗時は `event: error`（data はエラーメッセージ）。入力の検証エラーは 400 と `{ "error": "..." }`
   - text は 2,000 文字、context は 4,000 文字まで。LLM への同時リクエストは 1 件で、クライアントが切断すると生成も止めます

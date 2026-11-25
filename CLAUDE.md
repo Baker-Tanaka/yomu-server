@@ -53,7 +53,8 @@ POST /api/words/delete          … 選んだ語を単語帳から消す
 POST /api/words/prune           … 検索回数の少ない語から消す（上限 WORD_STORE_MAX を超えたときも自動で同じ順に消す）
 POST /api/explain               … body: { mode: "word" | "sentence", text, context }
                                    レスポンスは text/event-stream（SSE 形式）で解説を逐次送る
-                                   イベント: queued / started / tags（mode=sentence のみ、解説の前に文法タグ）/ token / done / error
+                                   イベント: queued / started / token / tags / done / error
+                                   （mode=sentence は token で和訳を先に流し、tags（文法タグ）を送ってから残りの解説の token を流す）
                                    （キャッシュのヒット時は cached → tags → token → done）
 GET  /api/grammar-map           … 文法タグ一覧・カテゴリ・レッスン対応・履歴での出現回数
 POST /api/admin/reload-grammar  … 文法タグとレッスン対応を読み直す（127.0.0.1 から直接の要求のみ。転送ヘッダー付きは拒否）

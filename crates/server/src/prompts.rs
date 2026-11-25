@@ -7,7 +7,7 @@
 
 use paper_reader_shared::{ExplainRequest, Mode};
 
-pub const PROMPT_VERSION: u32 = 2;
+pub const PROMPT_VERSION: u32 = 3;
 
 const COMMON: &str = "\
 あなたは英語論文の読解を助ける日本語の講師です。
@@ -30,18 +30,29 @@ const WORD: &str = "\
 ## この分野での使われ方
 専門用語としての意味や、論文でよく使われる言い回しがあれば書く。特に無ければこの見出しごと省略する。";
 
+/// 英文の和訳（解説より先に、短いプロンプトで流す。最初の文字が出るまでを短くするため）。
+const TRANSLATION: &str = "\
+あなたは英語論文の翻訳者です。ユーザーが選択した英文を、文脈を踏まえて自然で正確な日本語に訳してください。
+- 訳すのは「対象の英文」だけです。文脈（段落）は意味を決める参考にするだけで、対象の英文以外の文は訳さないでください。
+- 訳文だけを出力してください。見出し・前置き・解説・原文は書かないでください。
+- 専門用語は分野で一般的な訳語を使い、定訳が無ければカタカナ語か原語のまま残してください。
+- 数式や引用番号（[12] など）はそのまま残してください。";
+
+/// 文法タグが検出されなかったときの「## 文法ポイント」の指示。
+const NO_GRAMMAR_NOTE: &str = "検出した文法項目: なし（「## 文法ポイント」では、関係詞、分詞構文、仮定法、倒置、無生物主語、省略など該当するものだけを箇条書きで説明し、特に無ければ「特になし」と書く）";
+
+/// 和訳の見出し（和訳はサーバーが見出しを付けて先に流す）。
+pub const TRANSLATION_HEADING: &str = "## 和訳\n\n";
+
 const SENTENCE: &str = "\
 ユーザーが英語論文の中で選択した英文について、次の見出しで解説してください。
-
-## 和訳
-自然で正確な日本語に訳す。
+「## 和訳」は先に表示済みなので書かず、「## 文構造」から始めてください。説明はユーザーメッセージの和訳と食い違わないようにしてください。
 
 ## 文構造
 主語・動詞・目的語・補語と、主な修飾関係を箇条書きで示す（例: 「- 主語: The model」）。
 
 ## 文法ポイント
-ユーザーメッセージに「検出した文法項目」があれば、その項目ごとに「### 項目名」の小見出しを立て、英文のどの部分（該当箇所）がどう働いているかを説明する。項目名はそのまま使い、言い換えない。
-一覧に無い重要な文法事項があれば最後に箇条書きで補う。「検出した文法項目」が無ければ、関係詞、分詞構文、仮定法、倒置、無生物主語、省略など該当するものだけを箇条書きで説明し、特に無ければ「特になし」と書く。
+ユーザーメッセージの「検出した文法項目」ごとに「### 項目名」の小見出しを立て、英文のどの部分（該当箇所）がどう働いているかを説明する。項目名はそのまま使い、言い換えない。一覧に無い重要な文法事項があれば、最後に箇条書きで補う。
 
 ## 語句
 難しい語や専門用語を「- **英語**: 意味」の形で箇条書きにする。";
@@ -55,14 +66,38 @@ pub fn system_prompt(mode: Mode) -> String {
     format!("{COMMON}\n\n{specific}")
 }
 
+/// 英文の和訳のシステムプロンプト。
+pub fn translation_system_prompt() -> String {
+    TRANSLATION.to_string()
+}
+
 /// 解説に添える、検出した文法項目（名前と英文中の該当箇所）。
 pub struct GrammarNote<'a> {
     pub name: &'a str,
     pub span: &'a str,
 }
 
-/// ユーザーメッセージ。文脈が選択文字列と同じなら省く。英文なら検出した文法項目を添える。
-pub fn user_message(req: &ExplainRequest, grammar: &[GrammarNote<'_>]) -> String {
+/// 和訳のユーザーメッセージ。文脈は参考として先に置き、訳す英文を最後に置く
+/// （文脈を後ろに置くと、続きの文まで訳してしまうことがあるため）。
+pub fn translation_user_message(req: &ExplainRequest) -> String {
+    let text = req.text.trim();
+    let context = req.context.trim();
+    if context.is_empty() || context == text {
+        format!("訳す英文:\n\"\"\"\n{text}\n\"\"\"")
+    } else {
+        format!(
+            "文脈（参考。訳さない）:\n\"\"\"\n{context}\n\"\"\"\n\n訳す英文（この文だけを訳す）:\n\"\"\"\n{text}\n\"\"\""
+        )
+    }
+}
+
+/// ユーザーメッセージ。文脈が選択文字列と同じなら省く。
+/// 英文なら、先に流した和訳と、検出した文法項目を添える（和訳の問い合わせではどちらも無し）。
+pub fn user_message(
+    req: &ExplainRequest,
+    grammar: &[GrammarNote<'_>],
+    translation: Option<&str>,
+) -> String {
     let has_context = !req.context.trim().is_empty() && req.context.trim() != req.text.trim();
     let target = match req.mode {
         Mode::Word => format!("対象の単語: {}", req.text.trim()),
@@ -76,6 +111,15 @@ pub fn user_message(req: &ExplainRequest, grammar: &[GrammarNote<'_>]) -> String
     } else {
         target
     };
+    if let Some(t) = translation.map(str::trim).filter(|t| !t.is_empty())
+        && req.mode == Mode::Sentence
+    {
+        msg.push_str(&format!("\n\n和訳（表示済み）:\n\"\"\"\n{t}\n\"\"\""));
+    }
+    if req.mode == Mode::Sentence && grammar.is_empty() {
+        // タグが無いときだけの指示（システムプロンプトに入れると、タグがあっても「特になし」と書きがちなため）
+        msg.push_str(&format!("\n\n{NO_GRAMMAR_NOTE}"));
+    }
     if req.mode == Mode::Sentence && !grammar.is_empty() {
         msg.push_str(
             "\n\n検出した文法項目（「## 文法ポイント」ではこの名前を「### 項目名」の見出しに使う）:",
@@ -153,9 +197,13 @@ mod tests {
         assert!(w.contains("## 文脈での意味") && w.contains("## 品詞と用法"));
         assert!(!w.contains("## 和訳"));
         let s = system_prompt(Mode::Sentence);
-        for h in ["## 和訳", "## 文構造", "## 文法ポイント", "## 語句"] {
+        for h in ["## 文構造", "## 文法ポイント", "## 語句"] {
             assert!(s.contains(h), "{h}");
         }
+        // 和訳は先に別の問い合わせで流すので、解説では書かせない
+        assert!(s.contains("書かず"));
+        let t = translation_system_prompt();
+        assert!(t.contains("訳文だけ") && t.contains("以外の文は訳さない") && !t.contains("## "));
         assert!(s.contains("推測"));
         assert!(s.contains("引用番号"));
     }
@@ -169,6 +217,7 @@ mod tests {
                 "The dominant sequence transduction models",
             ),
             &[],
+            None,
         );
         assert!(m.starts_with("対象の単語: transduction"));
         assert!(m.contains("The dominant sequence transduction models"));
@@ -176,10 +225,27 @@ mod tests {
         let m = user_message(
             &req(Mode::Sentence, "We propose X.", " We propose X. "),
             &[],
+            None,
         );
         assert!(m.contains("We propose X."));
         assert!(!m.contains("文脈"), "文脈が同じなら省く: {m}");
-        assert!(!m.contains("検出した文法項目"));
+        assert!(m.contains("検出した文法項目: なし"));
+    }
+
+    #[test]
+    fn translation_message_puts_target_last() {
+        let m = translation_user_message(&req(
+            Mode::Sentence,
+            "We propose X.",
+            "We propose X. We also show Y.",
+        ));
+        assert!(m.starts_with("文脈（参考。訳さない）"), "{m}");
+        assert!(
+            m.ends_with("訳す英文（この文だけを訳す）:\n\"\"\"\nWe propose X.\n\"\"\""),
+            "{m}"
+        );
+        let m = translation_user_message(&req(Mode::Sentence, "We propose X.", "We propose X."));
+        assert_eq!(m, "訳す英文:\n\"\"\"\nWe propose X.\n\"\"\"");
     }
 
     #[test]
@@ -197,6 +263,11 @@ mod tests {
         let m = user_message(
             &req(Mode::Sentence, "Having trained the model, we ...", ""),
             &notes,
+            Some(" モデルを訓練したあと、私たちは… "),
+        );
+        assert!(
+            m.contains("和訳（表示済み）:\n\"\"\"\nモデルを訓練したあと、私たちは…\n\"\"\""),
+            "{m}"
         );
         assert!(
             m.contains("- 分詞構文（該当箇所: \"Having trained the model\"）"),
@@ -206,9 +277,11 @@ mod tests {
             m.contains("- 無生物主語\n") || m.ends_with("- 無生物主語"),
             "{m}"
         );
+        assert!(!m.contains("特になし"));
+        assert!(!system_prompt(Mode::Sentence).contains("特になし"));
         // 単語のときは付けない
-        let m = user_message(&req(Mode::Word, "model", ""), &notes);
-        assert!(!m.contains("分詞構文"));
+        let m = user_message(&req(Mode::Word, "model", ""), &notes, Some("モデル"));
+        assert!(!m.contains("分詞構文") && !m.contains("和訳"));
         assert!(system_prompt(Mode::Sentence).contains("### 項目名"));
     }
 }

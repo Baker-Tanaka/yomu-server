@@ -32,7 +32,7 @@ async fn main() -> Result<()> {
             .find(|p| p.exists())
             .with_context(|| {
                 format!(
-                    "辞書データが見つかりません。{} のどちらかに置くか、パスを引数で指定してください（README 参照）",
+                    "辞書データが見つかりません。{} のどちらかに置くか、パスを引数で指定してください（docs/setup.md 参照）",
                     DEFAULT_INPUTS.join(" / ")
                 )
             })?;

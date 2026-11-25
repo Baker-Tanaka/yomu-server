@@ -20,7 +20,7 @@ else
   exit 1
 fi
 if [ ! -f "$src" ]; then
-  echo "元のフォント ${src} がありません（README の「フォント」を参照）。" >&2
+  echo "元のフォント ${src} がありません（docs/development.md の「フォント」を参照）。" >&2
   exit 1
 fi
 

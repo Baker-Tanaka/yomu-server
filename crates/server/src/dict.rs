@@ -56,7 +56,7 @@ pub async fn lookup_word(pool: &SqlitePool, query: String) -> AppResult<DictResp
                 None => {
                     if !has_entries(pool).await? {
                         return Err(AppError::ServiceUnavailable(
-                            "辞書データがインポートされていません（README の「辞書データ」を参照）"
+                            "辞書データがインポートされていません（docs/setup.md の「辞書データ」を参照）"
                                 .into(),
                         ));
                     }

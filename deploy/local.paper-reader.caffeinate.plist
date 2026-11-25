@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   スリープ防止（任意）。電源接続中のシステムスリープと、アイドルによるスリープを防ぐ。
-  ディスプレイは通常どおり消える。蓋を閉じたときのスリープは防げない（deploy/lid.sh を使う。README「運用」を参照）。
+  ディスプレイは通常どおり消える。蓋を閉じたときのスリープは防げない（deploy/lid.sh を使う。docs/operations.md を参照）。
 -->
 <plist version="1.0">
 <dict>

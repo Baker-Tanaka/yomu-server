@@ -1099,17 +1099,25 @@ pub fn place_bookmark(this: &SharedRef, ctx: &egui::Context) {
     let Some((paper_id, _)) = this.borrow().paper_ref() else {
         return;
     };
-    let Some((block, snippet)) = dom::reading_block() else {
-        this.borrow_mut().bookmark_error = Some("付箋を貼る段落が見つかりません".into());
+    // 本文の選択を覚えていても、アプリ側で解除していれば使わない
+    let use_selection = this.borrow().selection.is_some();
+    let Some(dom::ReadingLine {
+        block,
+        offset,
+        snippet,
+    }) = dom::reading_line(use_selection)
+    else {
+        this.borrow_mut().bookmark_error = Some("付箋を貼る行が見つかりません".into());
         return;
     };
-    dom::show_bookmark(block, &snippet, dom::BookmarkScroll::None);
+    dom::show_bookmark(block, offset, &snippet, dom::BookmarkScroll::None);
     let prev = {
         let mut s = this.borrow_mut();
         s.bookmark_error = None;
         s.papers_stale = true;
         s.bookmark.replace(paper_reader_shared::Bookmark {
             block,
+            offset,
             snippet: snippet.clone(),
             updated_at: (js_sys::Date::now() / 1000.0) as i64,
         })
@@ -1118,6 +1126,7 @@ pub fn place_bookmark(this: &SharedRef, ctx: &egui::Context) {
     let req = paper_reader_shared::BookmarkPut {
         paper_id,
         block,
+        offset,
         snippet,
     };
     let this = this.clone();
@@ -1136,9 +1145,9 @@ pub fn jump_to_bookmark(this: &SharedRef) {
     let Some(b) = &s.bookmark else {
         return;
     };
-    if !dom::show_bookmark(b.block, &b.snippet, dom::BookmarkScroll::Smooth) {
+    if !dom::show_bookmark(b.block, b.offset, &b.snippet, dom::BookmarkScroll::Smooth) {
         s.bookmark_error =
-            Some("付箋の段落が見つかりません（論文の版が変わった可能性があります）".into());
+            Some("付箋の行が見つかりません（論文の版が変わった可能性があります）".into());
     }
 }
 
@@ -1170,7 +1179,7 @@ fn restore_bookmark(this: &SharedRef, prev: Option<paper_reader_shared::Bookmark
     let mut s = this.borrow_mut();
     match &prev {
         Some(b) => {
-            dom::show_bookmark(b.block, &b.snippet, dom::BookmarkScroll::None);
+            dom::show_bookmark(b.block, b.offset, &b.snippet, dom::BookmarkScroll::None);
         }
         None => dom::clear_bookmark(),
     }
@@ -1192,10 +1201,15 @@ pub fn open_paper(this: &SharedRef, ctx: &egui::Context, url: String) {
                 // 付箋があれば、続きから読めるようその位置まで移る
                 s.bookmark_error = None;
                 if let Some(b) = &paper.bookmark
-                    && !dom::show_bookmark(b.block, &b.snippet, dom::BookmarkScroll::Instant)
+                    && !dom::show_bookmark(
+                        b.block,
+                        b.offset,
+                        &b.snippet,
+                        dom::BookmarkScroll::Instant,
+                    )
                 {
                     s.bookmark_error = Some(
-                        "付箋の段落が見つかりません（論文の版が変わった可能性があります）".into(),
+                        "付箋の行が見つかりません（論文の版が変わった可能性があります）".into(),
                     );
                 }
                 s.bookmark = paper.bookmark.clone();

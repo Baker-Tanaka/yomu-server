@@ -49,7 +49,7 @@ DELETE /api/papers?id=&purge=   … 見た論文から外す（purge なら保�
 GET  /api/read-later            … 後で読む論文の一覧（後から積んだ順）
 PUT  /api/read-later            … 後で読むの一番上に積む。body: { paper_id, title, authors }。版なしの ID で 1 論文 1 件
 DELETE /api/read-later?paper_id= … 後で読むから外す
-PUT  /api/bookmark              … 論文に付箋（どこまで読んだか）を貼る。body: { paper_id, block, snippet }。版なしの ID で 1 論文 1 枚
+PUT  /api/bookmark              … 論文に付箋（どこまで読んだか）を貼る。body: { paper_id, block, offset, snippet }。版なしの ID で 1 論文 1 枚
 DELETE /api/bookmark?paper_id=  … 付箋をはがす（付箋は /api/paper の応答にも含める）
 GET  /api/paper-asset?url=      … 論文の図をサーバー経由で配信し SQLite に保存する（ALLOWED_HOSTS の https で /html/ 以下の画像のみ）
 GET  /api/dict?word=<word>      … ローカル辞書で引いた結果を返す（見出し語、訳のリスト、単語帳の情報）。引くたびに単語帳の検索回数を数える

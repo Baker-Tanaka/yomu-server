@@ -6,7 +6,10 @@ use std::rc::Rc;
 use paper_reader_shared::{Mode, normalize_whitespace};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::prelude::Closure;
-use web_sys::{Document, Element, HtmlElement, KeyboardEvent, Node, PointerEvent, Text};
+use web_sys::{
+    Document, DomRect, Element, HtmlElement, KeyboardEvent, Node, PointerEvent, Range,
+    ResizeObserver, Text,
+};
 
 const PAPER_ID: &str = "paper";
 const LAYOUT_ID: &str = "layout";
@@ -52,6 +55,10 @@ thread_local! {
     static LAST_SELECTION: RefCell<Option<SelectionInfo>> = const { RefCell::new(None) };
     /// 最後の選択を含む段落の要素（文法項目のハイライトで検索する範囲）
     static CONTEXT_ELEMENT: RefCell<Option<Element>> = const { RefCell::new(None) };
+    /// 最後の選択の範囲（付箋を貼る行に使う）
+    static LAST_RANGE: RefCell<Option<Range>> = const { RefCell::new(None) };
+    /// 本文に付けている付箋の印
+    static BOOKMARK: RefCell<Option<BookmarkLine>> = const { RefCell::new(None) };
 }
 
 /// 文法項目のハイライトに使う要素のクラス
@@ -60,6 +67,7 @@ const HIGHLIGHT_CLASS: &str = "grammar-hl";
 /// ブラウザの選択を解除する。同じ箇所をもう一度選んだときも通知されるようにする。
 pub fn clear_selection() {
     LAST_SELECTION.with(|l| *l.borrow_mut() = None);
+    LAST_RANGE.with(|r| *r.borrow_mut() = None);
     if let Some(Ok(Some(sel))) = web_sys::window().map(|w| w.get_selection()) {
         let _ = sel.remove_all_ranges();
     }
@@ -70,6 +78,9 @@ pub fn set_paper_html(html: &str, title: &str) {
     crate::cite_peek::close();
     LAST_SELECTION.with(|l| *l.borrow_mut() = None);
     CONTEXT_ELEMENT.with(|c| *c.borrow_mut() = None);
+    LAST_RANGE.with(|r| *r.borrow_mut() = None);
+    // 前の論文の付箋の印（大きさの監視）を止める
+    clear_bookmark();
     if let Some(paper) = paper_element() {
         paper.set_inner_html(html);
         paper.set_scroll_top(0);
@@ -107,6 +118,8 @@ fn capture_selection() -> Option<SelectionInfo> {
     if text.is_empty() {
         return None;
     }
+
+    LAST_RANGE.with(|r| *r.borrow_mut() = Some(range.clone_range()));
 
     let start = range.start_container().ok()?;
     let context_el = element_of(&start)
@@ -894,7 +907,9 @@ pub fn speak(text: &str) -> bool {
 /// この順の通し番号で位置を表せる（版が変わってずれたら書き出しで探し直す）。
 const BLOCK_SELECTOR: &str = "p, li, h1, h2, h3, h4, h5, h6, figcaption, blockquote, dd";
 const HEADING_SELECTOR: &str = "h1, h2, h3, h4, h5, h6";
+/// 付箋を付けたブロックと、その中に重ねる 1 行分の印
 const BOOKMARK_CLASS: &str = "pr-bookmark";
+const BOOKMARK_LINE_CLASS: &str = "pr-bookmark-line";
 /// 付箋の書き出しの照合に使う文字数
 const SNIPPET_MATCH_CHARS: usize = 40;
 
@@ -919,35 +934,137 @@ fn snippet_key(s: &str) -> String {
     s.chars().take(SNIPPET_MATCH_CHARS).collect()
 }
 
-/// 付箋を貼る位置（ブロックの番号と書き出し）。
-/// 本文で選択していて、その段落が見えていればそこ。無ければ、いま画面のいちばん上に見えている段落
-/// （章・節の見出しは読んだ位置が分かりにくいので、ほかに見えている段落があれば選ばない）。
-pub fn reading_block() -> Option<(u32, String)> {
+/// 付箋を貼る行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadingLine {
+    pub block: u32,
+    /// ブロックの本文の先頭から数えた、その行の文字の位置（UTF-16）
+    pub offset: u32,
+    pub snippet: String,
+}
+
+/// 画面の上端にこれだけ隠れていても、その行は見えているとみなす（px）
+const LINE_SLACK_PX: f64 = 4.0;
+
+/// 付箋を貼る行。
+/// 本文で選択していて、選択の先頭の行が見えていればそこ。無ければ、いま画面のいちばん上に見えている行
+/// （章・節の見出しは読んだ位置が分かりにくいので、ほかに見えている行があれば選ばない）。
+///
+/// `use_selection` なら、ブラウザの選択が消えていても最後に選んだ位置を使う
+/// （スマホでは解説ペインのボタンを押すと選択が消えることがある）。
+pub fn reading_line(use_selection: bool) -> Option<ReadingLine> {
     let paper = paper_element()?;
     let list = blocks(&paper);
-    if list.is_empty() {
-        return None;
-    }
     let view = paper.get_bounding_client_rect();
-    let visible = |el: &Element| {
-        let r = el.get_bounding_client_rect();
-        r.height() > 0.0 && r.bottom() > view.top() + 4.0 && r.top() < view.bottom()
-    };
+    let range = document()?.create_range().ok()?;
+    let visible_line =
+        |rect: &DomRect| rect.bottom() > view.top() + LINE_SLACK_PX && rect.top() < view.bottom();
 
-    let selected = web_sys::window()
+    let live = web_sys::window()
         .and_then(|w| w.get_selection().ok().flatten())
         .filter(|s| s.range_count() > 0 && !s.is_collapsed())
-        .and_then(|s| s.anchor_node())
-        .and_then(|n| element_of(&n))
-        .and_then(|el| closest_in(&el, &paper, BLOCK_SELECTOR))
-        .filter(|el| visible(el))
-        .and_then(|el| list.iter().position(|b| *b == el));
+        .and_then(|s| s.get_range_at(0).ok());
+    let remembered = use_selection
+        .then(|| LAST_RANGE.with(|r| r.borrow().clone()))
+        .flatten();
+    let selected = live.or(remembered).and_then(|selected| {
+        let node = selected
+            .start_container()
+            .ok()?
+            .dyn_into::<Text>()
+            .ok()
+            .filter(|n| n.is_connected())?;
+        let at = selected.start_offset().ok()?;
+        let (_, rect) = char_rect_from(&range, &node, at)?;
+        if !visible_line(&rect) {
+            return None;
+        }
+        line_at(&paper, &list, &node, at)
+    });
+    if selected.is_some() {
+        return selected;
+    }
+
     let heading = |el: &Element| el.matches(HEADING_SELECTOR).unwrap_or(false);
-    let index = selected
-        .or_else(|| list.iter().position(|b| visible(b) && !heading(b)))
-        .or_else(|| list.iter().position(visible))?;
-    let el = &list[index];
-    Some((u32::try_from(index).ok()?, block_snippet(el)))
+    let overlaps = |el: &Element| {
+        let r = el.get_bounding_client_rect();
+        r.height() > 0.0 && visible_line(&r)
+    };
+    // 上端より下で始まる最初の行。見出しは後回しにする
+    [false, true].into_iter().find_map(|allow_heading| {
+        list.iter()
+            .filter(|el| overlaps(el) && (allow_heading || !heading(el)))
+            .find_map(|el| {
+                let (node, at) = first_line_below(&range, el, view.top() - LINE_SLACK_PX)?;
+                let (_, rect) = char_rect_from(&range, &node, at)?;
+                if !visible_line(&rect) {
+                    return None;
+                }
+                line_at(&paper, &list, &node, at)
+                    .filter(|line| allow_heading || !heading(&list[line.block as usize]))
+            })
+    })
+}
+
+/// テキストノードの `at` 文字目の位置を、それを含むいちばん内側のブロックからの位置にする。
+fn line_at(paper: &Element, list: &[Element], node: &Text, at: u32) -> Option<ReadingLine> {
+    let block = closest_in(&node.parent_element()?, paper, BLOCK_SELECTOR)?;
+    let index = list.iter().position(|b| *b == block)?;
+    let mut nodes = Vec::new();
+    collect_text_nodes(&block, &mut nodes);
+    let mut offset = 0;
+    for n in &nodes {
+        if n == node {
+            return Some(ReadingLine {
+                block: u32::try_from(index).ok()?,
+                offset: offset + at,
+                snippet: block_snippet(&block),
+            });
+        }
+        offset += n.length();
+    }
+    None
+}
+
+/// 1 文字の表示位置。折りたたまれた空白など、表示されない文字は `None`。
+fn char_rect(range: &Range, node: &Text, at: u32) -> Option<DomRect> {
+    range.set_start(node, at).ok()?;
+    range.set_end(node, at + 1).ok()?;
+    let rect = range.get_bounding_client_rect();
+    (rect.width() > 0.0 && rect.height() > 0.0).then_some(rect)
+}
+
+/// `from` 文字目以降で、最初に表示される文字の位置と表示位置。
+fn char_rect_from(range: &Range, node: &Text, from: u32) -> Option<(u32, DomRect)> {
+    (from..node.length()).find_map(|i| char_rect(range, node, i).map(|r| (i, r)))
+}
+
+/// 要素の中で、上端が `top` より下にある最初の文字。
+fn first_line_below(range: &Range, el: &Element, top: f64) -> Option<(Text, u32)> {
+    let mut nodes = Vec::new();
+    collect_text_nodes(el, &mut nodes);
+    for node in nodes {
+        if node.data().trim().is_empty() || range.select_node_contents(&node).is_err() {
+            continue;
+        }
+        let rect = range.get_bounding_client_rect();
+        if rect.height() <= 0.0 || rect.bottom() <= top {
+            continue;
+        }
+        // 文字は読む順に下へ並ぶので、二分探索で最初の 1 文字を探す
+        let (mut lo, mut hi) = (0, node.length());
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            match char_rect_from(range, &node, mid) {
+                Some((i, r)) if r.top() < top => lo = i + 1,
+                _ => hi = mid,
+            }
+        }
+        if let Some((at, _)) = char_rect_from(range, &node, lo) {
+            return Some((node, at));
+        }
+    }
+    None
 }
 
 /// 付箋の位置へのスクロールのしかた。
@@ -962,7 +1079,7 @@ pub enum BookmarkScroll {
 }
 
 /// 付箋の印を本文に付ける（前の印は外す）。見つからなければ false。
-pub fn show_bookmark(block: u32, snippet: &str, scroll: BookmarkScroll) -> bool {
+pub fn show_bookmark(block: u32, offset: u32, snippet: &str, scroll: BookmarkScroll) -> bool {
     clear_bookmark();
     let Some(paper) = paper_element() else {
         return false;
@@ -977,29 +1094,128 @@ pub fn show_bookmark(block: u32, snippet: &str, scroll: BookmarkScroll) -> bool 
     let Some(el) = target else {
         return false;
     };
-    let _ = el.class_list().add_1(BOOKMARK_CLASS);
-    let behavior = match scroll {
-        BookmarkScroll::None => return true,
-        BookmarkScroll::Instant => web_sys::ScrollBehavior::Instant,
-        BookmarkScroll::Smooth => web_sys::ScrollBehavior::Smooth,
+    let Some(line) = BookmarkLine::attach(el, offset) else {
+        return false;
     };
-    let opts = web_sys::ScrollIntoViewOptions::new();
-    opts.set_block(web_sys::ScrollLogicalPosition::Start);
-    opts.set_behavior(behavior);
-    el.scroll_into_view_with_scroll_into_view_options(&opts);
+    let behavior = match scroll {
+        BookmarkScroll::None => None,
+        BookmarkScroll::Instant => Some(web_sys::ScrollBehavior::Instant),
+        BookmarkScroll::Smooth => Some(web_sys::ScrollBehavior::Smooth),
+    };
+    if let Some(behavior) = behavior {
+        let opts = web_sys::ScrollIntoViewOptions::new();
+        opts.set_block(web_sys::ScrollLogicalPosition::Start);
+        opts.set_behavior(behavior);
+        line.mark
+            .scroll_into_view_with_scroll_into_view_options(&opts);
+    }
+    BOOKMARK.with(|b| *b.borrow_mut() = Some(line));
     true
+}
+
+/// 本文に付けている付箋の印（1 行分の下線とアイコン）。
+/// ブロックの子として重ねるので、前にある図が読み込まれて本文がずれても一緒に動く。
+/// 画面の幅が変わると折り返しが変わるので、ブロックの大きさが変わるたびに位置を測り直す。
+struct BookmarkLine {
+    block: Element,
+    mark: Element,
+    observer: ResizeObserver,
+    _on_resize: Closure<dyn FnMut()>,
+}
+
+impl BookmarkLine {
+    fn attach(block: &Element, offset: u32) -> Option<Self> {
+        let mark = document()?.create_element("span").ok()?;
+        mark.set_class_name(BOOKMARK_LINE_CLASS);
+        let _ = mark.set_attribute("aria-label", "付箋");
+        block.class_list().add_1(BOOKMARK_CLASS).ok()?;
+        block.append_child(&mark).ok()?;
+        place_line(block, &mark, offset);
+
+        let on_resize = {
+            let (block, mark) = (block.clone(), mark.clone());
+            Closure::<dyn FnMut()>::new(move || place_line(&block, &mark, offset))
+        };
+        let observer = ResizeObserver::new(on_resize.as_ref().unchecked_ref()).ok()?;
+        observer.observe(block);
+        Some(Self {
+            block: block.clone(),
+            mark,
+            observer,
+            _on_resize: on_resize,
+        })
+    }
+
+    fn detach(self) {
+        self.observer.disconnect();
+        self.mark.remove();
+        let _ = self.block.class_list().remove_1(BOOKMARK_CLASS);
+    }
+}
+
+/// `offset` の文字がある行の範囲（画面の座標の left, top, right, bottom）。
+fn line_rect(block: &Element, offset: u32) -> Option<(f64, f64, f64, f64)> {
+    let range = document()?.create_range().ok()?;
+    let mut nodes = Vec::new();
+    collect_text_nodes(block, &mut nodes);
+    // offset の文字（表示されない文字なら、その後で最初に表示される文字）
+    let mut start = 0;
+    let found = nodes.iter().find_map(|node| {
+        let from = offset.saturating_sub(start);
+        start += node.length();
+        char_rect_from(&range, node, from).map(|(_, r)| r)
+    });
+    // 版が変わって短くなっていれば、ブロックの 1 行目
+    let at = found.or_else(|| {
+        nodes
+            .iter()
+            .find_map(|n| char_rect_from(&range, n, 0).map(|(_, r)| r))
+    })?;
+
+    let (mut left, mut top, mut right, mut bottom) = (at.left(), at.top(), at.right(), at.bottom());
+    for node in &nodes {
+        if range.select_node_contents(node).is_err() {
+            continue;
+        }
+        let Some(rects) = range.get_client_rects() else {
+            continue;
+        };
+        for r in (0..rects.length()).filter_map(|i| rects.item(i)) {
+            // 中心の高さがその文字の行にあるものは、同じ行
+            let center = r.top() + r.height() / 2.0;
+            if r.width() > 0.0 && center > at.top() && center < at.bottom() {
+                left = left.min(r.left());
+                right = right.max(r.right());
+                top = top.min(r.top());
+                bottom = bottom.max(r.bottom());
+            }
+        }
+    }
+    Some((left, top, right, bottom))
+}
+
+/// 印を `offset` の行に重ねる。
+fn place_line(block: &Element, mark: &Element, offset: u32) {
+    let Some((left, top, right, bottom)) = line_rect(block, offset) else {
+        return;
+    };
+    let Some(style) = mark.dyn_ref::<HtmlElement>().map(HtmlElement::style) else {
+        return;
+    };
+    let origin = block.get_bounding_client_rect();
+    for (name, value) in [
+        ("left", left - origin.left()),
+        ("top", top - origin.top()),
+        ("width", right - left),
+        ("height", bottom - top),
+    ] {
+        let _ = style.set_property(name, &format!("{value:.1}px"));
+    }
 }
 
 /// 付箋の印を外す。
 pub fn clear_bookmark() {
-    let Some(paper) = paper_element() else {
-        return;
-    };
-    if let Ok(list) = paper.query_selector_all(&format!(".{BOOKMARK_CLASS}")) {
-        for i in 0..list.length() {
-            if let Some(el) = list.item(i).and_then(|n| n.dyn_into::<Element>().ok()) {
-                let _ = el.class_list().remove_1(BOOKMARK_CLASS);
-            }
-        }
+    if let Some(line) = BOOKMARK.with(|b| b.borrow_mut().take()) {
+        line.detach();
     }
 }

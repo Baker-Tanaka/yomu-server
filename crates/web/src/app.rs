@@ -64,6 +64,8 @@ impl PaperReaderApp {
             log::error!("ペイン境界のドラッグを有効にできません: {e}");
         }
         state::refresh_health(&shared, &cc.egui_ctx);
+        // 実験モード（端末の LLM）を前回オンにしていれば読み込む（既定はオフで、何も読まない）
+        crate::local_llm::resume(&shared, &cc.egui_ctx);
         // 講座の名前やカテゴリ（チップの表示に使う）
         state::refresh_grammar(&shared, &cc.egui_ctx);
 
@@ -203,7 +205,37 @@ impl PaperReaderApp {
             if !s.recent.is_empty() && ui.button("直近の単語のメモを消す").clicked() {
                 s.recent.clear();
             }
+            let local_on = s.local.enabled;
             drop(s);
+            ui.separator();
+            let mut on = local_on;
+            if ui
+                .checkbox(&mut on, "🧪 実験: 端末で LLM を動かす")
+                .on_hover_text(
+                    "この端末の GPU（WebGPU）で小さな LLM を動かし、Mac の LLM と比べます。オンにするとモデル（数百 MB〜1.4 GB）を Mac からダウンロードします",
+                )
+                .changed()
+            {
+                crate::local_llm::set_enabled(&self.shared, ui.ctx(), on);
+            }
+            if on {
+                use crate::local_llm::LocalPhase;
+                let status = match &self.shared.borrow().local.phase {
+                    LocalPhase::Off => String::new(),
+                    LocalPhase::Unsupported => "この端末は WebGPU に未対応です".into(),
+                    LocalPhase::Preparing => "準備しています…".into(),
+                    LocalPhase::Loading { progress, .. } => {
+                        format!("モデルを読み込み中… {:.0}%", progress * 100.0)
+                    }
+                    LocalPhase::Ready { .. } => {
+                        "準備完了（解説タブで単語・英文を選んで「端末で訳す」）".into()
+                    }
+                    LocalPhase::Error(e) => format!("エラー: {e}"),
+                };
+                if !status.is_empty() {
+                    ui.label(RichText::new(status).small().weak());
+                }
+            }
             ui.separator();
             if ui.button("💬 不具合・要望を送る…").clicked() {
                 state::open_feedback(&self.shared, ui.ctx());
@@ -732,6 +764,163 @@ impl PaperReaderApp {
 
         ui.add_space(10.0);
         self.explain_card(ui, &p);
+
+        if self.shared.borrow().local.enabled {
+            ui.add_space(10.0);
+            self.local_llm_card(ui, &p, &sel);
+        }
+    }
+
+    /// 実験モード: 端末の LLM の状態と、選択中のテキストの訳・計測値。
+    fn local_llm_card(&mut self, ui: &mut egui::Ui, p: &Palette, sel: &dom::SelectionInfo) {
+        use crate::local_llm::{self, LocalPhase};
+        let local = self.shared.borrow().local.clone();
+        let ctx = ui.ctx().clone();
+        theme::card(ui, |ui| {
+            ui.horizontal(|ui| {
+                theme::section_title(ui, "🧪 端末の LLM（実験）");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if theme::subtle_button(ui, "オフ")
+                        .on_hover_text("実験モードをオフにして、モデルをメモリから外します（ダウンロードしたモデルは端末に残ります）")
+                        .clicked()
+                    {
+                        local_llm::set_enabled(&self.shared, &ctx, false);
+                    }
+                });
+            });
+
+            // モデルの選択（サーバーにあるもの）
+            if !local.models.is_empty() {
+                let selected = local
+                    .current_model()
+                    .map(|m| m.label.clone())
+                    .unwrap_or_default();
+                let mut picked = None;
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("local-llm-model")
+                        .selected_text(selected)
+                        .show_ui(ui, |ui| {
+                            for m in &local.models {
+                                let label = format!(
+                                    "{}  {} · GPU {:.1} GB",
+                                    m.label,
+                                    format_bytes(m.bytes as i64),
+                                    f64::from(m.vram_mb) / 1024.0
+                                );
+                                if ui
+                                    .selectable_label(m.id == local.model_id, label)
+                                    .on_hover_text(&m.note)
+                                    .clicked()
+                                {
+                                    picked = Some(m.id.clone());
+                                }
+                            }
+                        });
+                    let loading = matches!(local.phase, LocalPhase::Loading { .. });
+                    if !loading
+                        && theme::subtle_button(ui, "削除")
+                            .on_hover_text("このモデルを端末から消し、実験モードをオフにします")
+                            .clicked()
+                    {
+                        local_llm::delete_model(&self.shared, &ctx);
+                    }
+                });
+                if let Some(id) = picked {
+                    local_llm::select_model(&self.shared, &ctx, &id);
+                }
+            }
+
+            match &local.phase {
+                LocalPhase::Off => {}
+                LocalPhase::Unsupported => notice(
+                    ui,
+                    p,
+                    "このブラウザは WebGPU に対応していないため、端末では動かせません",
+                ),
+                LocalPhase::Preparing => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(RichText::new("準備しています…").color(p.weak));
+                    });
+                }
+                LocalPhase::Loading { progress, text } => {
+                    ui.add(
+                        egui::ProgressBar::new(*progress)
+                            .show_percentage()
+                            .desired_height(14.0),
+                    );
+                    ui.label(
+                        RichText::new(if text.is_empty() {
+                            "モデルをダウンロードしています（初回のみ。次からは端末から読みます）"
+                        } else {
+                            text.as_str()
+                        })
+                        .size(12.0)
+                        .color(p.weak),
+                    );
+                }
+                LocalPhase::Ready { load_secs } => {
+                    ui.label(
+                        RichText::new(format!("準備完了（読み込み {load_secs:.1} 秒）"))
+                            .size(12.5)
+                            .color(p.ok),
+                    );
+                }
+                LocalPhase::Error(e) => notice(ui, p, e),
+            }
+
+            if !matches!(local.phase, LocalPhase::Ready { .. }) {
+                return;
+            }
+            let run = &local.run;
+            let same_target = run
+                .target
+                .as_ref()
+                .is_some_and(|(m, t)| *m == sel.mode && *t == sel.text);
+            ui.horizontal(|ui| {
+                if run.running {
+                    ui.spinner();
+                    if theme::subtle_button(ui, "停止").clicked() {
+                        local_llm::interrupt();
+                    }
+                } else if theme::primary_button(
+                    ui,
+                    match sel.mode {
+                        Mode::Word => "端末で訳す",
+                        Mode::Sentence => "端末で和訳",
+                    },
+                    true,
+                )
+                .on_hover_text("この端末の LLM で訳し、速さを測ります（Mac の LLM は使いません）")
+                .clicked()
+                {
+                    local_llm::translate(&self.shared, &ctx);
+                }
+            });
+            if !same_target {
+                return;
+            }
+            if !run.text.is_empty() {
+                ui.label(RichText::new(run.text.trim()).size(14.5).color(p.text));
+            }
+            if let Some(e) = &run.error {
+                notice(ui, p, e);
+            }
+            if let Some(st) = &run.stats {
+                ui.label(
+                    RichText::new(format!(
+                        "最初の文字 {:.1} 秒 · 合計 {:.1} 秒 · {} トークン · 生成 {:.1} トークン/秒 · 読み込み {:.0} トークン/秒",
+                        st.ttft_ms / 1000.0,
+                        st.total_ms / 1000.0,
+                        st.tokens,
+                        st.decode_tps,
+                        st.prefill_tps
+                    ))
+                    .size(12.0)
+                    .color(p.weak),
+                );
+            }
+        });
     }
 
     fn explain_card(&mut self, ui: &mut egui::Ui, p: &Palette) {

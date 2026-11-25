@@ -319,6 +319,8 @@ pub struct Shared {
     pub show_recent: bool,
     /// 設定: 英文の解説にスラッシュリーディングを付けて表示する
     pub show_slash: bool,
+    /// 実験モード: 端末の LLM（WebGPU）
+    pub local: crate::local_llm::LocalLlm,
     pub words: Words,
     /// 単語帳が上限に近い（確かめる画面を出す）
     pub store_warning: Option<WordStoreStats>,
@@ -360,6 +362,7 @@ impl Shared {
             recent: crate::recent::RecentWords::load(),
             show_recent: dom::load_bool(crate::recent::SHOW_KEY, true),
             show_slash: dom::load_bool(SHOW_SLASH_KEY, true),
+            local: crate::local_llm::LocalLlm::load_settings(),
             words: Words {
                 stale: true,
                 prune_count: 1_000,

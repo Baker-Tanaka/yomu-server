@@ -202,12 +202,19 @@ fn router(state: AppState, config: &Config) -> Router {
         .route("/admin/reload-grammar", post(grammar_api::post_reload))
         .fallback(|| async { AppError::NotFound("API が見つかりません".into()) });
 
+    // 実験モード（端末の LLM）の WebLLM とモデル。重みは圧縮しても小さくならず大きいので、
+    // CompressionLayer の外に置く（layer より後に足したルートには layer がかからない）
+    let webllm = Router::new()
+        .fallback_service(tower_http::services::ServeDir::new(&config.webllm_dir))
+        .layer(axum::middleware::from_fn(static_files::webllm_headers));
+
     Router::new()
         .nest("/api", api)
         .fallback_service(static_files::service(&config.static_dir))
         .layer(axum::middleware::from_fn(static_files::cache_headers))
         // SSE（text/event-stream）は圧縮しない（tower-http の既定）。.br / .gz があるファイルはそのまま返す
         .layer(CompressionLayer::new())
+        .nest("/webllm", webllm)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

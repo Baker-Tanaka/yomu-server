@@ -22,6 +22,9 @@
   </script>
   <link data-trunk rel="rust" href="Cargo.toml" data-bin="paper-reader-web" data-wasm-opt="z" />
   <link data-trunk rel="css" href="assets/paper.css" />
+  <!-- 実験モード（端末の LLM）の橋渡し。dist にコピーするだけで、実験モードをオンにしたときに wasm から import() する -->
+  <link data-trunk rel="copy-file" href="assets/local_llm.js" />
+  <link data-trunk rel="copy-file" href="assets/local_llm_worker.js" />
 </head>
 <body>
   <div id="layout">

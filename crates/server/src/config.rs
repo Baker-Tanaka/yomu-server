@@ -16,6 +16,8 @@ pub struct Config {
     pub llm_disable_thinking: bool,
     pub database_url: String,
     pub static_dir: PathBuf,
+    /// 実験モード（端末の LLM）用の WebLLM とモデル（scripts/fetch_webllm.py が置く。/webllm/ で配信）
+    pub webllm_dir: PathBuf,
     pub allowed_hosts: Vec<String>,
     /// 文法タグのマスター
     pub grammar_tags_path: PathBuf,
@@ -58,6 +60,7 @@ impl Config {
             llm_disable_thinking: parse_bool(&get("LLM_DISABLE_THINKING", "true")),
             database_url: get("DATABASE_URL", "sqlite://data/app.db"),
             static_dir: get("STATIC_DIR", "crates/web/dist").into(),
+            webllm_dir: get("WEBLLM_DIR", "data/webllm").into(),
             allowed_hosts: parse_hosts(&get("ALLOWED_HOSTS", "arxiv.org,www.arxiv.org")),
             grammar_tags_path: get("GRAMMAR_TAGS_PATH", "data/grammar_tags.yaml").into(),
             grammar_map_path: get("GRAMMAR_MAP_PATH", "data/grammar_map.local.yaml").into(),

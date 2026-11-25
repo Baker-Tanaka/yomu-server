@@ -37,6 +37,19 @@ pub async fn cache_headers(req: Request, next: Next) -> Response {
     resp
 }
 
+/// /webllm/ の応答のヘッダー。端末側（WebLLM）が Cache Storage に保存するので、ブラウザの HTTP キャッシュには
+/// 頼らず毎回確かめさせる（変わっていなければ 304）。種類の推測もさせない。
+pub async fn webllm_headers(req: Request, next: Next) -> Response {
+    let mut resp = next.run(req).await;
+    let h = resp.headers_mut();
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    resp
+}
+
 /// パスに応じた Cache-Control。API には付けない。
 pub fn cache_control_for(path: &str) -> Option<&'static str> {
     if path.starts_with("/api/") || path == "/api" {

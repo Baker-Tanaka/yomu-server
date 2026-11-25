@@ -13,6 +13,8 @@ mod local_llm;
 #[cfg(target_arch = "wasm32")]
 mod recent;
 #[cfg(target_arch = "wasm32")]
+mod recent_bar;
+#[cfg(target_arch = "wasm32")]
 mod search_input;
 #[cfg(target_arch = "wasm32")]
 mod state;

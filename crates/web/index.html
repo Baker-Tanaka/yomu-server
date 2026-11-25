@@ -28,18 +28,22 @@
 </head>
 <body>
   <div id="layout">
-    <main id="paper" lang="en">
-      <div class="paper-placeholder" lang="ja">
-        <span class="hero-badge">arXiv × ローカル LLM</span>
-        <h1>英語論文を、<br /><span class="accent">その場で読み解く。</span></h1>
-        <p class="lead">単語は辞書ですぐに、英文は和訳・文構造・文法まで。すべてこの Mac の中で動きます。</p>
-        <ol class="steps">
-          <li><b>論文を開く</b><span>解説パネルの欄に arXiv の URL・ID、またはキーワードを入れて検索</span></li>
-          <li><b>選ぶ</b><span class="pc-only">単語はダブルクリック、英文はドラッグ</span><span class="mobile-only">単語や英文を長押しして選択（つまみで範囲を調整）</span></li>
-          <li><b>読み解く</b><span class="pc-only"><kbd>E</kbd> で解説、<kbd>Esc</kbd> で選択解除</span><span class="mobile-only">下のパネルの「解説する」。パネルはつまみを上下に動かすかタップで大きさを変えられます</span></li>
-        </ol>
-      </div>
-    </main>
+    <div id="paper-column">
+      <!-- 直近に引いた単語のメモ（recent_bar.rs が中身を入れる） -->
+      <nav id="recent-words" lang="ja" aria-label="最近引いた単語" hidden></nav>
+      <main id="paper" lang="en">
+        <div class="paper-placeholder" lang="ja">
+          <span class="hero-badge">arXiv × ローカル LLM</span>
+          <h1>英語論文を、<br /><span class="accent">その場で読み解く。</span></h1>
+          <p class="lead">単語は辞書ですぐに、英文は和訳・文構造・文法まで。すべてこの Mac の中で動きます。</p>
+          <ol class="steps">
+            <li><b>論文を開く</b><span>解説パネルの欄に arXiv の URL・ID、またはキーワードを入れて検索</span></li>
+            <li><b>選ぶ</b><span class="pc-only">単語はダブルクリック、英文はドラッグ</span><span class="mobile-only">単語や英文を長押しして選択（つまみで範囲を調整）</span></li>
+            <li><b>読み解く</b><span class="pc-only"><kbd>E</kbd> で解説、<kbd>Esc</kbd> で選択解除</span><span class="mobile-only">下のパネルの「解説する」。パネルはつまみを上下に動かすかタップで大きさを変えられます</span></li>
+          </ol>
+        </div>
+      </main>
+    </div>
     <div id="splitter" role="separator" tabindex="0" aria-orientation="vertical"
          aria-valuemin="20" aria-valuemax="80" aria-valuenow="60"
          aria-label="ペインの境界（ドラッグで幅を変更、ダブルクリックで元に戻す）"

@@ -22,6 +22,9 @@ use crate::state::{
 };
 use crate::theme::{self, Palette};
 
+/// 検索欄の案内文
+const SEARCH_HINT: &str = "arXiv の URL・ID、またはキーワードで検索";
+
 pub struct PaperReaderApp {
     shared: SharedRef,
     input: String,
@@ -37,6 +40,8 @@ pub struct PaperReaderApp {
     mobile: Option<bool>,
     /// 次の描画で入力欄にフォーカスを移す（「別の論文を開く」を押したとき）
     focus_input: bool,
+    /// この描画で、検索欄（HTML の入力欄）を重ねたか。重ねなければ隠す
+    search_input_placed: bool,
 }
 
 impl PaperReaderApp {
@@ -67,6 +72,10 @@ impl PaperReaderApp {
         // 実験モード（端末の LLM）を前回オンにしていれば読み込む（既定はオフで、何も読まない）
         crate::local_llm::resume(&shared, &cc.egui_ctx);
 
+        if let Err(e) = crate::search_input::init(&cc.egui_ctx, SEARCH_HINT) {
+            log::error!("検索欄を作れません: {e}");
+        }
+
         let theme = dom::load_theme();
         set_theme(&cc.egui_ctx, theme);
 
@@ -80,6 +89,7 @@ impl PaperReaderApp {
             feedback_content_h: 300.0,
             mobile: None,
             focus_input: false,
+            search_input_placed: false,
         }
     }
 
@@ -548,24 +558,43 @@ impl PaperReaderApp {
 
     // ───────────── 入力欄と論文 ─────────────
 
+    /// 検索欄とボタン。欄は canvas の上に重ねた HTML の入力欄で、egui 側は同じ場所に下地を描く
+    /// （メニューやモーダルが重なるあいだは入力欄を隠し、下地に入力中の文字を見せる）。
     fn input_bar(&mut self, ui: &mut egui::Ui) {
+        let p = theme::palette(ui.ctx());
         let loading = matches!(self.shared.borrow().paper, PaperStatus::Loading);
+        self.input = crate::search_input::value();
         let is_paper = paper_url_from_input(&self.input).is_some();
         let label = if is_paper { "開く" } else { "検索" };
-        let mut submit = false;
+        let mut submit = crate::search_input::take_submitted() && !self.input.trim().is_empty();
         ui.horizontal(|ui| {
             let button_width = 64.0;
-            let edit = ui.add_sized(
-                [ui.available_width() - button_width - 8.0, 34.0],
-                egui::TextEdit::singleline(&mut self.input)
-                    .hint_text("arXiv の URL・ID、またはキーワードで検索")
-                    .margin(Margin::symmetric(10, 8)),
-            );
-            if std::mem::take(&mut self.focus_input) {
-                edit.request_focus();
-            }
-            if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                submit = true;
+            let size = egui::vec2(ui.available_width() - button_width - 8.0, 34.0);
+            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            let covered = {
+                let s = self.shared.borrow();
+                s.feedback.open || s.store_warning.is_some() || egui::Popup::is_any_open(ui.ctx())
+            };
+            if covered {
+                ui.painter().rect_filled(rect, 8.0, p.card);
+                let (text, color) = if self.input.is_empty() {
+                    (SEARCH_HINT, p.weak)
+                } else {
+                    (self.input.as_str(), p.text)
+                };
+                ui.painter().with_clip_rect(rect.shrink(10.0)).text(
+                    rect.left_center() + egui::vec2(10.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    text,
+                    theme::body_font(14.0),
+                    color,
+                );
+            } else if ui.is_rect_visible(rect) {
+                crate::search_input::place(rect, ui.ctx().zoom_factor());
+                self.search_input_placed = true;
+                if std::mem::take(&mut self.focus_input) {
+                    crate::search_input::focus();
+                }
             }
             ui.scope(|ui| {
                 ui.set_min_size(egui::vec2(button_width, 34.0));
@@ -1490,6 +1519,7 @@ impl eframe::App for PaperReaderApp {
         }
 
         let p = theme::palette(&ctx);
+        self.search_input_placed = false;
         egui::CentralPanel::default_margins()
             .frame(egui::Frame::new().fill(p.bg).inner_margin(if mobile {
                 // つまみの下から始まるので上は詰める
@@ -1545,6 +1575,10 @@ impl eframe::App for PaperReaderApp {
                         ui.add_space(16.0);
                     });
             });
+
+        if !self.search_input_placed {
+            crate::search_input::hide();
+        }
 
         if feedback_open {
             self.feedback_modal(&ctx);

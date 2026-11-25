@@ -887,3 +887,113 @@ pub fn speak(text: &str) -> bool {
     synth.speak(&utterance);
     true
 }
+// ───────────── 付箋（どこまで読んだか） ─────────────
+
+/// 付箋を貼る単位にする本文のブロック要素。サーバーで無害化した HTML は同じ論文なら同じなので、
+/// この順の通し番号で位置を表せる（版が変わってずれたら書き出しで探し直す）。
+const BLOCK_SELECTOR: &str = "p, li, h1, h2, h3, h4, h5, h6, figcaption, blockquote, dd";
+const BOOKMARK_CLASS: &str = "pr-bookmark";
+/// 付箋の書き出しの照合に使う文字数
+const SNIPPET_MATCH_CHARS: usize = 40;
+
+fn blocks(paper: &Element) -> Vec<Element> {
+    let Ok(list) = paper.query_selector_all(BLOCK_SELECTOR) else {
+        return Vec::new();
+    };
+    (0..list.length())
+        .filter_map(|i| list.item(i))
+        .filter_map(|n| n.dyn_into::<Element>().ok())
+        .collect()
+}
+
+fn block_snippet(el: &Element) -> String {
+    normalize_whitespace(&el.text_content().unwrap_or_default())
+        .chars()
+        .take(paper_reader_shared::MAX_BOOKMARK_SNIPPET_CHARS)
+        .collect()
+}
+
+fn snippet_key(s: &str) -> String {
+    s.chars().take(SNIPPET_MATCH_CHARS).collect()
+}
+
+/// 付箋を貼る位置（ブロックの番号と書き出し）。
+/// 本文で選択していて、その段落が見えていればそこ。無ければ、いま画面のいちばん上に見えている段落。
+pub fn reading_block() -> Option<(u32, String)> {
+    let paper = paper_element()?;
+    let list = blocks(&paper);
+    if list.is_empty() {
+        return None;
+    }
+    let view = paper.get_bounding_client_rect();
+    let visible = |el: &Element| {
+        let r = el.get_bounding_client_rect();
+        r.height() > 0.0 && r.bottom() > view.top() + 4.0 && r.top() < view.bottom()
+    };
+
+    let selected = web_sys::window()
+        .and_then(|w| w.get_selection().ok().flatten())
+        .filter(|s| s.range_count() > 0 && !s.is_collapsed())
+        .and_then(|s| s.anchor_node())
+        .and_then(|n| element_of(&n))
+        .and_then(|el| closest_in(&el, &paper, BLOCK_SELECTOR))
+        .filter(|el| visible(el))
+        .and_then(|el| list.iter().position(|b| *b == el));
+    let index = selected.or_else(|| list.iter().position(visible))?;
+    let el = &list[index];
+    Some((u32::try_from(index).ok()?, block_snippet(el)))
+}
+
+/// 付箋の位置へのスクロールのしかた。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BookmarkScroll {
+    /// 印を付けるだけ
+    None,
+    /// すぐに移る（論文を開いたとき）
+    Instant,
+    /// なめらかに移る（「付箋へ移動」）
+    Smooth,
+}
+
+/// 付箋の印を本文に付ける（前の印は外す）。見つからなければ false。
+pub fn show_bookmark(block: u32, snippet: &str, scroll: BookmarkScroll) -> bool {
+    clear_bookmark();
+    let Some(paper) = paper_element() else {
+        return false;
+    };
+    let list = blocks(&paper);
+    let key = snippet_key(snippet);
+    let matches = |el: &Element| key.is_empty() || snippet_key(&block_snippet(el)) == key;
+    let target = list
+        .get(block as usize)
+        .filter(|el| matches(el))
+        .or_else(|| list.iter().find(|el| matches(el)));
+    let Some(el) = target else {
+        return false;
+    };
+    let _ = el.class_list().add_1(BOOKMARK_CLASS);
+    let behavior = match scroll {
+        BookmarkScroll::None => return true,
+        BookmarkScroll::Instant => web_sys::ScrollBehavior::Instant,
+        BookmarkScroll::Smooth => web_sys::ScrollBehavior::Smooth,
+    };
+    let opts = web_sys::ScrollIntoViewOptions::new();
+    opts.set_block(web_sys::ScrollLogicalPosition::Start);
+    opts.set_behavior(behavior);
+    el.scroll_into_view_with_scroll_into_view_options(&opts);
+    true
+}
+
+/// 付箋の印を外す。
+pub fn clear_bookmark() {
+    let Some(paper) = paper_element() else {
+        return;
+    };
+    if let Ok(list) = paper.query_selector_all(&format!(".{BOOKMARK_CLASS}")) {
+        for i in 0..list.length() {
+            if let Some(el) = list.item(i).and_then(|n| n.dyn_into::<Element>().ok()) {
+                let _ = el.class_list().remove_1(BOOKMARK_CLASS);
+            }
+        }
+    }
+}

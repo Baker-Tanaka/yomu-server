@@ -113,6 +113,9 @@ trunk serve
     カテゴリ → 項目 → レッスンの一覧と、解説した英文での出現回数（よく出る順）を見られます
   - 右上の ⚙ で「講座の案内を表示する」をオフにすると、チップは文法項目の名前だけになります
 
+- **付箋**: ヘッダーの 📌 で「ここまで読んだ」を残せます。本文で選択している段落、無ければ画面のいちばん上の段落に貼り、
+  本文には琥珀色の印が付きます。次にその論文を開くと付箋の位置から表示します（Mac に保存するので、iPhone と Mac で共通）。
+  📌 から「付箋へ移動」「ここに貼り直す」「付箋をはがす」ができ、「見た論文」には「📌 付箋あり」と出ます
 - **見た論文**: 開いた論文は「履歴」タブの「見た論文」に残り（最後に開いた順・開いた回数・調べた単語と英文の数）、そこから開けます。
   論文を開く前の「解説」タブにも最近の 5 本が出ます。「…」から一覧から外す（保存した本文と図も消すこともできる）
 - **論文の保存**: 開いた論文の本文と図は Mac（SQLite）に保存され、2 回目からは arXiv にアクセスせずに表示します
@@ -423,7 +426,7 @@ tailscale serve status
 
 ## API
 
-- `GET /api/paper?url=<arXiv URL>` → `{ id, title, html, source_url }`
+- `GET /api/paper?url=<arXiv URL>` → `{ id, title, html, source_url, bookmark? }`（bookmark は付箋 `{ block, snippet, updated_at }`）
   - abs / pdf / html の URL から論文 ID を取り出し、`https://arxiv.org/html/<id>` を取得します
   - HTML 版が無い場合は 404 と `{ "error": "..." }`
   - 結果は SQLite の `paper_cache` に論文 ID をキーとして保存します
@@ -453,9 +456,13 @@ tailscale serve status
   - 最後まで生成できた解説は `explain_cache` に保存します。キーは `sha256(LLM_MODEL, mode, text, context, プロンプトのバージョン)`。
     次に同じ解説を頼まれたら LLM を呼ばずに `event: cached` → `event: token`（全文）→ `event: done` を返します。
     `regenerate: true` ならキャッシュを使わずに生成し、結果で上書きします
-- `GET /api/papers` → `{ papers: [{ id, title, source_url, last_opened_at, open_count, word_count, sentence_count, cached }], cache: { papers, html_bytes, assets, asset_bytes } }`
+- `GET /api/papers` → `{ papers: [{ id, title, source_url, last_opened_at, open_count, word_count, sentence_count, cached, bookmarked }], cache: { papers, html_bytes, assets, asset_bytes } }`
   - 開いた論文の記録（paper_visits）。同じ論文の版違い（`2509.19480` と `2509.19480v1`）は 1 件にまとめる
-- `DELETE /api/papers?id=<論文 ID>&purge=<true|false>` → 204（版違いも含めて外す。purge なら本文と図のキャッシュも消す。単語・英文の履歴は残す）
+- `DELETE /api/papers?id=<論文 ID>&purge=<true|false>` → 204（版違いも含めて外す。付箋も消す。purge なら本文と図のキャッシュも消す。単語・英文の履歴は残す）
+- `PUT /api/bookmark` body: `{ paper_id, block, snippet }` → `{ block, snippet, updated_at }`（付箋を貼る。1 論文に 1 枚で、貼り直すと置き換える）
+- `DELETE /api/bookmark?paper_id=<論文 ID>` → 204（付箋をはがす）
+  - 付箋は版なしの論文 ID で `paper_bookmarks` に保存する（版違いでも同じ付箋）。block は本文のブロック要素（段落・見出し・リスト項目など）の通し番号、
+    snippet はその書き出し（80 文字まで）。番号がずれたら書き出しで探し直す
 - `GET /api/paper-asset?url=<図の URL>` → 画像
   - `/api/paper` が返す HTML の `<img src>` はこの経路に書き換えてある。初回だけ arXiv から取得して SQLite（paper_assets）に保存する
   - 取得先は ALLOWED_HOSTS の https で `/html/` 以下、画像（image/*）だけ、1 枚 15MB まで。`Content-Security-Policy: sandbox` と `nosniff` を付ける

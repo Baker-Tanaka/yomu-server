@@ -4,7 +4,9 @@ use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use paper_reader_shared::{HistoryRecord, Mode, PaperCacheStats, PaperResponse, RecentPaper};
+use paper_reader_shared::{
+    Bookmark, HistoryRecord, Mode, PaperCacheStats, PaperResponse, RecentPaper,
+};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
@@ -42,6 +44,7 @@ pub async fn get_paper(pool: &SqlitePool, id: &str) -> sqlx::Result<Option<Paper
         title,
         html,
         source_url,
+        bookmark: None,
     }))
 }
 
@@ -235,6 +238,7 @@ pub async fn list_visits(pool: &SqlitePool, limit: i64) -> sqlx::Result<Vec<Rece
                     word_count,
                     sentence_count,
                     cached,
+                    bookmarked: false,
                 }
             },
         )
@@ -267,8 +271,69 @@ pub async fn delete_visit(pool: &SqlitePool, id: &str, purge: bool) -> sqlx::Res
             .execute(&mut *tx)
             .await?;
     }
+    // 一覧から外した論文の付箋も消す（読み終えた・もう読まない論文とみなす）
+    sqlx::query("DELETE FROM paper_bookmarks WHERE paper_id = ?")
+        .bind(base)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(removed + purged > 0)
+}
+
+/// 論文の付箋（`base` は版なしの ID）。
+pub async fn get_bookmark(pool: &SqlitePool, base: &str) -> sqlx::Result<Option<Bookmark>> {
+    let row: Option<(i64, String, i64)> =
+        sqlx::query_as("SELECT block, snippet, updated_at FROM paper_bookmarks WHERE paper_id = ?")
+            .bind(base)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|(block, snippet, updated_at)| Bookmark {
+        block: u32::try_from(block).unwrap_or(0),
+        snippet,
+        updated_at,
+    }))
+}
+
+/// 付箋を貼る（1 論文に 1 枚。貼り直したら置き換える）。
+pub async fn put_bookmark(
+    pool: &SqlitePool,
+    base: &str,
+    block: u32,
+    snippet: &str,
+) -> sqlx::Result<Bookmark> {
+    let now = now_secs();
+    sqlx::query(
+        "INSERT INTO paper_bookmarks (paper_id, block, snippet, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(paper_id) DO UPDATE SET block = excluded.block, snippet = excluded.snippet,
+           updated_at = excluded.updated_at",
+    )
+    .bind(base)
+    .bind(i64::from(block))
+    .bind(snippet)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(Bookmark {
+        block,
+        snippet: snippet.to_string(),
+        updated_at: now,
+    })
+}
+
+pub async fn delete_bookmark(pool: &SqlitePool, base: &str) -> sqlx::Result<bool> {
+    let n = sqlx::query("DELETE FROM paper_bookmarks WHERE paper_id = ?")
+        .bind(base)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    Ok(n > 0)
+}
+
+/// 付箋を貼っている論文（版なしの ID）。
+pub async fn bookmarked_papers(pool: &SqlitePool) -> sqlx::Result<Vec<String>> {
+    sqlx::query_scalar("SELECT paper_id FROM paper_bookmarks")
+        .fetch_all(pool)
+        .await
 }
 
 pub async fn cache_stats(pool: &SqlitePool) -> sqlx::Result<PaperCacheStats> {

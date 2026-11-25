@@ -151,6 +151,17 @@ pub async fn delete_paper(id: &str, purge: bool) -> Result<(), String> {
     .await
 }
 
+/// 付箋を貼る（貼り直したら置き換える）。
+pub async fn put_bookmark(req: &paper_reader_shared::BookmarkPut) -> Result<(), String> {
+    let body = serde_json::to_string(req).map_err(|e| e.to_string())?;
+    send_without_body("PUT", "/api/bookmark", Some(&body)).await
+}
+
+pub async fn delete_bookmark(paper_id: &str) -> Result<(), String> {
+    let encoded = String::from(js_sys::encode_uri_component(paper_id));
+    send_without_body("DELETE", &format!("/api/bookmark?paper_id={encoded}"), None).await
+}
+
 pub async fn fetch_grammar_map() -> Result<GrammarMapResponse, String> {
     get_json("/api/grammar-map").await
 }

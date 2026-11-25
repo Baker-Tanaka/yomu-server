@@ -76,6 +76,7 @@ pub async fn get_paper(
             html: sanitize::sanitize(&extracted.body_html, &extracted.base_url),
             source_url: final_url.to_string(),
             id,
+            bookmark: None,
         })
     })
     .await
@@ -94,6 +95,14 @@ async fn respond(state: &AppState, mut paper: PaperResponse) -> PaperResponse {
         tracing::warn!(error = %e, "failed to record paper visit");
     }
     paper.html = crate::papers::proxy_images(&paper.html, &state.config.allowed_hosts);
+    // 付箋も一緒に返す（開いてすぐ付箋の位置へ移れるように）
+    paper.bookmark = match crate::db::get_bookmark(&state.db, arxiv::base_id(&paper.id)).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to load bookmark");
+            None
+        }
+    };
     paper
 }
 

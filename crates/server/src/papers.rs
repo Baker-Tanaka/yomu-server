@@ -30,6 +30,12 @@ pub async fn get_papers(State(state): State<AppState>) -> AppResult<Json<RecentP
         .map_err(|e| AppError::Internal(e.into()))?;
     let mut papers = merge_versions(papers);
     papers.truncate(LIST_LIMIT as usize);
+    let bookmarked = db::bookmarked_papers(&state.db)
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+    for p in &mut papers {
+        p.bookmarked = bookmarked.iter().any(|b| b == arxiv::base_id(&p.id));
+    }
     let cache = db::cache_stats(&state.db)
         .await
         .map_err(|e| AppError::Internal(e.into()))?;
@@ -42,12 +48,7 @@ pub async fn delete_paper(
 ) -> AppResult<StatusCode> {
     let Query(q) = query.map_err(|_| AppError::BadRequest("id を指定してください".into()))?;
     let id = q.id.trim();
-    let valid = !id.is_empty()
-        && id.len() <= 64
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'/'));
-    if !valid {
+    if !is_valid_paper_id(id) {
         return Err(AppError::BadRequest("論文 ID が不正です".into()));
     }
     let deleted = db::delete_visit(&state.db, id, q.purge)
@@ -58,6 +59,15 @@ pub async fn delete_paper(
     } else {
         Err(AppError::NotFound("その論文は一覧にありません".into()))
     }
+}
+
+/// 論文 ID として使える文字だけか（英数字と . - /、64 文字まで。LIKE の特殊文字も含まない）。
+pub fn is_valid_paper_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'/'))
 }
 
 /// 同じ論文の版違い（`2509.19480` と `2509.19480v1`）を 1 件にまとめる。
@@ -288,6 +298,7 @@ mod tests {
             word_count: words,
             sentence_count: 1,
             cached: true,
+            bookmarked: false,
         }
     }
 

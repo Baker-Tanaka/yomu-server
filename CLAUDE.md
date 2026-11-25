@@ -44,6 +44,8 @@ GET  /                          … trunk build の成果物（dist/）を配信
 GET  /api/paper?url=<arxiv URL> … 論文を取得し、無害化した本文 HTML とメタ情報を JSON で返す
 GET  /api/papers                … 見た論文の一覧（最後に開いた順、版違いはまとめる）とキャッシュの使用量
 DELETE /api/papers?id=&purge=   … 見た論文から外す（purge なら保存した本文と図も消す）
+PUT  /api/bookmark              … 論文に付箋（どこまで読んだか）を貼る。body: { paper_id, block, snippet }。版なしの ID で 1 論文 1 枚
+DELETE /api/bookmark?paper_id=  … 付箋をはがす（付箋は /api/paper の応答にも含める）
 GET  /api/paper-asset?url=      … 論文の図をサーバー経由で配信し SQLite に保存する（ALLOWED_HOSTS の https で /html/ 以下の画像のみ）
 GET  /api/dict?word=<word>      … ローカル辞書で引いた結果を返す（見出し語、訳のリスト、単語帳の情報）。引くたびに単語帳の検索回数を数える
 POST /api/dict/ai               … 辞書に無い語の訳とカタカナの読みを LLM に推定させ、単語帳に保存して返す（UI では「AI 訳」「AI 推定」と明記する）

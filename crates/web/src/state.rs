@@ -333,6 +333,10 @@ pub struct Shared {
     /// 履歴の読み込みごとに増える番号（古い応答を捨てる）
     history_seq: u64,
     pub papers: PapersStatus,
+    /// 表示中の論文の付箋
+    pub bookmark: Option<paper_reader_shared::Bookmark>,
+    /// 付箋の操作の失敗・注意
+    pub bookmark_error: Option<String>,
     /// 見た論文の一覧を読み直す
     pub papers_stale: bool,
     pub grammar: GrammarStatus,
@@ -1037,6 +1041,91 @@ fn fetch_search_page(
     });
 }
 
+/// いま読んでいる段落（本文で選択中ならその段落、無ければ画面のいちばん上の段落）に付箋を貼る。
+/// 印はすぐに付け、保存は後から行う（失敗したら元に戻す）。
+pub fn place_bookmark(this: &SharedRef, ctx: &egui::Context) {
+    let Some((paper_id, _)) = this.borrow().paper_ref() else {
+        return;
+    };
+    let Some((block, snippet)) = dom::reading_block() else {
+        this.borrow_mut().bookmark_error = Some("付箋を貼る段落が見つかりません".into());
+        return;
+    };
+    dom::show_bookmark(block, &snippet, dom::BookmarkScroll::None);
+    let prev = {
+        let mut s = this.borrow_mut();
+        s.bookmark_error = None;
+        s.papers_stale = true;
+        s.bookmark.replace(paper_reader_shared::Bookmark {
+            block,
+            snippet: snippet.clone(),
+            updated_at: (js_sys::Date::now() / 1000.0) as i64,
+        })
+    };
+    ctx.request_repaint();
+    let req = paper_reader_shared::BookmarkPut {
+        paper_id,
+        block,
+        snippet,
+    };
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Err(e) = crate::api::put_bookmark(&req).await {
+            restore_bookmark(&this, prev, format!("付箋を保存できません: {e}"));
+            ctx.request_repaint();
+        }
+    });
+}
+
+/// 付箋の位置まで移る。
+pub fn jump_to_bookmark(this: &SharedRef) {
+    let mut s = this.borrow_mut();
+    let Some(b) = &s.bookmark else {
+        return;
+    };
+    if !dom::show_bookmark(b.block, &b.snippet, dom::BookmarkScroll::Smooth) {
+        s.bookmark_error =
+            Some("付箋の段落が見つかりません（論文の版が変わった可能性があります）".into());
+    }
+}
+
+/// 付箋をはがす。
+pub fn remove_bookmark(this: &SharedRef, ctx: &egui::Context) {
+    let Some((paper_id, _)) = this.borrow().paper_ref() else {
+        return;
+    };
+    dom::clear_bookmark();
+    let prev = {
+        let mut s = this.borrow_mut();
+        s.bookmark_error = None;
+        s.papers_stale = true;
+        s.bookmark.take()
+    };
+    ctx.request_repaint();
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Err(e) = crate::api::delete_bookmark(&paper_id).await {
+            restore_bookmark(&this, prev, format!("付箋をはがせません: {e}"));
+            ctx.request_repaint();
+        }
+    });
+}
+
+/// 保存に失敗した付箋の操作を元に戻す。
+fn restore_bookmark(this: &SharedRef, prev: Option<paper_reader_shared::Bookmark>, error: String) {
+    let mut s = this.borrow_mut();
+    match &prev {
+        Some(b) => {
+            dom::show_bookmark(b.block, &b.snippet, dom::BookmarkScroll::None);
+        }
+        None => dom::clear_bookmark(),
+    }
+    s.bookmark = prev;
+    s.bookmark_error = Some(error);
+}
+
 /// 論文を読み込んで左ペインに表示する。
 pub fn open_paper(this: &SharedRef, ctx: &egui::Context, url: String) {
     this.borrow_mut().paper = PaperStatus::Loading;
@@ -1048,6 +1137,16 @@ pub fn open_paper(this: &SharedRef, ctx: &egui::Context, url: String) {
         match result {
             Ok(paper) => {
                 dom::set_paper_html(&paper.html, &paper.title);
+                // 付箋があれば、続きから読めるようその位置まで移る
+                s.bookmark_error = None;
+                if let Some(b) = &paper.bookmark
+                    && !dom::show_bookmark(b.block, &b.snippet, dom::BookmarkScroll::Instant)
+                {
+                    s.bookmark_error = Some(
+                        "付箋の段落が見つかりません（論文の版が変わった可能性があります）".into(),
+                    );
+                }
+                s.bookmark = paper.bookmark.clone();
                 s.selection = None;
                 s.dict = DictStatus::Idle;
                 s.abort_dict_ai();

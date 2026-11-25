@@ -6,6 +6,9 @@ use eframe::egui::{
     self, Color32, CornerRadius, FontId, Margin, RichText, Stroke, TextStyle, Theme, Vec2,
 };
 
+/// 付箋の色（本文の paper.css の .pr-bookmark と同じ琥珀色。ライト・ダークのどちらでも読める）
+pub const BOOKMARK: Color32 = Color32::from_rgb(0xe0, 0x8a, 0x00);
+
 /// 配色。
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {

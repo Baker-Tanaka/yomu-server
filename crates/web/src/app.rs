@@ -128,6 +128,7 @@ impl PaperReaderApp {
                     set_theme(ui.ctx(), next);
                 }
                 self.settings_menu(ui);
+                self.bookmark_menu(ui, &p);
                 if ui
                     .add(
                         egui::Button::new(RichText::new("💬").size(if mobile {
@@ -199,6 +200,72 @@ impl PaperReaderApp {
         })
         .response
         .on_hover_text("設定");
+    }
+
+    /// 付箋（📌）。論文を開いているときだけ出す。
+    fn bookmark_menu(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let (has_paper, bookmark, error) = {
+            let s = self.shared.borrow();
+            (
+                s.paper_ref().is_some(),
+                s.bookmark.clone(),
+                s.bookmark_error.clone(),
+            )
+        };
+        if !has_paper {
+            return;
+        }
+        let icon = RichText::new("📌").size(15.0);
+        let icon = if bookmark.is_some() {
+            icon.color(theme::BOOKMARK)
+        } else {
+            icon.color(p.weak)
+        };
+        ui.menu_button(icon, |ui| {
+            ui.set_min_width(250.0);
+            ui.label(RichText::new("付箋（どこまで読んだか）").strong());
+            ui.separator();
+            if let Some(b) = &bookmark {
+                ui.label(
+                    RichText::new(format!("{}  {}…", format_time(b.updated_at), b.snippet))
+                        .size(12.5)
+                        .color(p.weak),
+                );
+                if ui.button("↪ 付箋へ移動").clicked() {
+                    state::jump_to_bookmark(&self.shared);
+                    ui.close();
+                }
+            }
+            let label = if bookmark.is_some() {
+                "📌 ここに貼り直す"
+            } else {
+                "📌 ここまで読んだ（付箋を貼る）"
+            };
+            if ui
+                .button(label)
+                .on_hover_text(
+                    "本文で選択している段落、無ければ画面のいちばん上の段落に貼ります。次に開くとそこから表示します",
+                )
+                .clicked()
+            {
+                state::place_bookmark(&self.shared, ui.ctx());
+                ui.close();
+            }
+            if bookmark.is_some() && ui.button("付箋をはがす").clicked() {
+                state::remove_bookmark(&self.shared, ui.ctx());
+                ui.close();
+            }
+            if let Some(e) = &error {
+                ui.add_space(4.0);
+                ui.label(RichText::new(e).size(12.5).color(p.error));
+            }
+        })
+        .response
+        .on_hover_text(if bookmark.is_some() {
+            "付箋（貼ってあります）"
+        } else {
+            "付箋を貼る"
+        });
     }
 
     /// LLM の状態（丸と短い文言。詳しくはホバーで、クリックで再確認）。
@@ -2521,6 +2588,14 @@ fn paper_row(
                 theme::chip(ui, "表示中", p.ok, p.ok.gamma_multiply(0.15));
             } else if theme::primary_button(ui, "開く", true).clicked() {
                 action = Some(PaperAction::Open(paper.id.clone()));
+            }
+            if paper.bookmarked {
+                ui.label(
+                    RichText::new("📌 付箋あり")
+                        .size(12.0)
+                        .color(theme::BOOKMARK),
+                )
+                .on_hover_text("開くと付箋の位置から表示します");
             }
             if paper.cached {
                 ui.label(RichText::new("✓ Mac に保存済み").size(12.0).color(p.ok))

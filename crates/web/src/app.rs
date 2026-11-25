@@ -10,6 +10,7 @@ use paper_reader_shared::{
     DictEntry, DictResponse, ExplainTag, FeedbackItem, FeedbackLabel, FeedbackListResponse,
     GrammarMapResponse, GrammarTagInfo, HistoryEntry, MAX_FEEDBACK_BODY_CHARS,
     MAX_FEEDBACK_TITLE_CHARS, Mode, SearchItem, SearchSort, WordSource, paper_url_from_input,
+    pos_groups, pos_summary,
 };
 
 use crate::dom;
@@ -280,6 +281,18 @@ impl PaperReaderApp {
                 .and_then(|n| n.kana.as_deref())
             {
                 ui.label(RichText::new(kana).size(13.5).color(p.weak));
+            }
+            if let Some((head, meanings)) = r.map(entry_meanings) {
+                let summary = pos_summary(head, meanings);
+                if !summary.is_empty() {
+                    let text = summary
+                        .iter()
+                        .map(|pos| pos.short())
+                        .collect::<Vec<_>>()
+                        .join("・");
+                    ui.label(RichText::new(text).size(13.0).color(p.word))
+                        .on_hover_text(POS_HINT);
+                }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 expand = theme::subtle_button(ui, "詳しく").clicked();
@@ -1920,11 +1933,11 @@ fn dict_view(
             let note_meanings = note.map(|n| n.meanings.as_slice()).unwrap_or_default();
             let user_meanings = note.is_some_and(|n| n.meanings_source == Some(WordSource::User));
             if r.headword.is_some() {
-                meanings_list(ui, p, &r.meanings);
+                meanings_list(ui, p, headword, &r.meanings);
                 if user_meanings && !note_meanings.is_empty() {
                     ui.add_space(6.0);
                     ui.label(RichText::new("自分で登録した訳").size(12.5).color(p.weak));
-                    meanings_list(ui, p, note_meanings);
+                    meanings_list(ui, p, headword, note_meanings);
                 }
                 for entry in &r.related {
                     related_view(ui, p, entry);
@@ -1942,7 +1955,7 @@ fn dict_view(
                         );
                     }
                 });
-                meanings_list(ui, p, note_meanings);
+                meanings_list(ui, p, headword, note_meanings);
             } else if *ai != DictAiPhase::Loading {
                 let checked = note.is_some_and(|n| n.ai_checked);
                 ui.label(
@@ -2000,16 +2013,26 @@ fn speak_button(ui: &mut egui::Ui, p: &Palette, word: &str) {
     }
 }
 
+/// 表示に使う見出しと訳（辞書にあれば辞書の訳、無ければ単語帳の訳）。
+fn entry_meanings(r: &DictResponse) -> (&str, &[String]) {
+    match &r.headword {
+        Some(head) => (head, &r.meanings),
+        None => (
+            &r.query,
+            r.note
+                .as_ref()
+                .map(|n| n.meanings.as_slice())
+                .unwrap_or_default(),
+        ),
+    }
+}
+
+/// 品詞の表示に添える説明。
+const POS_HINT: &str = "品詞は訳語の形と英語の語尾から推定しています（誤ることがあります）";
+
 /// 小さな表示用の訳（最初の 3 つを「；」でつなぐ。『』や《》の注記は外す）。
 fn compact_meanings(r: &DictResponse) -> Option<String> {
-    let meanings: &[String] = if r.headword.is_some() {
-        &r.meanings
-    } else {
-        r.note
-            .as_ref()
-            .map(|n| n.meanings.as_slice())
-            .unwrap_or_default()
-    };
+    let (_, meanings) = entry_meanings(r);
     let parts: Vec<String> = meanings
         .iter()
         .take(3)
@@ -2046,29 +2069,39 @@ fn related_view(ui: &mut egui::Ui, p: &Palette, entry: &DictEntry) {
                 .color(p.strong),
         );
     });
-    meanings_list(ui, p, &entry.meanings);
+    meanings_list(ui, p, &entry.headword, &entry.meanings);
 }
 
-/// 訳を番号付きで並べる。元データの『』で囲まれた重要な訳は強調する。
-fn meanings_list(ui: &mut egui::Ui, p: &Palette, meanings: &[String]) {
+/// 訳を品詞ごとにまとめ、番号付きで並べる。元データの『』で囲まれた重要な訳は強調する。
+fn meanings_list(ui: &mut egui::Ui, p: &Palette, headword: &str, meanings: &[String]) {
     let font = theme::body_font(14.5);
-    for (i, meaning) in meanings.iter().enumerate() {
-        let mut job = egui::text::LayoutJob::default();
-        job.append(
-            &format!("{}  ", i + 1),
-            0.0,
-            egui::TextFormat::simple(font.clone(), p.accent),
-        );
-        for (text, emphasized) in split_emphasis(meaning) {
-            let mut format =
-                egui::TextFormat::simple(font.clone(), if emphasized { p.strong } else { p.text });
-            if emphasized {
-                format.background = p.accent_soft;
-            }
-            job.append(text, 0.0, format);
+    for (pos, range) in pos_groups(headword, meanings) {
+        if let Some(pos) = pos {
+            ui.add_space(3.0);
+            theme::chip(ui, pos.label(), p.word, p.word_soft).on_hover_text(POS_HINT);
         }
-        ui.label(job);
+        for i in range {
+            meaning_row(ui, p, &font, i, &meanings[i]);
+        }
     }
+}
+
+fn meaning_row(ui: &mut egui::Ui, p: &Palette, font: &egui::FontId, i: usize, meaning: &str) {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        &format!("{}  ", i + 1),
+        0.0,
+        egui::TextFormat::simple(font.clone(), p.accent),
+    );
+    for (text, emphasized) in split_emphasis(meaning) {
+        let mut format =
+            egui::TextFormat::simple(font.clone(), if emphasized { p.strong } else { p.text });
+        if emphasized {
+            format.background = p.accent_soft;
+        }
+        job.append(text, 0.0, format);
+    }
+    ui.label(job);
 }
 
 /// "『走る』,駆ける" → [("走る", true), (",駆ける", false)]

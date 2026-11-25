@@ -7,6 +7,7 @@
 #     形容詞 / 副詞・語法 / 前置詞 / 接続詞 / 文型・語法 / 論文構文
 # - aliases: 別名（タグ付けの手がかり）
 # - hint: LLM 向けの 1 行説明（一般的な英文法の知識で自作したもの。市販の教材の内容は書かない）
+# - point: 画面に出す「つかみ方」（省略可）。LLM には渡さないので、タグ付けのプロンプトは長くならない
 # - implies: このタグが付いたら一緒に付けるタグ（より一般的な項目。省略可）
 #
 # このファイルを変えると、文の解説キャッシュのキーが変わる（作り直される）。
@@ -18,26 +19,31 @@ tags:
     category: 時制
     aliases: [have p.p., 継続・経験・完了・結果]
     hint: "have/has + 過去分詞。過去の出来事が現在とつながっている（継続・経験・完了・結果）ことを表す。"
+    point: "訳語や用法の分類より、「過去から今まで幅があり、話の中心は今」とつかむ。過去形は過去の出来事だけを述べ、今どうなのかは示さない。"
   - id: past-perfect
     name: 過去完了
     category: 時制
     aliases: [had p.p., 大過去]
     hint: "had + 過去分詞。過去のある時点より前の出来事や、その時点までの継続を表す。"
+    point: "現在完了の「幅」を、そのまま過去の側へずらした形。基準になる過去の時点がどこかを探す。"
   - id: future-perfect
     name: 未来完了
     category: 時制
     aliases: [will have p.p.]
     hint: "will have + 過去分詞。未来のある時点までに完了・継続していることを表す。"
+    point: "現在完了の「幅」を未来の側へずらした形。未来のどの時点までの話かを確かめる。"
   - id: progressive
     name: 進行形
     category: 時制
     aliases: [be doing, 現在進行形, 過去進行形, 予定を表す進行形]
     hint: "be + 現在分詞。ある時点で動作が進行中であること、一時的な状態、すでに準備が進んでいる予定を表す。状態を表す動詞はふつう進行形にしない。"
+    point: "中心は「途中」。動作が少しでも進んでいると考えられるので、手配が始まった予定にも使える。状態そのものを表す動詞（resemble など）は途中を考えにくい。"
   - id: time-condition-clause
     name: 時・条件の副詞節
     category: 時制
     aliases: [when/if 節の現在形, 未来のことを現在形で]
     hint: "when, if, once, until などが導く副詞節では、未来のことでも現在形（現在完了形）を使う。"
+    point: "現在形になるのは副詞節の中だけで、主節の未来は未来の形で表す。同じ when や if でも、名詞節（いつ〜か・〜かどうか）なら未来のことは will で表す。"
 
   # ── 仮定法 ──
   - id: subjunctive-past
@@ -45,16 +51,19 @@ tags:
     category: 仮定法
     aliases: [If S 過去形, S would do]
     hint: "If + S + 過去形, S + would/could + 原形。現在の事実に反する仮定を表す。be 動詞は主語にかかわらず were を使うことが多い。"
+    point: "時制を一つ過去へずらして「現実ではなく想定の話」と示す。名前は過去でも、内容は今のこと。"
   - id: subjunctive-past-perfect
     name: 仮定法過去完了
     category: 仮定法
     aliases: [If S had p.p., would have p.p.]
     hint: "If + S + had 過去分詞, S + would have 過去分詞。過去の事実に反する仮定を表す。"
+    point: "過去の事実と違う想定は、さらにずらして had p.p. にする。名前は形に、意味は一つ手前の時にある。"
   - id: if-omission-inversion
     name: if の省略と倒置
     category: 仮定法
     aliases: [Had S p.p., Were S to, Should S]
     hint: "仮定法の if を省略すると、Were/Had/Should が主語の前に出る（例: Had we known, ... / Should any error occur, ...）。"
+    point: "文頭が Were / Had / Should なのに疑問文でなければ、if の省略を疑う。語順を戻して if を補うと読める。"
   - id: subjunctive-idioms
     name: 仮定法を含む慣用表現
     category: 仮定法
@@ -77,6 +86,7 @@ tags:
     category: 助動詞
     aliases: [意志, 予測, 習性, 拒絶, "won't"]
     hint: "will は意志・確信のある予測・習性を表し、否定の won't は拒絶（どうしても〜しない）も表す。"
+    point: "根っこは「きっとそうする・そうなる」という強い見込みや意志。予測・習性・拒絶はそこからの広がりと考える。"
 
   # ── 不定詞 ──
   - id: infinitive-noun
@@ -84,6 +94,7 @@ tags:
     category: 不定詞
     aliases: [to do（〜すること）]
     hint: "to + 原形が「〜すること」として主語・目的語・補語になる。"
+    point: "to 不定詞には「これから向かう先」という感覚があり、これからの行為や目標を表す場面でよく合う。"
   - id: infinitive-adjective
     name: 不定詞の形容詞的用法
     category: 不定詞
@@ -109,11 +120,13 @@ tags:
     category: 不定詞
     aliases: [so as to do, so ~ as to do, 目的, 結果・程度]
     hint: "so as to + 原形は目的（〜するために）、so + 形容詞・副詞 + as to + 原形は程度・結果（〜するほど…）を表す。"
+    point: "so as to のように語が続けば目的。so と as to が離れ、間に形容詞・副詞があれば、程度とその結果として読む。so that と so ... that の関係に似ている。"
   - id: infinitive-idioms
     name: 不定詞を含む慣用表現
     category: 不定詞
     aliases: [be supposed to, be likely to, All S have to do is]
     hint: "be supposed to（〜することになっている）、be likely to（〜しそうだ）、All S have to do is (to) do（S は〜しさえすればよい）などの決まった言い方。"
+    point: "丸暗記の前に構造を見る。All S have to do は「S がしなければならないことはそれだけ」。be supposed to は「〜するとされている」から、予定や義務の意味に広がる。"
 
   # ── 動名詞 ──
   - id: gerund-subject-object
@@ -121,16 +134,19 @@ tags:
     category: 動名詞
     aliases: [doing（〜すること）, 前置詞+動名詞]
     hint: "動詞の -ing 形が名詞として主語・目的語・前置詞の目的語になる（by using ..., Training the model is ...）。"
+    point: "動詞を名詞にした形。前置詞の後に動作を置くときは -ing にする。be used to や look forward to の to は前置詞。"
   - id: gerund-vs-infinitive
     name: 動名詞と不定詞の使い分け
     category: 動名詞
     aliases: [enjoy doing, decide to do, stop doing / stop to do]
     hint: "目的語に動名詞をとる動詞と不定詞をとる動詞の区別、どちらもとるが意味が変わる動詞。"
+    point: "傾向として、to 不定詞は「これからすること」（希望・意図・申し出）、動名詞は繰り返し・中止・回避の対象と結びつきやすい。例外もあるので手がかりとして使う。"
   - id: gerund-idioms
     name: 動名詞の慣用表現
     category: 動名詞
     aliases: [on doing, spend time doing, be busy doing, have difficulty doing]
     hint: "on doing（〜するとすぐに）、spend 時間 (in) doing（〜して時間を費やす）、have difficulty (in) doing（〜するのに苦労する）などの決まった言い方。"
+    point: "on は「接している」が基本の感覚で、on doing は二つの出来事が間を置かずに続くことを表す。spend や busy の後の in はよく省略される。"
 
   # ── 分詞 ──
   - id: present-participle-postmodifier
@@ -138,16 +154,19 @@ tags:
     category: 分詞
     aliases: [名詞 + doing]
     hint: "名詞 + 現在分詞（+ 語句）で「〜している名詞」と後ろから修飾する（models using attention）。"
+    point: "分詞は名詞を説明する側。名詞の後ろの -ing を述語動詞と取り違えないよう、文の本当の動詞を先に探す。"
   - id: past-participle-postmodifier
     name: 過去分詞の後置修飾
     category: 分詞
     aliases: [名詞 + p.p.]
     hint: "名詞 + 過去分詞（+ 語句）で「〜された名詞」と後ろから修飾する（the method proposed in [3]）。"
+    point: "過去形と同じ形のことがある。後ろに文の本当の動詞があれば、手前の語は名詞を説明する過去分詞。"
   - id: participial-construction
     name: 分詞構文
     category: 分詞
     aliases: [doing ..., S V, 付帯状況]
     hint: "分詞で始まる句が副詞として働き、時・理由・付帯状況・結果などを表す（..., achieving state-of-the-art results）。"
+    point: "主節の主語を分詞の前に置いてみる。主語が「する」関係なら -ing、「される」関係なら p.p.（being が省略された形）。"
   - id: perfect-participle
     name: 完了形の分詞構文
     category: 分詞
@@ -165,6 +184,7 @@ tags:
     category: 分詞
     aliases: [surprising / surprised, interesting / interested, confusing / confused]
     hint: "感情を引き起こす意味の他動詞の分詞。-ing は「（人を）〜させるような」、-ed は「〜させられた（〜している）」を表す。"
+    point: "人か物かではなく、感情を「引き起こす側」なら -ing、「受ける側」なら -ed。人が主語でも、周りにその感情を起こすなら -ing になる。"
 
   # ── 受動態 ──
   - id: passive
@@ -172,11 +192,13 @@ tags:
     category: 受動態
     aliases: [be p.p.]
     hint: "be + 過去分詞。動作を受ける側を主語にする。論文では手順や結果の記述で多用される。"
+    point: "行為者が分かりきっている、重要でない、示したくないときに使いやすく、by 〜 がないことも多い。わざわざ by 〜 を置けば、その行為者に注目が向く。"
   - id: passive-progressive-perfect
     name: 受動態の進行形・完了形
     category: 受動態
     aliases: [be being p.p., have been p.p.]
     hint: "be being + 過去分詞（進行形）、have been + 過去分詞（完了形）の受動態。"
+    point: "being があれば「されている最中」、have been なら「されて今に至る・すでにされた」。時制が複雑に見えても、まず主語が「する側か、される側か」を確かめる。"
     implies: [passive]
 
   # ── 関係詞 ──
@@ -185,6 +207,7 @@ tags:
     category: 関係詞
     aliases: [who, which, that, 目的格の省略, 接触節]
     hint: "who/which/that が先行詞を修飾する節を導く。目的格の関係代名詞は省略されることが多い（the method we propose = the method that we propose）。"
+    point: "関係詞節は前の名詞を説明するまとまり。前から読むときは名詞でいったん区切り、後ろを説明として足していく。先行詞の直後の that の次に動詞があれば、主格の関係代名詞を疑う。"
   - id: relative-whose
     name: 関係代名詞 whose
     category: 関係詞
@@ -314,6 +337,7 @@ tags:
     category: 接続詞
     aliases: [so that S can do, so ~ that, such ~ that]
     hint: "so that + S + V は目的（〜するように）や結果、so + 形容詞・副詞 + that / such + 名詞 + that は「とても〜なので…」を表す。"
+    point: "so that が続けば目的のことが多い（結果の場合もある）。so と that が離れ、間に形容詞・副詞があれば「それほど〜なので…」と読む。"
   - id: noun-clause-that-whether
     name: 名詞節の that / whether
     category: 接続詞

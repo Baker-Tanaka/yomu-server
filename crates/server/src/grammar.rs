@@ -1,6 +1,6 @@
 //! 文法タグ（data/grammar_tags.yaml）の読み込みと、LLM によるタグ付けの入出力。
 //!
-//! LLM に渡すのはタグの id / name / hint（このリポジトリで自作したもの）だけ。
+//! LLM に渡すのはタグの id / name / hint（このリポジトリで自作したもの）だけで、point は画面にだけ出す。
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -48,6 +48,9 @@ pub struct TagDef {
     #[serde(default)]
     pub aliases: Vec<String>,
     pub hint: String,
+    /// 画面に出す「つかみ方」。LLM には渡さない
+    #[serde(default)]
+    pub point: String,
     /// このタグが付いたら一緒に付けるタグ（より一般的な項目）
     #[serde(default)]
     pub implies: Vec<String>,
@@ -107,6 +110,7 @@ impl GrammarData {
                     category: tag.category.clone(),
                     span: d.span.clone(),
                     hint: tag.hint.clone(),
+                    point: tag.point.clone(),
                 })
             })
             .collect()
@@ -371,6 +375,7 @@ tags:
     name: 受動態
     category: 受動態
     hint: "be + p.p.。"
+    point: "つかみ方の文。"
   - id: appositive-that
     name: 同格の that
     category: 論文構文
@@ -534,6 +539,17 @@ tags:
         assert_eq!(ids.as_array().unwrap().len(), 5);
         let prompt = tagging_system_prompt(&g);
         assert!(prompt.contains("relative-adverb: 関係副詞"));
+        // point は画面用で、タグ付けのプロンプトには入れない
+        assert!(!prompt.contains("つかみ方の文"));
+        assert_eq!(
+            g.resolve(&[DetectedTag {
+                tag_id: "passive".into(),
+                span: String::new(),
+                confidence: 0.9,
+            }])[0]
+                .point,
+            "つかみ方の文。"
+        );
     }
 
     #[test]

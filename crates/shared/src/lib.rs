@@ -671,6 +671,9 @@ pub struct ExplainTag {
     /// タグの説明（grammar_tags.yaml の hint）
     #[serde(default)]
     pub hint: String,
+    /// 理解の手がかり（grammar_tags.yaml の point。無ければ空）
+    #[serde(default)]
+    pub point: String,
 }
 
 /// 文法タグ 1 件（`GET /api/grammar-tags`）。
@@ -681,6 +684,8 @@ pub struct GrammarTagInfo {
     pub category: String,
     pub aliases: Vec<String>,
     pub hint: String,
+    #[serde(default)]
+    pub point: String,
     /// 履歴に出てきた回数（その文法項目を含む英文の数）
     pub count: u64,
 }

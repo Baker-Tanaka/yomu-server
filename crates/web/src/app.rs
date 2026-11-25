@@ -2593,7 +2593,20 @@ fn tag_detail(ui: &mut egui::Ui, p: &Palette, tag: &ExplainTag, found: bool) {
             }
             ui.add_space(2.0);
             ui.label(RichText::new(&tag.hint).size(13.5).color(p.text));
+            point_line(ui, p, &tag.point);
         });
+}
+
+/// 文法項目の「つかみ方」（無ければ何も出さない）。
+fn point_line(ui: &mut egui::Ui, p: &Palette, point: &str) {
+    if !point.is_empty() {
+        ui.add_space(3.0);
+        ui.label(
+            RichText::new(format!("つかみ方: {point}"))
+                .size(13.0)
+                .color(p.accent),
+        );
+    }
 }
 
 /// カテゴリ → タグ。
@@ -2661,6 +2674,11 @@ fn grammar_tag_row(ui: &mut egui::Ui, p: &Palette, tag: &GrammarTagInfo, with_ca
             theme::chip(ui, &tag.category, p.accent, p.accent_soft);
         }
     });
+    if !tag.point.is_empty() {
+        ui.indent(("grammar-point", &tag.id), |ui| {
+            point_line(ui, p, &tag.point)
+        });
+    }
 }
 
 enum PaperAction {

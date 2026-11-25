@@ -2,7 +2,8 @@
 
 英文の解説では、まず LLM が英文の文法項目を判定し（タグ付け）、項目のチップと説明を表示します。
 
-- [data/grammar_tags.yaml](../data/grammar_tags.yaml) … 文法タグのマスター（id・日本語名・カテゴリ・別名・LLM 向けの 1 行説明・implies）。
+- [data/grammar_tags.yaml](../data/grammar_tags.yaml) … 文法タグのマスター（id・日本語名・カテゴリ・別名・LLM 向けの 1 行説明・画面用の「つかみ方」point・implies）。
+  `point` は項目の説明と「文法項目」タブに出すだけで、LLM には渡しません。
   68 項目。`implies` は「完了形の分詞構文 → 分詞構文」のように一緒に付ける一般的な項目
 - 市販の教材の本文はこのファイルにも LLM のプロンプトにも入れません。解説の中身は LLM が一般的な英文法の知識で書きます
 

@@ -38,6 +38,7 @@ pub fn tags_response(g: &GrammarData, counts: &HashMap<String, i64>) -> GrammarT
             category: t.category.clone(),
             aliases: t.aliases.clone(),
             hint: t.hint.clone(),
+            point: t.point.clone(),
             count: counts.get(&t.id).copied().unwrap_or(0).max(0) as u64,
         })
         .collect();

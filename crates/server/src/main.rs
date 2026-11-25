@@ -1,4 +1,5 @@
 mod arxiv;
+mod bookmark;
 mod cache;
 mod config;
 mod db;
@@ -26,7 +27,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::extract::State;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use paper_reader_shared::HealthResponse;
 use sqlx::SqlitePool;
@@ -168,6 +169,10 @@ fn router(state: AppState, config: &Config) -> Router {
             get(papers::get_papers).delete(papers::delete_paper),
         )
         .route("/paper-asset", get(papers::get_asset))
+        .route(
+            "/bookmark",
+            put(bookmark::put_bookmark).delete(bookmark::delete_bookmark),
+        )
         .route("/dict", get(dict::get_dict))
         .route("/dict/ai", post(words::post_dict_ai))
         .route("/words", get(words::get_words).post(words::post_word))

@@ -23,7 +23,37 @@ pub struct PaperResponse {
     pub html: String,
     /// 実際に取得した HTML 版の URL
     pub source_url: String,
+    /// この論文に貼った付箋（版違いでも同じ論文として扱う）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bookmark: Option<Bookmark>,
 }
+
+/// 付箋（どこまで読んだか）。本文のブロック要素（段落・見出し・リスト項目など）の通し番号と、
+/// その書き出し（版が変わって番号がずれたときに探し直す手がかり）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Bookmark {
+    pub block: u32,
+    pub snippet: String,
+    /// 貼った時刻（UNIX 秒）
+    pub updated_at: i64,
+}
+
+/// `PUT /api/bookmark` の本文。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BookmarkPut {
+    pub paper_id: String,
+    pub block: u32,
+    pub snippet: String,
+}
+
+/// `DELETE /api/bookmark?paper_id=` のクエリ。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BookmarkQuery {
+    pub paper_id: String,
+}
+
+/// 付箋に残す書き出しの最大文字数
+pub const MAX_BOOKMARK_SNIPPET_CHARS: usize = 80;
 
 /// 見た論文 1 件（`GET /api/papers`）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -40,6 +70,9 @@ pub struct RecentPaper {
     pub sentence_count: i64,
     /// 本文が Mac にキャッシュされているか（されていれば arXiv にアクセスせずに開ける）
     pub cached: bool,
+    /// 付箋を貼っているか
+    #[serde(default)]
+    pub bookmarked: bool,
 }
 
 /// 論文キャッシュの使用量。

@@ -892,6 +892,7 @@ pub fn speak(text: &str) -> bool {
 /// 付箋を貼る単位にする本文のブロック要素。サーバーで無害化した HTML は同じ論文なら同じなので、
 /// この順の通し番号で位置を表せる（版が変わってずれたら書き出しで探し直す）。
 const BLOCK_SELECTOR: &str = "p, li, h1, h2, h3, h4, h5, h6, figcaption, blockquote, dd";
+const HEADING_SELECTOR: &str = "h1, h2, h3, h4, h5, h6";
 const BOOKMARK_CLASS: &str = "pr-bookmark";
 /// 付箋の書き出しの照合に使う文字数
 const SNIPPET_MATCH_CHARS: usize = 40;
@@ -918,7 +919,8 @@ fn snippet_key(s: &str) -> String {
 }
 
 /// 付箋を貼る位置（ブロックの番号と書き出し）。
-/// 本文で選択していて、その段落が見えていればそこ。無ければ、いま画面のいちばん上に見えている段落。
+/// 本文で選択していて、その段落が見えていればそこ。無ければ、いま画面のいちばん上に見えている段落
+/// （章・節の見出しは読んだ位置が分かりにくいので、ほかに見えている段落があれば選ばない）。
 pub fn reading_block() -> Option<(u32, String)> {
     let paper = paper_element()?;
     let list = blocks(&paper);
@@ -939,7 +941,10 @@ pub fn reading_block() -> Option<(u32, String)> {
         .and_then(|el| closest_in(&el, &paper, BLOCK_SELECTOR))
         .filter(|el| visible(el))
         .and_then(|el| list.iter().position(|b| *b == el));
-    let index = selected.or_else(|| list.iter().position(visible))?;
+    let heading = |el: &Element| el.matches(HEADING_SELECTOR).unwrap_or(false);
+    let index = selected
+        .or_else(|| list.iter().position(|b| visible(b) && !heading(b)))
+        .or_else(|| list.iter().position(visible))?;
     let el = &list[index];
     Some((u32::try_from(index).ok()?, block_snippet(el)))
 }

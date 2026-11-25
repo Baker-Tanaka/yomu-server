@@ -518,22 +518,19 @@ body.resizing #paper, body.resizing #explain-pane {
 @media (min-width: 801px) {
   .paper-placeholder .mobile-only { display: none; }
 }
-}
 
-/* 付箋（どこまで読んだか）。ライト・ダークのどちらでも読める琥珀色 */
+/* 付箋（どこまで読んだか）。段落の先頭のアイコンと、本文の下線で位置を示す。
+   ライト・ダークのどちらでも読める琥珀色 */
 #paper .pr-bookmark {
   scroll-margin-top: 1.2em;
-  background: rgba(245, 158, 11, 0.12);
-  box-shadow: inset 4px 0 0 #e08a00;
-  border-radius: 4px;
-  padding-left: 0.7em;
+  text-decoration: underline;
+  text-decoration-color: #e08a00;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.3em;
 }
 #paper .pr-bookmark::before {
-  content: "📌 付箋 — ここまで読んだ";
-  display: block;
-  margin-bottom: 0.25em;
-  font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #e08a00;
+  content: "📌";
+  /* inline-block にするとアイコンには下線が付かない */
+  display: inline-block;
+  margin-right: 0.35em;
 }

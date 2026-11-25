@@ -9,16 +9,17 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use paper_reader_shared::{
     APP_VERSION, DictEntry, DictResponse, ExplainTag, FeedbackItem, FeedbackLabel,
     FeedbackListResponse, GIT_HASH, GrammarTagInfo, GrammarTagsResponse, HistoryEntry,
-    MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode, SLASH_READING_HEADING, SearchItem,
-    SearchSort, WordSource, build_version_label, paper_url_from_input, plain_arrows, pos_groups,
-    pos_summary, version_label, without_section,
+    MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode, ReadLaterItem, ReadLaterPut,
+    SLASH_READING_HEADING, SearchItem, SearchSort, WordSource, build_version_label,
+    paper_url_from_input, plain_arrows, pos_groups, pos_summary, version_label, without_section,
 };
 
 use crate::dom;
 use crate::recent::RecentWord;
 use crate::state::{
     self, DictAiPhase, DictStatus, ExplainPhase, FeedbackStage, GrammarOrder, GrammarStatus,
-    HealthStatus, HistoryScope, HistoryStatus, PaperStatus, PapersStatus, Shared, SharedRef, Tab,
+    HealthStatus, HistoryScope, HistoryStatus, PaperStatus, PapersStatus, SearchView, Shared,
+    SharedRef, Tab,
 };
 use crate::theme::{self, Palette};
 
@@ -28,6 +29,8 @@ const NARROW_TABS_WIDTH: f32 = 340.0;
 const SUBTITLE_MIN_WIDTH: f32 = 56.0;
 /// 検索欄の案内文
 const SEARCH_HINT: &str = "arXiv の URL・ID、またはキーワードで検索";
+/// 論文を開く前の画面に出す「後で読む」の件数
+const READ_LATER_PREVIEW: usize = 3;
 
 pub struct PaperReaderApp {
     shared: SharedRef,
@@ -733,6 +736,10 @@ impl PaperReaderApp {
             if tab == Tab::Grammar {
                 s.grammar_stale = true;
             }
+            if tab == Tab::Search || tab == Tab::Explain {
+                // ほかの端末で積んだ分も出るように読み直す
+                s.read_later.stale = true;
+            }
         }
     }
 
@@ -747,7 +754,12 @@ impl PaperReaderApp {
         let Some(sel) = sel else {
             empty_explain(ui, &p, has_paper, self.is_mobile());
             if !has_paper {
-                // 論文を開く前は、最近見た論文からすぐ開けるようにする
+                // 論文を開く前は、後で読む論文と最近見た論文からすぐ開けるようにする
+                self.refresh_read_later_if_stale(ui.ctx());
+                if !self.shared.borrow().read_later.items.is_empty() {
+                    ui.add_space(10.0);
+                    self.read_later_list(ui, &p, Some(READ_LATER_PREVIEW));
+                }
                 ui.add_space(10.0);
                 self.recent_papers(ui, &p, Some(5));
             }
@@ -1236,6 +1248,39 @@ impl PaperReaderApp {
     fn search_tab(&mut self, ui: &mut egui::Ui) {
         let p = theme::palette(ui.ctx());
         let ctx = ui.ctx().clone();
+        self.refresh_read_later_if_stale(&ctx);
+
+        let (view, later_count) = {
+            let s = self.shared.borrow();
+            (s.search_view, s.read_later.items.len())
+        };
+        let later_label = if later_count > 0 {
+            format!("後で読む {later_count}")
+        } else {
+            "後で読む".to_string()
+        };
+        let mut new_view = view;
+        if theme::segmented(
+            ui,
+            &mut new_view,
+            &[
+                (SearchView::Results, "検索結果"),
+                (SearchView::Later, later_label.as_str()),
+            ],
+        ) {
+            let mut s = self.shared.borrow_mut();
+            s.search_view = new_view;
+            s.read_later.stale = true;
+        }
+        ui.add_space(8.0);
+        if let Some(e) = self.shared.borrow().read_later.error.clone() {
+            notice(ui, &p, &e);
+            ui.add_space(6.0);
+        }
+        if new_view == SearchView::Later {
+            self.read_later_list(ui, &p, None);
+            return;
+        }
         let search = self.shared.borrow().search.clone();
 
         if search.query.is_empty() {
@@ -1313,10 +1358,12 @@ impl PaperReaderApp {
         }
 
         let current = self.shared.borrow().paper_ref().map(|(id, _)| id);
-        let mut open = None;
+        let mut action = None;
         for item in &search.items {
-            if let Some(id) = search_result(ui, &p, item, current.as_deref() == Some(&item.id)) {
-                open = Some(id);
+            let later = self.shared.borrow().read_later.contains(&item.id);
+            let is_open = current.as_deref() == Some(&item.id);
+            if let Some(a) = search_result(ui, &p, item, is_open, later) {
+                action = Some((a, item));
             }
             ui.add_space(8.0);
         }
@@ -1329,8 +1376,85 @@ impl PaperReaderApp {
                 }
             });
         }
-        if let Some(id) = open {
-            state::open_paper(&self.shared, &ctx, format!("https://arxiv.org/abs/{id}"));
+        match action {
+            Some((SearchAction::Open, item)) => {
+                let url = format!("https://arxiv.org/abs/{}", item.id);
+                state::open_paper(&self.shared, &ctx, url);
+            }
+            Some((SearchAction::AddLater, item)) => state::add_read_later(
+                &self.shared,
+                &ctx,
+                ReadLaterPut {
+                    paper_id: item.id.clone(),
+                    title: item.title.clone(),
+                    authors: item.authors.clone(),
+                },
+            ),
+            Some((SearchAction::RemoveLater, item)) => {
+                state::remove_read_later(&self.shared, &ctx, item.id.clone());
+            }
+            None => {}
+        }
+    }
+
+    fn refresh_read_later_if_stale(&self, ctx: &egui::Context) {
+        let stale = self.shared.borrow().read_later.stale;
+        if stale {
+            state::refresh_read_later(&self.shared, ctx);
+        }
+    }
+
+    /// 後で読む論文の一覧（後から積んだ順）。`limit` があれば先頭のその件数だけ出す。
+    fn read_later_list(&mut self, ui: &mut egui::Ui, p: &Palette, limit: Option<usize>) {
+        let ctx = ui.ctx().clone();
+        let later = self.shared.borrow().read_later.clone();
+        if limit.is_some() {
+            theme::section_title(ui, &format!("後で読む（{} 件）", later.items.len()));
+            ui.add_space(4.0);
+        } else if let Some(e) = &later.load_error {
+            notice(ui, p, &format!("後で読む: {e}"));
+            if theme::subtle_button(ui, "再試行").clicked() {
+                self.shared.borrow_mut().read_later.stale = true;
+            }
+            ui.add_space(6.0);
+        }
+        if later.items.is_empty() {
+            if later.loaded {
+                ui.label(
+                    RichText::new(
+                        "後で読む論文はありません。検索結果の「＋ 後で読む」で、ここに積めます。",
+                    )
+                    .color(p.weak),
+                );
+            } else if later.load_error.is_none() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(RichText::new("読み込み中…").color(p.weak));
+                });
+            }
+            return;
+        }
+
+        let current = self.shared.borrow().paper_ref().map(|(id, _)| id);
+        let mut action = None;
+        for item in later.items.iter().take(limit.unwrap_or(usize::MAX)) {
+            // 表示中の論文の ID には版が付くことがある
+            let is_open = current
+                .as_deref()
+                .is_some_and(|c| is_same_paper(c, &item.id));
+            if let Some(a) = read_later_row(ui, p, item, is_open) {
+                action = Some((a, item.id.clone()));
+            }
+            ui.add_space(6.0);
+        }
+        match action {
+            Some((ReadLaterAction::Open, id)) => {
+                state::open_paper(&self.shared, &ctx, format!("https://arxiv.org/abs/{id}"));
+            }
+            Some((ReadLaterAction::Remove, id)) => {
+                state::remove_read_later(&self.shared, &ctx, id);
+            }
+            None => {}
         }
     }
 
@@ -2189,14 +2313,93 @@ fn empty_search(ui: &mut egui::Ui, p: &Palette) {
     });
 }
 
-/// 検索結果の 1 件。「読む」かタイトルが押されたら論文 ID を返す。
+enum SearchAction {
+    Open,
+    AddLater,
+    RemoveLater,
+}
+
+enum ReadLaterAction {
+    Open,
+    Remove,
+}
+
+/// `current`（版が付くことがある）が、版なしの ID `base` の論文か。
+fn is_same_paper(current: &str, base: &str) -> bool {
+    current.strip_prefix(base).is_some_and(|rest| {
+        rest.is_empty()
+            || rest
+                .strip_prefix('v')
+                .is_some_and(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
+/// 後で読む論文 1 件。タイトルか「開く」で開く。
+fn read_later_row(
+    ui: &mut egui::Ui,
+    p: &Palette,
+    item: &ReadLaterItem,
+    is_open: bool,
+) -> Option<ReadLaterAction> {
+    let mut action = None;
+    theme::card(ui, |ui| {
+        let title = ui
+            .add(
+                egui::Label::new(
+                    RichText::new(&item.title)
+                        .size(15.0)
+                        .strong()
+                        .color(p.strong),
+                )
+                .sense(egui::Sense::click()),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if title.clicked() && !is_open {
+            action = Some(ReadLaterAction::Open);
+        }
+        ui.label(
+            RichText::new(authors_line(&item.authors))
+                .size(12.5)
+                .color(p.text),
+        );
+        ui.label(
+            RichText::new(format!(
+                "arXiv:{} · {} に追加",
+                item.id,
+                format_time(item.added_at)
+            ))
+            .size(12.0)
+            .color(p.weak),
+        );
+        ui.horizontal(|ui| {
+            if is_open {
+                theme::chip(ui, "表示中", p.ok, p.ok.gamma_multiply(0.15));
+            } else if theme::primary_button(ui, "開く", true).clicked() {
+                action = Some(ReadLaterAction::Open);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if theme::subtle_button(ui, "外す")
+                    .on_hover_text("後で読むから外します")
+                    .clicked()
+                {
+                    action = Some(ReadLaterAction::Remove);
+                }
+            });
+        });
+    });
+    action
+}
+
+/// 検索結果の 1 件。押された操作を返す（`later` は「後で読む」に積んであるか）。
 fn search_result(
     ui: &mut egui::Ui,
     p: &Palette,
     item: &SearchItem,
     is_open: bool,
-) -> Option<String> {
+    later: bool,
+) -> Option<SearchAction> {
     let mut open = false;
+    let mut action = None;
     theme::card(ui, |ui| {
         let title = ui
             .add(
@@ -2241,11 +2444,21 @@ fn search_result(
                 ui.label(RichText::new(&item.summary).size(13.5).color(p.text));
             });
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if is_open {
                 theme::chip(ui, "表示中", p.ok, p.ok.gamma_multiply(0.15));
             } else if theme::primary_button(ui, "読む", true).clicked() {
                 open = true;
+            }
+            if later {
+                if theme::subtle_button(ui, "✓ 後で読むに追加済み")
+                    .on_hover_text("もう一度押すと外します")
+                    .clicked()
+                {
+                    action = Some(SearchAction::RemoveLater);
+                }
+            } else if theme::subtle_button(ui, "＋ 後で読む").clicked() {
+                action = Some(SearchAction::AddLater);
             }
             ui.hyperlink_to(
                 RichText::new("arXiv ↗").size(12.5),
@@ -2253,7 +2466,10 @@ fn search_result(
             );
         });
     });
-    (open && !is_open).then(|| item.id.clone())
+    if open && !is_open {
+        action = Some(SearchAction::Open);
+    }
+    action
 }
 
 /// "A, B, C ほか 5 名"

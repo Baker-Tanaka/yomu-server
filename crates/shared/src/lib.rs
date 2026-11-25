@@ -1,5 +1,8 @@
 //! server と web の両方で使う API の型。
 
+mod pos;
+pub use pos::{PartOfSpeech, guess_pos, pos_groups, pos_summary};
+
 use serde::{Deserialize, Serialize};
 
 /// エラー応答の共通形式 `{ "error": "..." }`。

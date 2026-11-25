@@ -67,6 +67,7 @@ pub fn clear_selection() {
 
 /// 無害化済みの論文 HTML を #paper に入れる。
 pub fn set_paper_html(html: &str, title: &str) {
+    crate::cite_peek::close();
     LAST_SELECTION.with(|l| *l.borrow_mut() = None);
     CONTEXT_ELEMENT.with(|c| *c.borrow_mut() = None);
     if let Some(paper) = paper_element() {

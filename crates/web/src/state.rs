@@ -964,6 +964,21 @@ pub fn submit_input(this: &SharedRef, ctx: &egui::Context, input: &str) {
     }
 }
 
+/// 引用文献のカードのボタン（論文を開く・題名で探す）。
+pub fn on_cite_action(this: &SharedRef, ctx: &egui::Context, action: crate::cite_peek::CiteAction) {
+    use crate::cite_peek::CiteAction;
+    match action {
+        CiteAction::Open(id) => open_paper(this, ctx, format!("https://arxiv.org/abs/{id}")),
+        CiteAction::Search(title) => search(
+            this,
+            ctx,
+            paper_reader_shared::title_search_query(&title),
+            SearchSort::Relevance,
+        ),
+    }
+    ctx.request_repaint();
+}
+
 /// 論文を検索する（1 ページ目から）。
 pub fn search(this: &SharedRef, ctx: &egui::Context, query: String, sort: SearchSort) {
     dom::raise_sheet(dom::Sheet::Full);

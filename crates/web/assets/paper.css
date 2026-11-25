@@ -541,6 +541,57 @@ body.resizing #paper, body.resizing #explain-pane {
   .paper-placeholder .mobile-only { display: none; }
 }
 
+/* 引用番号をタップしたときのカード（位置と幅は cite_peek.rs が指定する） */
+#cite-peek {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  min-height: 140px;
+  padding: 0.7em 0.9em 0.8em;
+  background: var(--paper-bg);
+  color: var(--paper-fg);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px var(--shadow);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+}
+#cite-peek .cite-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6em;
+}
+#cite-peek .cite-label { font-weight: 700; color: var(--accent); }
+#cite-peek .cite-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0.4em 0 0.7em;
+}
+#cite-peek .cite-body p { margin: 0 0 0.35em; }
+#cite-peek .cite-actions { display: flex; flex-wrap: wrap; gap: 0.5em; }
+#cite-peek button {
+  font: inherit;
+  color: var(--paper-fg);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 0.45em 0.8em;
+  cursor: pointer;
+}
+#cite-peek button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--paper-bg);
+  font-weight: 600;
+}
+#cite-peek button.cite-close { border: none; padding: 0.3em 0.6em; color: var(--muted); }
+
 /* 付箋（どこまで読んだか）。段落の先頭のアイコンと、本文の下線で位置を示す。
    ライト・ダークのどちらでも読める琥珀色 */
 #paper .pr-bookmark {

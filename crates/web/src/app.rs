@@ -60,6 +60,13 @@ impl PaperReaderApp {
         }) {
             log::error!("ショートカットを有効にできません: {e}");
         }
+        let ctx = cc.egui_ctx.clone();
+        let shared_for_cites = shared.clone();
+        if let Err(e) = crate::cite_peek::watch(move |action| {
+            state::on_cite_action(&shared_for_cites, &ctx, action);
+        }) {
+            log::error!("引用の覗き見を有効にできません: {e}");
+        }
         if let Err(e) = dom::init_splitter() {
             log::error!("ペイン境界のドラッグを有効にできません: {e}");
         }

@@ -500,3 +500,7 @@ curl -L -o data/fonts/NotoSansJP-Regular.otf \
 scripts/subset_font.sh                     # → crates/web/assets/fonts/NotoSansJP-Regular.otf
 # 文字を増やすときは scripts/font_chars.py の RANGES を編集して再実行する
 ```
+
+## ライセンス
+
+このリポジトリのソースコードは [MIT License](LICENSE) の下で公開されています。

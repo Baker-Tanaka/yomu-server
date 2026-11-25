@@ -273,6 +273,7 @@ impl PaperReaderApp {
                 .map(|r| r.headword.as_deref().unwrap_or(&r.query))
                 .unwrap_or(&word);
             ui.label(RichText::new(head).size(18.0).strong().color(p.strong));
+            speak_button(ui, p, head);
             if let Some(kana) = r
                 .filter(|_| show_kana)
                 .and_then(|r| r.note.as_ref())
@@ -1898,6 +1899,7 @@ fn dict_view(
             let headword = r.headword.as_deref().unwrap_or(&r.query);
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(headword).size(21.0).strong().color(p.strong));
+                speak_button(ui, p, headword);
                 if let Some((kana, source)) = kana {
                     let resp = ui.label(RichText::new(kana).size(15.0).color(p.text));
                     if source == Some(WordSource::Llm) {
@@ -1980,6 +1982,22 @@ fn dict_view(
         }
     }
     retry
+}
+
+/// 発音を再生するボタン（🔊）。ブラウザの音声合成を使うので、対応していなければ出さない。
+fn speak_button(ui: &mut egui::Ui, p: &Palette, word: &str) {
+    if !dom::can_speak() {
+        return;
+    }
+    // スマホでは指で押しやすいよう大きめに
+    let size = if dom::is_mobile() { 19.0 } else { 16.0 };
+    if ui
+        .add(egui::Button::new(RichText::new("🔊").size(size).color(p.accent)).frame(false))
+        .on_hover_text("発音を聞く（端末の音声合成）")
+        .clicked()
+    {
+        dom::speak(word);
+    }
 }
 
 /// 小さな表示用の訳（最初の 3 つを「；」でつなぐ。『』や《》の注記は外す）。

@@ -31,6 +31,37 @@ AI の解説や訳には、誤りが含まれることがあります。
 
 Rust で書いていて、サーバーは axum、解説画面は egui（WebAssembly）です。
 
+### ネットワーク構成
+
+```mermaid
+flowchart LR
+    phone["iPhone などのブラウザ<br>（同じ tailnet 内）"]
+
+    subgraph mac["MacBook Air"]
+        browser["Mac のブラウザ"]
+        ts["tailscale serve<br>（任意）"]
+        server["yomu サーバー（axum）<br>127.0.0.1:8080"]
+        llm["Ollama などの LLM<br>127.0.0.1:11434"]
+        db[("SQLite<br>辞書・キャッシュ・履歴")]
+    end
+
+    arxiv["arXiv<br>arxiv.org<br>export.arxiv.org"]
+    github["GitHub API<br>api.github.com"]
+
+    phone -->|"HTTPS（tailnet 内だけ）"| ts
+    ts -->|HTTP| server
+    browser -->|HTTP| server
+    server -->|"HTTP（Mac の中だけ）"| llm
+    server --> db
+    server -->|"HTTPS: 論文・図の取得、検索"| arxiv
+    server -.->|"HTTPS: 不具合・要望の送信（任意）"| github
+```
+
+- サーバーと LLM は `127.0.0.1` で待ち受けます。ほかの端末からつなぐ場合は `tailscale serve` を使い、インターネットには公開しません
+- LLM は、ほかの端末に直接公開しません。解説の依頼は、必ず yomu サーバーを経由します
+- ブラウザは arXiv に直接アクセスせず、論文と図は yomu サーバーから受け取ります（「原文」や本文中の外部リンクを開く場合を除く）
+- この図は、アプリを使うときの通信です。セットアップ、[自動更新](docs/operations.md#自動更新github-の-main-に入ったら反映する)、[実験モード](docs/webllm.md)の準備では、別に外部からダウンロードします
+
 ## はじめる
 
 必要なもの: Mac、[rustup](https://rustup.rs)、[Homebrew](https://brew.sh)、モデル用の空き容量（約 6GB）

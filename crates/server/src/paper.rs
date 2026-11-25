@@ -91,6 +91,8 @@ pub async fn get_paper(
 
 /// 見た論文として記録し、図をサーバー経由（キャッシュ）に書き換えて返す。
 async fn respond(state: &AppState, mut paper: PaperResponse) -> PaperResponse {
+    // 読み始める前に、解説のプロンプトを LLM に読み込ませておく（LLM が空いていれば）
+    crate::explain::warm_up(state);
     if let Err(e) = crate::db::record_visit(&state.db, &paper).await {
         tracing::warn!(error = %e, "failed to record paper visit");
     }

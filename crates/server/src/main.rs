@@ -50,6 +50,8 @@ pub struct AppState {
     pub llm_stream_http: reqwest::Client,
     /// LLM への同時リクエストを 1 件に制限する
     pub llm_gate: Arc<tokio::sync::Semaphore>,
+    /// 解説のプロンプトを最後に LLM へ読み込ませた時刻（UNIX 秒。explain::warm_up）
+    pub warmed_at: Arc<std::sync::atomic::AtomicI64>,
     /// arXiv API（検索）用（宛先は export.arxiv.org に固定）
     pub search_http: reqwest::Client,
     pub searcher: search::SharedSearcher,
@@ -127,6 +129,7 @@ async fn main() -> Result<()> {
         llm_http,
         llm_stream_http,
         llm_gate: Arc::new(tokio::sync::Semaphore::new(1)),
+        warmed_at: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         search_http,
         searcher: Arc::default(),
         grammar: Arc::new(RwLock::new(Arc::new(grammar_data))),

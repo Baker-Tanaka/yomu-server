@@ -311,6 +311,10 @@ pub struct Shared {
     dict_ai_controller: Option<AbortController>,
     /// 設定: カタカナの読み（AI の推定）を表示する
     pub show_kana: bool,
+    /// 直近に引いた単語のメモ（ブラウザにだけ保存する）
+    pub recent: crate::recent::RecentWords,
+    /// 設定: 直近の単語のメモを表示する
+    pub show_recent: bool,
     pub words: Words,
     /// 単語帳が上限に近い（確かめる画面を出す）
     pub store_warning: Option<WordStoreStats>,
@@ -345,6 +349,8 @@ impl Shared {
         Self {
             show_course: dom::load_bool(SHOW_COURSE_KEY, true),
             show_kana: dom::load_bool(SHOW_KANA_KEY, true),
+            recent: crate::recent::RecentWords::load(),
+            show_recent: dom::load_bool(crate::recent::SHOW_KEY, true),
             words: Words {
                 stale: true,
                 prune_count: 1_000,
@@ -366,6 +372,11 @@ impl Shared {
         dom::save_bool(SHOW_KANA_KEY, on);
     }
 
+    pub fn set_show_recent(&mut self, on: bool) {
+        self.show_recent = on;
+        dom::save_bool(crate::recent::SHOW_KEY, on);
+    }
+
     /// 進行中の AI 訳の問い合わせを中止する。
     fn abort_dict_ai(&mut self) {
         if let Some(c) = self.dict_ai_controller.take() {
@@ -385,6 +396,7 @@ impl Shared {
             }
         }
         self.words.stale = true;
+        self.recent.record(&r);
         self.dict = DictStatus::Loaded(r);
     }
 
@@ -438,6 +450,18 @@ pub fn show_history_entry(this: &SharedRef, ctx: &egui::Context, entry: &History
     };
     this.borrow_mut().tab = Tab::Explain;
     apply_selection(this, ctx, info, entry.has_explanation);
+}
+
+/// 直近の単語のメモから、その語をもう一度引く（本文の選択は外す）。
+pub fn look_up_word(this: &SharedRef, ctx: &egui::Context, word: &str) {
+    dom::clear_selection();
+    let info = SelectionInfo {
+        text: word.to_string(),
+        context: word.to_string(),
+        mode: Mode::Word,
+    };
+    this.borrow_mut().tab = Tab::Explain;
+    apply_selection(this, ctx, info, false);
 }
 
 /// 選択を解除する（本文の選択と右ペインの表示の両方）。

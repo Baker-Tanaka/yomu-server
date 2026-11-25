@@ -13,6 +13,7 @@ use paper_reader_shared::{
 };
 
 use crate::dom;
+use crate::recent::RecentWord;
 use crate::state::{
     self, DictAiPhase, DictStatus, ExplainPhase, FeedbackStage, GrammarOrder, GrammarStatus,
     HealthStatus, HistoryScope, HistoryStatus, PaperStatus, PapersStatus, Shared, SharedRef, Tab,
@@ -177,6 +178,17 @@ impl PaperReaderApp {
             {
                 s.set_show_kana(kana);
             }
+            let mut recent = s.show_recent;
+            if ui
+                .checkbox(&mut recent, "直近の単語のメモを表示する")
+                .on_hover_text("上の 1 行に、最近引いた 10 語と訳を出します（このブラウザにだけ保存）")
+                .changed()
+            {
+                s.set_show_recent(recent);
+            }
+            if !s.recent.is_empty() && ui.button("直近の単語のメモを消す").clicked() {
+                s.recent.clear();
+            }
             drop(s);
             ui.separator();
             if ui.button("💬 不具合・要望を送る…").clicked() {
@@ -314,6 +326,77 @@ impl PaperReaderApp {
         if expand || resp.clicked() {
             self.shared.borrow_mut().tab = Tab::Explain;
             dom::set_sheet(dom::Sheet::Half);
+        }
+    }
+
+    /// 直近に引いた単語のメモ。新しい順に横へ並べ、スワイプ（横スクロール）で前の語を見る。
+    /// タップでその語をもう一度引く。
+    fn recent_strip(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let items: Vec<RecentWord> = {
+            let s = self.shared.borrow();
+            if !s.show_recent || s.recent.is_empty() {
+                return;
+            }
+            s.recent.items().cloned().collect()
+        };
+        let current = {
+            let s = self.shared.borrow();
+            s.selection
+                .as_ref()
+                .filter(|sel| sel.mode == Mode::Word)
+                .map(|sel| sel.text.to_lowercase())
+        };
+        let mut picked = None;
+        egui::ScrollArea::horizontal()
+            .id_salt("recent-words")
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.label(RichText::new("最近").size(11.5).color(p.weak))
+                        .on_hover_text(
+                            "最近引いた単語（このブラウザにだけ保存。⚙ で非表示・消去）",
+                        );
+                    for item in &items {
+                        let active = current.as_deref() == Some(item.word.to_lowercase().as_str());
+                        let mut job = egui::text::LayoutJob::default();
+                        job.append(
+                            &item.word,
+                            0.0,
+                            egui::TextFormat::simple(
+                                theme::body_font(13.0),
+                                if active { p.accent } else { p.strong },
+                            ),
+                        );
+                        job.append(
+                            &clip_chars(&item.meaning, 14),
+                            6.0,
+                            egui::TextFormat::simple(theme::body_font(12.0), p.weak),
+                        );
+                        let resp = egui::Frame::new()
+                            .fill(if active { p.accent_soft } else { p.card_stroke })
+                            .corner_radius(egui::CornerRadius::same(8))
+                            .inner_margin(Margin::symmetric(8, 3))
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::Label::new(job)
+                                        .wrap_mode(egui::TextWrapMode::Extend)
+                                        .selectable(false),
+                                );
+                            })
+                            .response
+                            .interact(egui::Sense::click())
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text(format!("{}  {}", item.word, item.meaning));
+                        if resp.clicked() {
+                            picked = Some(item.word.clone());
+                        }
+                    }
+                });
+            });
+        ui.add_space(6.0);
+        if let Some(word) = picked {
+            state::look_up_word(&self.shared, ui.ctx(), &word);
         }
     }
 
@@ -1113,6 +1196,8 @@ impl eframe::App for PaperReaderApp {
                             .is_some_and(|sel| sel.mode == Mode::Word),
                     )
                 };
+                // 直近に引いた単語のメモ（1 行。横にスワイプで前の語）
+                self.recent_strip(ui, &p);
                 // スマホでシートを下げているときに単語を選んだら、見出しの代わりに小さく和訳を出す
                 if mobile && word_selected && dom::sheet() == dom::Sheet::Peek {
                     self.word_strip(ui, &p);
@@ -2002,7 +2087,7 @@ fn compact_meanings(r: &DictResponse) -> Option<String> {
 }
 
 /// EJDict の注記（《...》と『』）を外す。
-fn strip_dict_notes(m: &str) -> String {
+pub(crate) fn strip_dict_notes(m: &str) -> String {
     let mut out = String::new();
     let mut depth: u32 = 0;
     for c in m.chars() {
@@ -2077,6 +2162,17 @@ fn split_emphasis(s: &str) -> Vec<(&str, bool)> {
         out.push((rest, false));
     }
     out
+}
+
+/// 文字数で切り詰める（はみ出したら「…」）。
+fn clip_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max).collect();
+        out.push('…');
+        out
+    }
 }
 
 /// egui の配色を切り替える（System なら OS の設定に従う）。

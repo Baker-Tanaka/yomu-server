@@ -7,6 +7,8 @@ mod app;
 #[cfg(target_arch = "wasm32")]
 mod dom;
 #[cfg(target_arch = "wasm32")]
+mod recent;
+#[cfg(target_arch = "wasm32")]
 mod state;
 #[cfg(target_arch = "wasm32")]
 mod theme;

@@ -858,3 +858,32 @@ pub fn save_bool(key: &str, value: bool) {
         let _ = storage.set_item(key, if value { "true" } else { "false" });
     }
 }
+
+/// 発音の読み上げ（Web Speech API）に対応しているか。
+pub fn can_speak() -> bool {
+    web_sys::window().is_some_and(|w| w.speech_synthesis().is_ok())
+}
+
+/// 英単語・英文をブラウザの音声合成で読み上げる。前の読み上げは止める。
+///
+/// iOS Safari ではユーザー操作の中で呼ぶ必要がある（eframe は pointerup の中で
+/// アプリの処理を走らせるので、ボタンの clicked() から呼べばよい）。
+/// 端末内の音声を使うのでネットワークを待たずにすぐ鳴る。
+pub fn speak(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() {
+        return false;
+    }
+    let Some(synth) = web_sys::window().and_then(|w| w.speech_synthesis().ok()) else {
+        return false;
+    };
+    let Ok(utterance) = web_sys::SpeechSynthesisUtterance::new_with_text(text) else {
+        return false;
+    };
+    utterance.set_lang("en-US");
+    // 単語を聞き取りやすいよう少しゆっくり
+    utterance.set_rate(0.9);
+    synth.cancel();
+    synth.speak(&utterance);
+    true
+}

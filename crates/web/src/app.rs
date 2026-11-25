@@ -35,6 +35,8 @@ pub struct PaperReaderApp {
     feedback_content_h: f32,
     /// スマホ用レイアウトか（画面幅で決まる。変わったら文字の大きさなどを切り替える）
     mobile: Option<bool>,
+    /// 次の描画で入力欄にフォーカスを移す（「別の論文を開く」を押したとき）
+    focus_input: bool,
 }
 
 impl PaperReaderApp {
@@ -77,6 +79,7 @@ impl PaperReaderApp {
             feedback_resize_frames: 0,
             feedback_content_h: 300.0,
             mobile: None,
+            focus_input: false,
         }
     }
 
@@ -539,6 +542,9 @@ impl PaperReaderApp {
                     .hint_text("arXiv の URL・ID、またはキーワードで検索")
                     .margin(Margin::symmetric(10, 8)),
             );
+            if std::mem::take(&mut self.focus_input) {
+                edit.request_focus();
+            }
             if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 submit = true;
             }
@@ -592,6 +598,15 @@ impl PaperReaderApp {
                         theme::chip(ui, &format!("arXiv:{id}"), p.accent, p.accent_soft);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.hyperlink_to(RichText::new("原文 ↗").size(12.5), source_url);
+                            if theme::subtle_button(ui, "別の論文を開く")
+                                .on_hover_text(
+                                    "「検索」タブに切り替えて、URL・ID・キーワードの欄を出します",
+                                )
+                                .clicked()
+                            {
+                                self.shared.borrow_mut().tab = Tab::Search;
+                                self.focus_input = true;
+                            }
                         });
                     });
                     ui.add_space(2.0);
@@ -1366,8 +1381,8 @@ impl eframe::App for PaperReaderApp {
                 }
                 self.header(ui);
                 ui.add_space(if mobile { 8.0 } else { 12.0 });
-                // スマホでは論文を読んでいる間は入力欄を隠す（「検索」タブで出す）
-                if !mobile || !has_paper || tab == Tab::Search {
+                // 論文を読んでいる間は入力欄を隠す（読むモード）。「検索」タブで出す（検索モード）
+                if show_input_bar(has_paper, tab) {
                     self.input_bar(ui);
                 }
                 self.paper_card(ui);
@@ -1837,6 +1852,12 @@ fn feedback_row(ui: &mut egui::Ui, p: &Palette, item: &FeedbackItem, configured:
         }
     });
     retry
+}
+
+/// 論文の URL・検索の入力欄を出すか。論文を開く前と「検索」タブでだけ出し、
+/// 論文を読んでいる間（ほかのタブ）は隠して本文と解説に場所を使う。
+fn show_input_bar(has_paper: bool, tab: Tab) -> bool {
+    !has_paper || tab == Tab::Search
 }
 
 fn tab_salt(tab: Tab) -> &'static str {

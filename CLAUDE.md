@@ -53,7 +53,7 @@ GET  /api/words                 … 単語帳の一覧（検索回数・読み�
 POST /api/words                 … 単語帳に自分で登録・編集する（自分で登録した語は自動では消さない）
 POST /api/words/delete          … 選んだ語を単語帳から消す
 POST /api/words/prune           … 検索回数の少ない語から消す（上限 WORD_STORE_MAX を超えたときも自動で同じ順に消す）
-POST /api/explain               … body: { mode: "word" | "sentence", text, context }
+POST /api/explain               … body: { mode: "word" | "sentence", text, context, slash? }（slash ならスラッシュリーディングも付ける）
                                    レスポンスは text/event-stream（SSE 形式）で解説を逐次送る
                                    イベント: queued / started / token / tags / done / error
                                    （mode=sentence は token で和訳を先に流し、tags（文法タグ）を送ってから残りの解説の token を流す）

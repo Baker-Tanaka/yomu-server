@@ -47,19 +47,30 @@ pub async fn get_history(
         let Some(mode) = parse_mode(&mode) else {
             continue;
         };
-        // 解説キャッシュと同じキーで、今のモデルの解説があるかを調べる
-        let key = explain::key_for(
-            &state,
-            &ExplainRequest {
-                mode,
-                text: text.clone(),
-                context: context.clone(),
-                regenerate: false,
-            },
-        );
-        let has_explanation = db::explanation_exists(&state.db, &key)
-            .await
-            .map_err(|e| AppError::Internal(e.into()))?;
+        // 解説キャッシュと同じキーで、今のモデルの解説があるかを調べる（スラッシュリーディングの有無は問わない）
+        let mut has_explanation = false;
+        for slash in [false, true] {
+            if slash && mode != Mode::Sentence {
+                break;
+            }
+            let key = explain::key_for(
+                &state,
+                &ExplainRequest {
+                    mode,
+                    text: text.clone(),
+                    context: context.clone(),
+                    regenerate: false,
+                    slash,
+                },
+            );
+            if db::explanation_exists(&state.db, &key)
+                .await
+                .map_err(|e| AppError::Internal(e.into()))?
+            {
+                has_explanation = true;
+                break;
+            }
+        }
         entries.push(HistoryEntry {
             id,
             paper_id,

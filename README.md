@@ -105,6 +105,10 @@ trunk serve
 
 ### 使い方のヒント
 
+- **スラッシュリーディング**: 英文の解説の和訳の次に、意味のまとまりごとに「 / 」で区切った英文と、語順どおりの直訳
+  （「- **チャンク**：直訳」）を出します。区切る位置は、長い主部の後、前置詞句・to 不定詞・分詞・関係詞節・接続詞の前などを目安に LLM が選びます。
+  解説カードの下か ⚙ の「スラッシュリーディング」で表示・非表示を切り替えられます（隠すときは生成し直さずに節を隠すだけ。
+  付いていない解説を表示しているときは「スラッシュリーディングを付けて解説し直す」が出ます）
 - **文法項目と講座の案内**: 英文を解説すると、解説の前に「どの文法項目が使われているか」がチップで並びます
   - 「📺 関係詞 › （レッスン名）」… 記入したレッスンに対応する項目
   - 「📺 関係詞（パーフェクト英文法）」… レッスン未記入のカテゴリ（カテゴリ単位の案内）
@@ -452,7 +456,9 @@ tailscale serve status
 - `POST /api/words` body: `{ word, kana, meanings }` → 保存した 1 語（自分で登録。空の項目は変えない。meanings は改行・「、」区切り）
 - `POST /api/words/delete` body: `{ words: [string] }` → `{ deleted, store }`（1,000 語まで）
 - `POST /api/words/prune` body: `{ count }` → `{ deleted, store }`（検索回数の少ない順・同じなら古い順に消す。自分で登録した語は残す）
-- `POST /api/explain` body: `{ mode: "word" | "sentence", text, context, regenerate? }` → `text/event-stream`
+- `POST /api/explain` body: `{ mode: "word" | "sentence", text, context, regenerate?, slash? }` → `text/event-stream`
+  - `slash: true` なら英文の解説の先頭（和訳の次）に「## スラッシュリーディング」を入れる。キャッシュのキーには有無を含めるが、
+    片方しか無ければそれを返す（web は設定に合わせて節を隠すか、「付けて解説し直す」を出す）
   - `event: queued`（ほかの解説の生成待ち）→ `event: started` → `event: token`（data は追記する文字列）… → `event: done`
   - 英文は `token`（「## 和訳」と和訳）… → `event: tags` → `token`（文構造・文法ポイント・語句）… の順。キャッシュのヒット時は `cached` → `tags` → `token`（全文）
   - `tags` の data: `[{ tag_id, name, category, span, in_scope, lessons: [{ id, category, title }], hint }]`

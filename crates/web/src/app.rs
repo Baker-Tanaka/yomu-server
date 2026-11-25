@@ -9,8 +9,8 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use paper_reader_shared::{
     DictEntry, DictResponse, ExplainTag, FeedbackItem, FeedbackLabel, FeedbackListResponse,
     GrammarMapResponse, GrammarTagInfo, HistoryEntry, MAX_FEEDBACK_BODY_CHARS,
-    MAX_FEEDBACK_TITLE_CHARS, Mode, SearchItem, SearchSort, WordSource, paper_url_from_input,
-    pos_groups, pos_summary,
+    MAX_FEEDBACK_TITLE_CHARS, Mode, SLASH_READING_HEADING, SearchItem, SearchSort, WordSource,
+    paper_url_from_input, plain_arrows, pos_groups, pos_summary, without_section,
 };
 
 use crate::dom;
@@ -169,6 +169,14 @@ impl PaperReaderApp {
             let mut auto = s.auto_explain;
             if ui.checkbox(&mut auto, "選択したら自動で解説").changed() {
                 s.auto_explain = auto;
+            }
+            let mut slash = s.show_slash;
+            if ui
+                .checkbox(&mut slash, "スラッシュリーディングを表示する")
+                .on_hover_text("英文の解説に、意味のまとまりごとの区切り（/）と語順どおりの直訳を付けます")
+                .changed()
+            {
+                s.set_show_slash(slash);
             }
             let mut kana = s.show_kana;
             if ui
@@ -678,7 +686,7 @@ impl PaperReaderApp {
 
     fn explain_card(&mut self, ui: &mut egui::Ui, p: &Palette) {
         let ctx = ui.ctx().clone();
-        let (phase, running, from_cache, markdown, is_sentence) = {
+        let (phase, running, from_cache, markdown, is_sentence, show_slash) = {
             let s = self.shared.borrow();
             (
                 s.explain.phase.clone(),
@@ -689,8 +697,21 @@ impl PaperReaderApp {
                     .target
                     .as_ref()
                     .is_some_and(|(m, _)| *m == Mode::Sentence),
+                s.show_slash,
             )
         };
+        // スラッシュリーディングを表示しない設定なら、その節を隠す（生成し直さない）
+        let markdown = if show_slash {
+            markdown
+        } else {
+            without_section(&markdown, SLASH_READING_HEADING).into_owned()
+        };
+        let markdown = plain_arrows(&markdown).into_owned();
+        // 表示する設定なのに付いていない解説（設定を変える前の解説）なら、付けて作り直せるようにする
+        let missing_slash = show_slash
+            && is_sentence
+            && phase == ExplainPhase::Done
+            && !markdown.contains(SLASH_READING_HEADING);
 
         theme::card(ui, |ui| {
             ui.horizontal(|ui| {
@@ -775,8 +796,32 @@ impl PaperReaderApp {
                 }
             }
 
+            if missing_slash {
+                ui.add_space(4.0);
+                if theme::subtle_button(ui, "／ スラッシュリーディングを付けて解説し直す")
+                    .on_hover_text("この解説はスラッシュリーディングなしで作られています")
+                    .clicked()
+                {
+                    state::start_explain(&self.shared, &ctx, true);
+                }
+            }
+
             ui.add_space(4.0);
             ui.separator();
+            let mut slash = show_slash;
+            if is_sentence
+                && ui
+                    .checkbox(
+                        &mut slash,
+                        RichText::new("スラッシュリーディング").size(13.0),
+                    )
+                    .on_hover_text(
+                        "意味のまとまりごとの区切り（/）と、語順どおりの直訳を表示します",
+                    )
+                    .changed()
+            {
+                self.shared.borrow_mut().set_show_slash(slash);
+            }
             let mut auto = self.shared.borrow().auto_explain;
             if ui
                 .checkbox(&mut auto, RichText::new("選択したら自動で解説").size(13.0))

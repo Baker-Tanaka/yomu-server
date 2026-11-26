@@ -1004,6 +1004,19 @@ pub fn submit_input(this: &SharedRef, ctx: &egui::Context, input: &str) {
     }
 }
 
+/// タブを切り替える。切り替えた先の内容は読み直す。
+pub fn show_tab(this: &SharedRef, tab: Tab) {
+    let mut s = this.borrow_mut();
+    s.tab = tab;
+    match tab {
+        Tab::Words => s.words.stale = true,
+        Tab::History => s.history_stale = true,
+        Tab::Grammar => s.grammar_stale = true,
+        // ほかの端末で積んだ分も出るように読み直す
+        Tab::Search | Tab::Explain => s.read_later.stale = true,
+    }
+}
+
 /// 引用文献のカードのボタン（論文を開く・題名で探す）。
 pub fn on_cite_action(this: &SharedRef, ctx: &egui::Context, action: crate::cite_peek::CiteAction) {
     use crate::cite_peek::CiteAction;

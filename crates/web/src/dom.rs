@@ -109,6 +109,7 @@ pub fn set_paper_html(html: &str, title: &str) {
         paper.set_inner_html(html);
         paper.set_scroll_top(0);
     }
+    crate::toc::refresh();
     if let Some(doc) = document() {
         doc.set_title(&format!("{title} - 論文リーダー"));
     }
@@ -835,6 +836,13 @@ fn wrap_text(doc: &Document, node: &Text, start: u32, end: u32) -> Option<Elemen
     parent.replace_child(&mark, &target).ok()?;
     mark.append_child(&target).ok()?;
     Some(mark)
+}
+
+/// 要素の中の表示される文字（数式の注釈などは除く）。
+pub fn visible_text(el: &Element) -> String {
+    let mut nodes = Vec::new();
+    collect_text_nodes(el, &mut nodes);
+    nodes.iter().map(|n| n.data()).collect()
 }
 
 /// 要素の中のテキストノードを文書順に集める（数式の注釈など、表示されないものは除く）。

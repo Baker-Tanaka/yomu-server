@@ -106,6 +106,7 @@ html, body {
 
 /* 左（スマホでは上）の列: 直近の単語の 1 行と、本文 */
 #paper-column {
+  position: relative;
   flex: 0 0 var(--paper-size, 60%);
   min-width: 0;
   display: flex;
@@ -521,7 +522,7 @@ body.resizing #paper, body.resizing #explain-pane {
   #paper {
     padding: calc(env(safe-area-inset-top) + 14px)
       calc(env(safe-area-inset-right) + 18px)
-      28px
+      60px
       calc(env(safe-area-inset-left) + 18px);
     font-size: 17px;
     line-height: 1.72;
@@ -602,6 +603,80 @@ body.resizing #paper, body.resizing #explain-pane {
   .paper-placeholder .mobile-only { display: none; }
 }
 
+/* 読んだ割合（本文の下端の細い線）と目次。部品は toc.rs が作る */
+#reading-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  z-index: 4;
+  pointer-events: none;
+  background: linear-gradient(to right, var(--accent) var(--progress, 0%), transparent var(--progress, 0%));
+}
+#toc-button, #toc-panel {
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+#toc-button {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 4;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--paper-fg);
+  background: var(--abstract-bg);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 6px 12px;
+  box-shadow: 0 3px 12px var(--shadow);
+  opacity: 0.92;
+  cursor: pointer;
+}
+#toc-panel {
+  position: absolute;
+  right: 12px;
+  bottom: 52px;
+  z-index: 8;
+  width: min(22rem, calc(100% - 24px));
+  max-height: calc(100% - 70px - env(safe-area-inset-top));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+  padding: 6px;
+  background: var(--paper-bg);
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  box-shadow: 0 10px 32px var(--shadow);
+  animation: pop-in 0.14s ease-out;
+}
+#toc-button[hidden], #toc-panel[hidden], #reading-progress[hidden] { display: none; }
+#toc-panel button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--paper-fg);
+  background: transparent;
+  border: none;
+  border-left: 3px solid transparent;
+  border-radius: 6px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+#toc-panel button.toc-sub { padding-left: 24px; font-size: 13px; color: var(--muted); }
+#toc-panel button:hover, #toc-panel button:focus-visible { background: var(--abstract-bg); }
+#toc-panel button[aria-current] {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+  color: var(--heading);
+  font-weight: 600;
+}
+/* 見出しへ移ったとき、上に少し余白を残す */
+#paper h2, #paper h3, #paper h6 { scroll-margin-top: 0.8em; }
+
 /* 選択した語・文のそばの操作メニュー（位置は selection_menu.rs が指定する） */
 #selection-menu {
   position: fixed;
@@ -639,7 +714,7 @@ body.resizing #paper, body.resizing #explain-pane {
   to { opacity: 1; transform: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  #selection-menu { animation: none; }
+  #selection-menu, #toc-panel { animation: none; }
 }
 
 /* 引用番号をタップしたときのカード（位置と幅は cite_peek.rs が指定する） */

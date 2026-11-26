@@ -108,6 +108,9 @@ impl PaperReaderApp {
         }) {
             log::error!("直近の単語のメモを使えません: {e}");
         }
+        if let Err(e) = crate::toc::init() {
+            log::error!("目次を使えません: {e}");
+        }
         if let Err(e) = dom::init_splitter() {
             log::error!("ペイン境界のドラッグを有効にできません: {e}");
         }

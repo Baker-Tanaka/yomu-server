@@ -468,17 +468,16 @@ pub fn on_select(this: &SharedRef, ctx: &egui::Context, info: SelectionInfo) {
         s.tab = Tab::Explain;
         s.auto_explain
     };
-    if info.mode == Mode::Word && !auto {
-        // スマホでは単語はシートを小さくしたまま、上に和訳だけを出す（本文を隠さない）。
-        // 全体まで上げているときはそのまま
-        if dom::is_mobile() && dom::sheet() == dom::Sheet::Half {
-            dom::set_sheet(dom::Sheet::Peek);
-        }
-    } else {
-        // 英文は解説シートを半分まで上げて結果を見せる
-        dom::raise_sheet(dom::Sheet::Half);
+    // スマホでは選んでいる間はシートを上げない（つまみで範囲を調整している本文が隠れるため）。
+    // 開いていたら「少し」に下げ、上の小さな表示（単語は和訳、英文は「解説する」）にする
+    if dom::is_mobile() && dom::sheet() > dom::Sheet::Peek {
+        dom::set_sheet(dom::Sheet::Peek);
     }
-    apply_selection(this, ctx, info, auto);
+    apply_selection(this, ctx, info, false);
+    if auto {
+        // 自動の解説も、シートは下げたまま始める（「見る」で開く）
+        begin_explain(this, ctx, false);
+    }
 }
 
 /// 履歴の項目を再表示する。解説がキャッシュにあればそれも表示する（LLM は呼ばれない）。
@@ -837,6 +836,11 @@ fn update_shown_note(s: &mut Shared, word: &str, note: Option<WordNote>) {
 pub fn start_explain(this: &SharedRef, ctx: &egui::Context, regenerate: bool) {
     // スマホでは解説を読みやすいようシートを全体まで上げる
     dom::raise_sheet(dom::Sheet::Full);
+    begin_explain(this, ctx, regenerate);
+}
+
+/// 解説を始める（シートの高さは変えない）。
+fn begin_explain(this: &SharedRef, ctx: &egui::Context, regenerate: bool) {
     let (req, seq, signal) = {
         let mut s = this.borrow_mut();
         let Some(sel) = s.selection.clone() else {

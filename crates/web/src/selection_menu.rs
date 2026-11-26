@@ -19,6 +19,8 @@ const GAP_BELOW_TOUCH_PX: f64 = 28.0;
 const EDGE_PX: f64 = 8.0;
 /// 選択が消えてから閉じるまでの時間。スマホではボタンを押すと先に選択が消えるので、押せるように待つ
 const HIDE_DELAY_MS: i32 = 350;
+/// スマホで選択の範囲を調整している間はメニューを隠し、この時間変わらなければ出す
+const SETTLE_DELAY_MS: i32 = 600;
 /// 「コピーしました」を見せてから閉じるまでの時間
 const COPIED_MS: i32 = 900;
 
@@ -34,6 +36,8 @@ thread_local! {
     static TEXT: RefCell<String> = const { RefCell::new(String::new()) };
     /// 閉じる予定のタイマー
     static HIDE_TIMER: Cell<Option<i32>> = const { Cell::new(None) };
+    /// 範囲の調整が落ち着いたら出し直すタイマー（Some の間は隠しておく）
+    static SETTLE_TIMER: Cell<Option<i32>> = const { Cell::new(None) };
 }
 
 fn document() -> Option<Document> {
@@ -48,6 +52,7 @@ fn menu() -> Option<HtmlElement> {
 
 pub fn hide() {
     cancel_hide();
+    cancel_settle();
     if let Some(menu) = menu() {
         let _ = menu.set_attribute("hidden", "");
     }
@@ -75,6 +80,34 @@ fn hide_after(ms: i32) {
     }
 }
 
+fn cancel_settle() {
+    if let (Some(handle), Some(window)) = (SETTLE_TIMER.take(), web_sys::window()) {
+        window.clear_timeout_with_handle(handle);
+    }
+}
+
+/// 選択が変わっている間は隠し、落ち着いてから出し直す。
+/// つまみを動かして範囲を調整するとき、つまみの近くにメニューがあると邪魔になるため。
+fn settle() {
+    cancel_settle();
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let callback = Closure::once_into_js(|| {
+        SETTLE_TIMER.set(None);
+        place();
+    });
+    if let Ok(handle) = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+        callback.unchecked_ref(),
+        SETTLE_DELAY_MS,
+    ) {
+        SETTLE_TIMER.set(Some(handle));
+        if let Some(menu) = menu() {
+            let _ = menu.style().set_property("visibility", "hidden");
+        }
+    }
+}
+
 /// 選択が確定した語・文のそばに出す。
 pub fn show(text: &str) {
     cancel_hide();
@@ -96,7 +129,9 @@ fn place() {
     let Some((selection, area)) = dom::selection_rect() else {
         return;
     };
-    let visible = selection.bottom() > area.top() && selection.top() < area.bottom();
+    let visible = SETTLE_TIMER.get().is_none()
+        && selection.bottom() > area.top()
+        && selection.top() < area.bottom();
     let _ = style.set_property("visibility", if visible { "visible" } else { "hidden" });
 
     let (width, height) = (
@@ -236,6 +271,9 @@ pub fn init(on_action: impl Fn(MenuAction) + 'static) -> Result<(), String> {
         if dom::has_paper_selection() {
             // 範囲を調整している間は追いかける
             cancel_hide();
+            if dom::is_mobile() {
+                settle();
+            }
             place();
         } else {
             hide_after(HIDE_DELAY_MS);

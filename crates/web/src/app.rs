@@ -598,6 +598,64 @@ impl PaperReaderApp {
         }
     }
 
+    /// スマホでシートを下げたまま英文を選んだときの小さな表示。
+    /// 範囲を調整している本文を隠さず、解説を始める・開くボタンだけを出す。
+    fn sentence_strip(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let (text, phase) = {
+            let s = self.shared.borrow();
+            let Some(sel) = &s.selection else {
+                return;
+            };
+            (sel.text.clone(), s.explain.phase.clone())
+        };
+        let status = match &phase {
+            ExplainPhase::Idle => "英文を選択中",
+            ExplainPhase::Done => "解説ができました",
+            ExplainPhase::Error(_) => "解説できませんでした",
+            _ => "解説を生成中…",
+        };
+        let (mut explain, mut open) = (false, false);
+        egui::Sides::new().shrink_left().truncate().show(
+            ui,
+            |ui| {
+                theme::chip(ui, "英文", p.sentence, p.sentence_soft);
+                if phase.is_running() {
+                    ui.spinner();
+                }
+                ui.label(RichText::new(status).size(13.5).color(p.weak));
+            },
+            |ui| {
+                if phase == ExplainPhase::Idle {
+                    explain = theme::primary_button(ui, "解説する", true).clicked();
+                    open = theme::subtle_button(ui, "開く").clicked();
+                } else {
+                    open = theme::primary_button(ui, "見る", true).clicked();
+                }
+            },
+        );
+        // 選べている範囲が分かるように、終わりの方を出す
+        let resp = ui.add(
+            egui::Label::new(
+                RichText::new(selection_ends(&text))
+                    .size(14.5)
+                    .color(p.text),
+            )
+            .truncate()
+            .sense(egui::Sense::click()),
+        );
+        if explain {
+            self.shared.borrow_mut().tab = Tab::Explain;
+            state::start_explain(&self.shared, ui.ctx(), false);
+        } else if open || resp.clicked() {
+            self.shared.borrow_mut().tab = Tab::Explain;
+            dom::set_sheet(if phase == ExplainPhase::Idle {
+                dom::Sheet::Half
+            } else {
+                dom::Sheet::Full
+            });
+        }
+    }
+
     /// 直近に引いた単語のメモを、本文の上の 1 行に反映する。
     fn sync_recent_bar(&self) {
         let s = self.shared.borrow();
@@ -1992,20 +2050,25 @@ impl eframe::App for PaperReaderApp {
                 Margin::symmetric(16, 14)
             }))
             .show(ui, |ui| {
-                let (tab, has_paper, word_selected) = {
+                let (tab, has_paper, selected) = {
                     let s = self.shared.borrow();
                     (
                         s.tab,
                         s.paper_ref().is_some(),
-                        s.selection
-                            .as_ref()
-                            .is_some_and(|sel| sel.mode == Mode::Word),
+                        s.selection.as_ref().map(|sel| sel.mode),
                     )
                 };
-                // スマホでシートを下げているときに単語を選んだら、見出しの代わりに小さく和訳を出す。
+                // スマホでシートを下げているときに選んだら、見出しの代わりに小さな表示を出す
+                // （単語は和訳、英文は「解説する」）。
                 // ほかは何も出さない（高さが足りず、下の部品が半分だけ見えるため）
-                if mobile && word_selected && dom::sheet() == dom::Sheet::Peek {
-                    self.word_strip(ui, &p);
+                if mobile
+                    && dom::sheet() == dom::Sheet::Peek
+                    && let Some(mode) = selected
+                {
+                    match mode {
+                        Mode::Word => self.word_strip(ui, &p),
+                        Mode::Sentence => self.sentence_strip(ui, &p),
+                    }
                     return;
                 }
                 if mobile {
@@ -2646,6 +2709,21 @@ fn question_bubble(ui: &mut egui::Ui, p: &Palette, text: &str) -> egui::Response
             ui.label(RichText::new(text).size(14.5).color(p.strong));
         })
         .response
+}
+
+/// 長い選択は、最初と最後の数語だけにする（どこからどこまで選べたかが分かるように）。
+fn selection_ends(text: &str) -> String {
+    const HEAD: usize = 2;
+    const TAIL: usize = 3;
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() <= HEAD + TAIL + 1 {
+        return text.to_string();
+    }
+    format!(
+        "{} … {}",
+        words[..HEAD].join(" "),
+        words[words.len() - TAIL..].join(" ")
+    )
 }
 
 /// 選択を含む段落（開くと読める）。

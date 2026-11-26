@@ -2446,7 +2446,6 @@ fn empty_explain(ui: &mut egui::Ui, p: &Palette, has_paper: bool, mobile: bool) 
     });
 }
 
-/// 選択を含む段落（開くと読める）。
 /// 長い選択は、最初と最後の数語だけにする（どこからどこまで選べたかが分かるように）。
 fn selection_ends(text: &str) -> String {
     const HEAD: usize = 2;
@@ -2462,6 +2461,7 @@ fn selection_ends(text: &str) -> String {
     )
 }
 
+/// 選択を含む段落（開くと読める）。
 fn context_view(ui: &mut egui::Ui, p: &Palette, sel: &dom::SelectionInfo) {
     if sel.context == sel.text {
         return;

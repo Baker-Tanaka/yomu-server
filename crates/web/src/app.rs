@@ -2614,7 +2614,6 @@ fn empty_explain(ui: &mut egui::Ui, p: &Palette, has_paper: bool, mobile: bool) 
     });
 }
 
-/// 選択を含む段落（開くと読める）。
 /// チャットの自分の質問。
 fn question_bubble(ui: &mut egui::Ui, p: &Palette, text: &str) -> egui::Response {
     egui::Frame::new()
@@ -2628,6 +2627,7 @@ fn question_bubble(ui: &mut egui::Ui, p: &Palette, text: &str) -> egui::Response
         .response
 }
 
+/// 選択を含む段落（開くと読める）。
 fn context_view(ui: &mut egui::Ui, p: &Palette, sel: &dom::SelectionInfo) {
     if sel.context == sel.text {
         return;

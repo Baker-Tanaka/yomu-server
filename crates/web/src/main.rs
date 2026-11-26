@@ -7,6 +7,10 @@ mod app;
 #[cfg(target_arch = "wasm32")]
 mod cite_peek;
 #[cfg(target_arch = "wasm32")]
+mod command_palette;
+#[cfg(target_arch = "wasm32")]
+mod commands;
+#[cfg(target_arch = "wasm32")]
 mod dom;
 #[cfg(target_arch = "wasm32")]
 mod local_llm;
@@ -17,9 +21,13 @@ mod recent_bar;
 #[cfg(target_arch = "wasm32")]
 mod search_input;
 #[cfg(target_arch = "wasm32")]
+mod selection_menu;
+#[cfg(target_arch = "wasm32")]
 mod state;
 #[cfg(target_arch = "wasm32")]
 mod theme;
+#[cfg(target_arch = "wasm32")]
+mod toc;
 #[cfg(target_arch = "wasm32")]
 mod words_view;
 

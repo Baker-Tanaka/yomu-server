@@ -64,8 +64,31 @@ thread_local! {
 /// 文法項目のハイライトに使う要素のクラス
 const HIGHLIGHT_CLASS: &str = "grammar-hl";
 
+/// 本文（#paper）の中に、空でない選択があるか。
+pub fn has_paper_selection() -> bool {
+    paper_selection_range().is_some()
+}
+
+/// 本文の選択の画面上の位置と、本文の表示範囲。
+pub fn selection_rect() -> Option<(DomRect, DomRect)> {
+    let range = paper_selection_range()?;
+    let area = paper_element()?.get_bounding_client_rect();
+    Some((range.get_bounding_client_rect(), area))
+}
+
+fn paper_selection_range() -> Option<Range> {
+    let selection = web_sys::window()?.get_selection().ok()??;
+    if selection.is_collapsed() || selection.range_count() == 0 {
+        return None;
+    }
+    let range = selection.get_range_at(0).ok()?;
+    let common = range.common_ancestor_container().ok()?;
+    paper_element()?.contains(Some(&common)).then_some(range)
+}
+
 /// ブラウザの選択を解除する。同じ箇所をもう一度選んだときも通知されるようにする。
 pub fn clear_selection() {
+    crate::selection_menu::hide();
     LAST_SELECTION.with(|l| *l.borrow_mut() = None);
     LAST_RANGE.with(|r| *r.borrow_mut() = None);
     if let Some(Ok(Some(sel))) = web_sys::window().map(|w| w.get_selection()) {
@@ -75,6 +98,7 @@ pub fn clear_selection() {
 
 /// 無害化済みの論文 HTML を #paper に入れる。
 pub fn set_paper_html(html: &str, title: &str) {
+    crate::selection_menu::hide();
     crate::cite_peek::close();
     LAST_SELECTION.with(|l| *l.borrow_mut() = None);
     CONTEXT_ELEMENT.with(|c| *c.borrow_mut() = None);
@@ -85,6 +109,7 @@ pub fn set_paper_html(html: &str, title: &str) {
         paper.set_inner_html(html);
         paper.set_scroll_top(0);
     }
+    crate::toc::refresh();
     if let Some(doc) = document() {
         doc.set_title(&format!("{title} - 論文リーダー"));
     }
@@ -811,6 +836,13 @@ fn wrap_text(doc: &Document, node: &Text, start: u32, end: u32) -> Option<Elemen
     parent.replace_child(&mark, &target).ok()?;
     mark.append_child(&target).ok()?;
     Some(mark)
+}
+
+/// 要素の中の表示される文字（数式の注釈などは除く）。
+pub fn visible_text(el: &Element) -> String {
+    let mut nodes = Vec::new();
+    collect_text_nodes(el, &mut nodes);
+    nodes.iter().map(|n| n.data()).collect()
 }
 
 /// 要素の中のテキストノードを文書順に集める（数式の注釈など、表示されないものは除く）。

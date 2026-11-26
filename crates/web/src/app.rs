@@ -26,6 +26,11 @@ use crate::theme::{self, Palette};
 const NARROW_TABS_WIDTH: f32 = 340.0;
 /// ヘッダーの副題（for arXiv）を出すのに要る、題名の右の残り幅
 const SUBTITLE_MIN_WIDTH: f32 = 56.0;
+/// スマホ用の下端のタブの高さと、文字を小さくするタブの幅
+const BOTTOM_TAB_HEIGHT: f32 = 38.0;
+const NARROW_BOTTOM_TAB_WIDTH: f32 = 66.0;
+/// スマホで選択中の英文を出す行数
+const SELECTION_PREVIEW_ROWS: usize = 3;
 /// 検索欄の案内文
 const SEARCH_HINT: &str = "arXiv の URL・ID、またはキーワードで検索";
 /// 論文を開く前の画面に出す「後で読む」の件数
@@ -48,6 +53,8 @@ pub struct PaperReaderApp {
     focus_input: bool,
     /// この描画で、検索欄（HTML の入力欄）を重ねたか。重ねなければ隠す
     search_input_placed: bool,
+    /// コマンドパレットを開く（⚙ のメニューから）
+    open_palette: Option<crate::command_palette::Opener>,
 }
 
 impl PaperReaderApp {
@@ -60,9 +67,26 @@ impl PaperReaderApp {
         let ctx = cc.egui_ctx.clone();
         let shared_for_dom = shared.clone();
         if let Err(e) = dom::watch_selection(move |info| {
+            let text = info.text.clone();
             state::on_select(&shared_for_dom, &ctx, info);
+            // シートの高さが変わったあとの本文の範囲に合わせて出す
+            crate::selection_menu::show(&text);
         }) {
             log::error!("選択の監視を開始できません: {e}");
+        }
+        let ctx = cc.egui_ctx.clone();
+        let shared_for_menu = shared.clone();
+        if let Err(e) = crate::selection_menu::init(move |action| {
+            use crate::selection_menu::MenuAction;
+            match action {
+                MenuAction::Explain => {
+                    state::on_shortcut(&shared_for_menu, &ctx, dom::Shortcut::Explain);
+                }
+                MenuAction::Bookmark => state::place_bookmark(&shared_for_menu, &ctx),
+            }
+            ctx.request_repaint();
+        }) {
+            log::error!("選択のメニューを使えません: {e}");
         }
         let ctx = cc.egui_ctx.clone();
         let shared_for_keys = shared.clone();
@@ -86,6 +110,9 @@ impl PaperReaderApp {
         }) {
             log::error!("直近の単語のメモを使えません: {e}");
         }
+        if let Err(e) = crate::toc::init() {
+            log::error!("目次を使えません: {e}");
+        }
         if let Err(e) = dom::init_splitter() {
             log::error!("ペイン境界のドラッグを有効にできません: {e}");
         }
@@ -96,6 +123,31 @@ impl PaperReaderApp {
         if let Err(e) = crate::search_input::init(&cc.egui_ctx, SEARCH_HINT) {
             log::error!("検索欄を作れません: {e}");
         }
+
+        let ctx = cc.egui_ctx.clone();
+        let shared_for_palette = shared.clone();
+        let shared_for_items = shared.clone();
+        let shared_for_guard = shared.clone();
+        let palette_shared = shared.clone();
+        let palette_ctx = cc.egui_ctx.clone();
+        let open_palette = match crate::command_palette::init(
+            // 不具合・要望の画面の上には出さない
+            move || !shared_for_guard.borrow().feedback.open,
+            move |query| {
+                // 開いたときに、まだ読んでいない一覧があれば読み込む（次に打った文字から反映する）
+                if palette_shared.borrow().papers_stale {
+                    state::refresh_papers(&palette_shared, &palette_ctx);
+                }
+                crate::commands::items(&shared_for_items, query)
+            },
+            move |command| crate::commands::run(&shared_for_palette, &ctx, command),
+        ) {
+            Ok(open) => Some(open),
+            Err(e) => {
+                log::error!("コマンドパレットを使えません: {e}");
+                None
+            }
+        };
 
         let theme = dom::load_theme();
         set_theme(&cc.egui_ctx, theme);
@@ -111,6 +163,7 @@ impl PaperReaderApp {
             mobile: None,
             focus_input: false,
             search_input_placed: false,
+            open_palette,
         }
     }
 
@@ -263,6 +316,16 @@ impl PaperReaderApp {
                 }
             }
             ui.separator();
+            if !self.is_mobile()
+                && let Some(open) = &self.open_palette
+                && ui
+                    .button("⌨ コマンドパレット（⌘K / Ctrl+K）")
+                    .on_hover_text("操作・節・論文を文字で絞り込んで実行します")
+                    .clicked()
+            {
+                ui.close();
+                open();
+            }
             if ui.button("💬 不具合・要望を送る…").clicked() {
                 state::open_feedback(&self.shared, ui.ctx());
                 ui.close();
@@ -673,25 +736,69 @@ impl PaperReaderApp {
             })
             .inner;
         if changed {
-            let mut s = self.shared.borrow_mut();
-            s.tab = tab;
-            if tab == Tab::Words {
-                s.words.stale = true;
-            }
-            if tab == Tab::History {
-                s.history_stale = true;
-            }
-            if tab == Tab::Grammar {
-                s.grammar_stale = true;
-            }
-            if tab == Tab::Search || tab == Tab::Explain {
-                // ほかの端末で積んだ分も出るように読み直す
-                s.read_later.stale = true;
-            }
+            state::show_tab(&self.shared, tab);
         }
     }
 
+    /// スマホ用のタブ。親指が届くようシートの下端に固定し、幅を 5 等分する。
+    fn bottom_tabs(&mut self, ui: &mut egui::Ui) {
+        let p = theme::palette(ui.ctx());
+        let current = self.shared.borrow().tab;
+        let search_count = self.shared.borrow().search.items.len();
+        let search_label = if search_count > 0 {
+            format!("検索 {search_count}")
+        } else {
+            "検索".to_string()
+        };
+        let tabs = [
+            (Tab::Explain, "解説"),
+            (Tab::Search, search_label.as_str()),
+            (Tab::History, "履歴"),
+            (Tab::Grammar, "文法項目"),
+            (Tab::Words, "単語帳"),
+        ];
+        let width = ui.available_width() / tabs.len() as f32;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            for (tab, label) in tabs {
+                let selected = tab == current;
+                let (rect, resp) = ui.allocate_exact_size(
+                    egui::vec2(width, BOTTOM_TAB_HEIGHT),
+                    egui::Sense::click(),
+                );
+                let painter = ui.painter();
+                if selected {
+                    painter.rect_filled(rect.shrink2(egui::vec2(3.0, 2.0)), 10.0, p.accent_soft);
+                }
+                painter.text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    theme::body_font(if width < NARROW_BOTTOM_TAB_WIDTH {
+                        12.0
+                    } else {
+                        13.5
+                    }),
+                    if selected { p.accent } else { p.weak },
+                );
+                if resp.clicked() {
+                    state::show_tab(&self.shared, tab);
+                    // 小さくしているときにタブを押したら、中身が見える高さにする
+                    dom::raise_sheet(dom::Sheet::Half);
+                }
+            }
+        });
+    }
+
     // ───────────── 解説タブ ─────────────
+
+    fn explain_button_at_right(&mut self, ui: &mut egui::Ui) {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if theme::primary_button(ui, "解説する", true).clicked() {
+                state::start_explain(&self.shared, ui.ctx(), false);
+            }
+        });
+    }
 
     fn explain_tab(&mut self, ui: &mut egui::Ui) {
         let p = theme::palette(ui.ctx());
@@ -714,58 +821,73 @@ impl PaperReaderApp {
             return;
         };
 
-        // 選択中のテキスト（スマホでは、ここにも「解説する」を出してすぐ押せるようにする）
+        // スマホではすぐ押せるように、解説する前は上のカードにも「解説する」を出す
         let mobile = self.is_mobile();
         let can_explain = mobile && {
             let s = self.shared.borrow();
             s.explain.phase == ExplainPhase::Idle
         };
-        theme::card(ui, |ui| {
-            ui.horizontal(|ui| {
-                match sel.mode {
-                    Mode::Word => theme::chip(ui, "単語", p.word, p.word_soft),
-                    Mode::Sentence => theme::chip(ui, "英文", p.sentence, p.sentence_soft),
-                };
-                ui.label(RichText::new("選択中").size(12.0).color(p.weak));
-                if can_explain {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if theme::primary_button(ui, "解説する", true).clicked() {
-                            state::start_explain(&self.shared, ui.ctx(), false);
-                        }
-                    });
-                }
-            });
-            ui.add_space(2.0);
-            match sel.mode {
-                Mode::Word => {
-                    ui.label(RichText::new(&sel.text).size(22.0).strong().color(p.strong));
-                }
-                Mode::Sentence => {
-                    ui.label(RichText::new(&sel.text).size(15.5).color(p.strong));
-                }
-            }
-            if sel.context != sel.text {
+        // スマホで単語を選んだときは、見出し語が辞書にあるので「選択中」のカードを省き、訳を先頭に出す
+        let dict_first = mobile && sel.mode == Mode::Word;
+        if !dict_first {
+            theme::card(ui, |ui| {
+                ui.horizontal(|ui| {
+                    match sel.mode {
+                        Mode::Word => theme::chip(ui, "単語", p.word, p.word_soft),
+                        Mode::Sentence => theme::chip(ui, "英文", p.sentence, p.sentence_soft),
+                    };
+                    ui.label(RichText::new("選択中").size(12.0).color(p.weak));
+                    if can_explain {
+                        self.explain_button_at_right(ui);
+                    }
+                });
                 ui.add_space(2.0);
-                egui::CollapsingHeader::new(RichText::new("段落（文脈）").size(12.5).color(p.weak))
-                    .id_salt("context")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.label(RichText::new(&sel.context).size(13.5).color(p.text));
-                    });
-            }
-        });
+                match sel.mode {
+                    Mode::Word => {
+                        ui.label(RichText::new(&sel.text).size(22.0).strong().color(p.strong));
+                    }
+                    Mode::Sentence => {
+                        let text = RichText::new(&sel.text).size(15.5).color(p.strong);
+                        if mobile {
+                            // 長い英文で解説が画面の外に出ないよう、数行にまとめる
+                            let mut job = egui::text::LayoutJob::simple(
+                                sel.text.clone(),
+                                theme::body_font(15.5),
+                                p.strong,
+                                ui.available_width(),
+                            );
+                            job.wrap.max_rows = SELECTION_PREVIEW_ROWS;
+                            ui.label(job);
+                        } else {
+                            ui.label(text);
+                        }
+                    }
+                }
+                context_view(ui, &p, &sel);
+            });
+        }
 
         // 辞書
         if sel.mode == Mode::Word {
-            ui.add_space(10.0);
+            if !dict_first {
+                ui.add_space(10.0);
+            }
             theme::card(ui, |ui| {
-                theme::section_title(ui, "辞書");
+                ui.horizontal(|ui| {
+                    theme::section_title(ui, "辞書");
+                    if dict_first && can_explain {
+                        self.explain_button_at_right(ui);
+                    }
+                });
                 let retry = {
                     let s = self.shared.borrow();
                     dict_view(ui, &p, &s.dict, &s.dict_ai, s.show_kana)
                 };
                 if retry {
                     state::fetch_dict_ai(&self.shared, ui.ctx());
+                }
+                if dict_first {
+                    context_view(ui, &p, &sel);
                 }
             });
         }
@@ -1622,6 +1744,12 @@ impl eframe::App for PaperReaderApp {
         }
 
         self.sync_recent_bar();
+        let requested = self.shared.borrow_mut().requested_theme.take();
+        if let Some(theme) = requested {
+            self.theme = theme;
+            dom::apply_theme(theme);
+            set_theme(&ctx, theme);
+        }
         let p = theme::palette(&ctx);
         self.search_input_placed = false;
         egui::CentralPanel::default_margins()
@@ -1653,16 +1781,38 @@ impl eframe::App for PaperReaderApp {
                     self.word_strip(ui, &p);
                     return;
                 }
-                self.header(ui);
-                ui.add_space(if mobile { 8.0 } else { 12.0 });
+                if mobile {
+                    egui::Panel::bottom("bottom-tabs")
+                        .show_separator_line(false)
+                        .frame(egui::Frame::new().fill(p.bg).inner_margin(Margin {
+                            top: 2,
+                            ..Margin::ZERO
+                        }))
+                        .show(ui, |ui| self.bottom_tabs(ui));
+                    // シートが「少し」のときは見出しとタブだけにする
+                    if dom::sheet() == dom::Sheet::Peek {
+                        self.header(ui);
+                        return;
+                    }
+                }
+                // 半分の高さで論文を読んでいる間は見出しを畳み、訳や解説を先に見せる
+                let compact = mobile && has_paper && dom::sheet() == dom::Sheet::Half;
+                if !compact {
+                    self.header(ui);
+                    ui.add_space(if mobile { 8.0 } else { 12.0 });
+                }
                 // 論文を読んでいる間は入力欄を隠す（読むモード）。「検索」タブで出す（検索モード）
                 if show_input_bar(has_paper, tab) {
                     self.input_bar(ui);
                 }
                 self.paper_card(ui);
-                ui.add_space(if mobile { 10.0 } else { 12.0 });
-                self.tabs(ui);
-                ui.add_space(if mobile { 8.0 } else { 10.0 });
+                if !mobile {
+                    ui.add_space(12.0);
+                    self.tabs(ui);
+                    ui.add_space(10.0);
+                } else if show_input_bar(has_paper, tab) {
+                    ui.add_space(8.0);
+                }
                 let tab = self.shared.borrow().tab;
                 egui::ScrollArea::vertical()
                     .id_salt(tab_salt(tab))
@@ -2231,6 +2381,20 @@ fn empty_explain(ui: &mut egui::Ui, p: &Palette, has_paper: bool, mobile: bool) 
             .color(p.weak),
         );
     });
+}
+
+/// 選択を含む段落（開くと読める）。
+fn context_view(ui: &mut egui::Ui, p: &Palette, sel: &dom::SelectionInfo) {
+    if sel.context == sel.text {
+        return;
+    }
+    ui.add_space(2.0);
+    egui::CollapsingHeader::new(RichText::new("段落（文脈）").size(12.5).color(p.weak))
+        .id_salt("context")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.label(RichText::new(&sel.context).size(13.5).color(p.text));
+        });
 }
 
 /// 検索前の案内。

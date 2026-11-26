@@ -1,9 +1,11 @@
 //! server と web の両方で使う API の型。
 
 mod cite;
+mod palette;
 mod pos;
 
 pub use cite::{cited_arxiv_id, cited_title, title_search_query};
+pub use palette::palette_matches;
 pub use pos::{PartOfSpeech, guess_pos, pos_groups, pos_summary};
 
 use serde::{Deserialize, Serialize};

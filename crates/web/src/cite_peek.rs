@@ -17,6 +17,8 @@ const LINK_SELECTOR: &str = "a[href^=\"#bib.\"]";
 /// カードと番号・画面の端とのすき間（px）
 const GAP_PX: f64 = 8.0;
 const MAX_WIDTH_PX: f64 = 460.0;
+/// 番号の上下の空きがこれより狭いと、文献の文章がほとんど見えない（px）
+const MIN_READABLE_PX: f64 = 200.0;
 
 /// カードのボタンで、アプリ（解説ペイン）に頼む操作。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,6 +263,7 @@ fn append(parent: &Element, child: Element) -> Option<()> {
 }
 
 /// 番号の下（入らなければ上の広い方）に、本文の範囲に収めて置く。
+/// どちらも狭くて文献の文章が読めなくなるときは、番号に重ねて本文の範囲いっぱいを使う。
 fn place(paper: &Element, link: &Element, card: &HtmlElement) {
     let area = paper.get_bounding_client_rect();
     let at = link.get_bounding_client_rect();
@@ -275,10 +278,20 @@ fn place(paper: &Element, link: &Element, card: &HtmlElement) {
     let below = area.bottom() - at.bottom() - 2.0 * GAP_PX;
     let above = at.top() - area.top() - 2.0 * GAP_PX;
     let height = f64::from(card.offset_height());
-    let (top, max_height) = if height <= below || below >= above {
+    let full = area.height() - 2.0 * GAP_PX;
+    let (top, max_height) = if height <= below {
+        (at.bottom() + GAP_PX, below)
+    } else if height <= above {
+        (at.top() - GAP_PX - height, above)
+    } else if below.max(above) < MIN_READABLE_PX {
+        let top = (at.bottom() + GAP_PX)
+            .min(area.bottom() - GAP_PX - height.min(full))
+            .max(area.top() + GAP_PX);
+        (top, full)
+    } else if below >= above {
         (at.bottom() + GAP_PX, below)
     } else {
-        (at.top() - GAP_PX - height.min(above), above)
+        (at.top() - GAP_PX - above, above)
     };
     let _ = style.set_property("top", &format!("{top:.0}px"));
     let _ = style.set_property("max-height", &format!("{max_height:.0}px"));

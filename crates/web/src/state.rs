@@ -373,6 +373,8 @@ pub struct Shared {
     pub papers: PapersStatus,
     pub read_later: ReadLater,
     pub search_view: SearchView,
+    /// コマンドパレットで選んだ配色（次の描画で画面に反映する）
+    pub requested_theme: Option<dom::ThemeChoice>,
     /// 表示中の論文の付箋
     pub bookmark: Option<paper_reader_shared::Bookmark>,
     /// 付箋の操作の失敗・注意
@@ -1001,6 +1003,19 @@ pub fn submit_input(this: &SharedRef, ctx: &egui::Context, input: &str) {
             let sort = this.borrow().search.sort;
             search(this, ctx, input.to_string(), sort);
         }
+    }
+}
+
+/// タブを切り替える。切り替えた先の内容は読み直す。
+pub fn show_tab(this: &SharedRef, tab: Tab) {
+    let mut s = this.borrow_mut();
+    s.tab = tab;
+    match tab {
+        Tab::Words => s.words.stale = true,
+        Tab::History => s.history_stale = true,
+        Tab::Grammar => s.grammar_stale = true,
+        // ほかの端末で積んだ分も出るように読み直す
+        Tab::Search | Tab::Explain => s.read_later.stale = true,
     }
 }
 

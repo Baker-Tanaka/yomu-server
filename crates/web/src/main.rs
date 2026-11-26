@@ -23,6 +23,8 @@ mod search_input;
 #[cfg(target_arch = "wasm32")]
 mod selection_menu;
 #[cfg(target_arch = "wasm32")]
+mod slash_view;
+#[cfg(target_arch = "wasm32")]
 mod state;
 #[cfg(target_arch = "wasm32")]
 mod theme;

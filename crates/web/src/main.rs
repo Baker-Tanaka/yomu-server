@@ -17,6 +17,8 @@ mod recent_bar;
 #[cfg(target_arch = "wasm32")]
 mod search_input;
 #[cfg(target_arch = "wasm32")]
+mod selection_menu;
+#[cfg(target_arch = "wasm32")]
 mod state;
 #[cfg(target_arch = "wasm32")]
 mod theme;

@@ -602,6 +602,46 @@ body.resizing #paper, body.resizing #explain-pane {
   .paper-placeholder .mobile-only { display: none; }
 }
 
+/* 選択した語・文のそばの操作メニュー（位置は selection_menu.rs が指定する） */
+#selection-menu {
+  position: fixed;
+  z-index: 15;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  background: var(--heading);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px var(--shadow);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+  animation: pop-in 0.12s ease-out;
+}
+#selection-menu[hidden] { display: none; }
+#selection-menu button {
+  font: inherit;
+  font-size: 13px;
+  color: var(--paper-bg);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+#selection-menu button:hover, #selection-menu button:focus-visible { background: rgba(127, 127, 127, 0.28); }
+#selection-menu button[data-action="explain"] { font-weight: 700; }
+@media (max-width: 800px) {
+  #selection-menu button { font-size: 14px; padding: 10px 9px; }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #selection-menu { animation: none; }
+}
+
 /* 引用番号をタップしたときのカード（位置と幅は cite_peek.rs が指定する） */
 #cite-peek {
   position: fixed;

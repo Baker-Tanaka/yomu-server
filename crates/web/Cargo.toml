@@ -23,5 +23,5 @@ web-sys = { version = "0.3.107", features = [
   "KeyboardEvent", "PointerEvent", "MouseEvent", "Storage", "DomRect", "DomTokenList",
   "CssStyleDeclaration", "MediaQueryList", "ResizeObserver", "DomRectList", "HtmlInputElement",
   "Text", "CharacterData", "NodeList", "ScrollIntoViewOptions", "ScrollBehavior", "ScrollLogicalPosition",
-  "Navigator", "SpeechSynthesis", "SpeechSynthesisUtterance",
+  "Navigator", "Clipboard", "SpeechSynthesis", "SpeechSynthesisUtterance",
 ] }

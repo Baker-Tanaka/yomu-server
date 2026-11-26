@@ -65,9 +65,26 @@ impl PaperReaderApp {
         let ctx = cc.egui_ctx.clone();
         let shared_for_dom = shared.clone();
         if let Err(e) = dom::watch_selection(move |info| {
+            let text = info.text.clone();
             state::on_select(&shared_for_dom, &ctx, info);
+            // シートの高さが変わったあとの本文の範囲に合わせて出す
+            crate::selection_menu::show(&text);
         }) {
             log::error!("選択の監視を開始できません: {e}");
+        }
+        let ctx = cc.egui_ctx.clone();
+        let shared_for_menu = shared.clone();
+        if let Err(e) = crate::selection_menu::init(move |action| {
+            use crate::selection_menu::MenuAction;
+            match action {
+                MenuAction::Explain => {
+                    state::on_shortcut(&shared_for_menu, &ctx, dom::Shortcut::Explain);
+                }
+                MenuAction::Bookmark => state::place_bookmark(&shared_for_menu, &ctx),
+            }
+            ctx.request_repaint();
+        }) {
+            log::error!("選択のメニューを使えません: {e}");
         }
         let ctx = cc.egui_ctx.clone();
         let shared_for_keys = shared.clone();

@@ -11,10 +11,12 @@ use paper_reader_shared::{
     FeedbackListResponse, GIT_HASH, GrammarTagInfo, GrammarTagsResponse, HistoryEntry,
     MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode, ReadLaterItem, ReadLaterPut,
     SLASH_READING_HEADING, SearchItem, SearchSort, TagGuide, WordSource, build_version_label,
-    paper_url_from_input, plain_arrows, pos_groups, pos_summary, version_label, without_section,
+    paper_url_from_input, parse_slash_reading, plain_arrows, pos_groups, pos_summary,
+    version_label, without_section,
 };
 
 use crate::dom;
+use crate::slash_view;
 use crate::state::{
     self, DictAiPhase, DictStatus, ExplainPhase, FeedbackStage, GrammarOrder, GrammarStatus,
     HealthStatus, HistoryScope, HistoryStatus, PaperStatus, PapersStatus, SearchView, Shared,
@@ -1156,7 +1158,7 @@ impl PaperReaderApp {
 
             if !markdown.is_empty() {
                 ui.add_space(2.0);
-                CommonMarkViewer::new().show(ui, &mut self.markdown_cache, &markdown);
+                self.explanation_view(ui, p, &markdown, running);
                 if phase == ExplainPhase::Streaming {
                     ui.horizontal(|ui| {
                         ui.spinner();
@@ -1199,6 +1201,26 @@ impl PaperReaderApp {
                 self.shared.borrow_mut().auto_explain = auto;
             }
         });
+    }
+
+    /// 解説の本文。スラッシュリーディングの節は専用の表示にする（読み替えられない形なら Markdown のまま）。
+    fn explanation_view(&mut self, ui: &mut egui::Ui, p: &Palette, markdown: &str, running: bool) {
+        let Some(slash) = parse_slash_reading(markdown, running) else {
+            CommonMarkViewer::new().show(ui, &mut self.markdown_cache, markdown);
+            return;
+        };
+        let head = format!("{}{SLASH_READING_HEADING}", slash.before);
+        ui.push_id("explain-head", |ui| {
+            CommonMarkViewer::new().show(ui, &mut self.markdown_cache, &head);
+        });
+        ui.add_space(6.0);
+        slash_view::show(ui, p, &slash.chunks);
+        ui.add_space(6.0);
+        if !slash.after.is_empty() {
+            ui.push_id("explain-rest", |ui| {
+                CommonMarkViewer::new().show(ui, &mut self.markdown_cache, slash.after);
+            });
+        }
     }
 
     /// 文法項目のチップと、選んだ項目の詳細。

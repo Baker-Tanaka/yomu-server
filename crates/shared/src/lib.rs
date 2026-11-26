@@ -3,10 +3,12 @@
 mod cite;
 mod palette;
 mod pos;
+mod slash;
 
 pub use cite::{cited_arxiv_id, cited_title, title_search_query};
 pub use palette::palette_matches;
 pub use pos::{PartOfSpeech, guess_pos, pos_groups, pos_summary};
+pub use slash::{SlashChunk, SlashReading, parse_slash_reading};
 
 use serde::{Deserialize, Serialize};
 

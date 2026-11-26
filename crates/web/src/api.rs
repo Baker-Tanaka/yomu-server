@@ -1,10 +1,10 @@
 //! サーバー API の呼び出し（fetch）。
 
 use paper_reader_shared::{
-    DictResponse, ErrorResponse, ExplainRequest, FeedbackDraft, FeedbackItem, FeedbackListResponse,
-    FeedbackPreview, FeedbackSubmit, GrammarTagsResponse, HealthResponse, HistoryRecord,
-    HistoryResponse, PaperResponse, SearchResponse, SearchSort, SseEvent, SseParser, WordDelete,
-    WordDeleteResult, WordListResponse, WordNote, WordPrune, WordSort, WordUpsert,
+    ChatRequest, DictResponse, ErrorResponse, ExplainRequest, FeedbackDraft, FeedbackItem,
+    FeedbackListResponse, FeedbackPreview, FeedbackSubmit, GrammarTagsResponse, HealthResponse,
+    HistoryRecord, HistoryResponse, PaperResponse, SearchResponse, SearchSort, SseEvent, SseParser,
+    WordDelete, WordDeleteResult, WordListResponse, WordNote, WordPrune, WordSort, WordUpsert,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -247,10 +247,29 @@ async fn send_without_body(method: &str, path: &str, json: Option<&str>) -> Resu
 }
 
 /// `POST /api/explain` を呼び、SSE のイベントを受け取るたびに `on_event` を呼ぶ。
-/// EventSource は GET しか使えないため、fetch + ReadableStream で読む。
-/// `signal` が中止されると Err で戻る（呼び出し側で `signal.aborted()` を確認すること）。
 pub async fn stream_explain(
     req: &ExplainRequest,
+    signal: &AbortSignal,
+    on_event: impl FnMut(SseEvent),
+) -> Result<(), String> {
+    stream_sse("/api/explain", req, signal, on_event).await
+}
+
+/// `POST /api/chat`（解説のあとの質問）。受け取り方は解説と同じ。
+pub async fn stream_chat(
+    req: &ChatRequest,
+    signal: &AbortSignal,
+    on_event: impl FnMut(SseEvent),
+) -> Result<(), String> {
+    stream_sse("/api/chat", req, signal, on_event).await
+}
+
+/// JSON を POST して、SSE のイベントを受け取るたびに `on_event` を呼ぶ。
+/// EventSource は GET しか使えないため、fetch + ReadableStream で読む。
+/// `signal` が中止されると Err で戻る（呼び出し側で `signal.aborted()` を確認すること）。
+async fn stream_sse<B: Serialize>(
+    path: &str,
+    req: &B,
     signal: &AbortSignal,
     mut on_event: impl FnMut(SseEvent),
 ) -> Result<(), String> {
@@ -266,8 +285,7 @@ pub async fn stream_explain(
     init.set_headers(&headers);
     init.set_body(&JsValue::from_str(&body));
     init.set_signal(Some(signal));
-    let request =
-        Request::new_with_str_and_init("/api/explain", &init).map_err(|e| js_error(&e))?;
+    let request = Request::new_with_str_and_init(path, &init).map_err(|e| js_error(&e))?;
 
     let resp: Response = JsFuture::from(window.fetch_with_request(&request))
         .await

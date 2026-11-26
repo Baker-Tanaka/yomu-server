@@ -5,11 +5,12 @@ use std::rc::Rc;
 
 use eframe::egui;
 use paper_reader_shared::{
-    DictResponse, ExplainRequest, ExplainTag, FeedbackContext, FeedbackDraft, FeedbackItem,
-    FeedbackListResponse, FeedbackPreview, FeedbackSubmit, GrammarTagsResponse, HealthResponse,
-    HistoryEntry, HistoryRecord, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, ReadLaterItem,
+    ChatMessage, ChatRequest, ChatRole, DictResponse, ExplainRequest, ExplainTag, FeedbackContext,
+    FeedbackDraft, FeedbackItem, FeedbackListResponse, FeedbackPreview, FeedbackSubmit,
+    GrammarTagsResponse, HealthResponse, HistoryEntry, HistoryRecord, MAX_CHAT_ANSWER_CHARS,
+    MAX_CHAT_QUESTION_CHARS, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, ReadLaterItem,
     SEARCH_PAGE_SIZE, SearchItem, SearchSort, WordListResponse, WordNote, WordSort, WordStoreStats,
-    WordUpsert, clip_context, paper_url_from_input, sse_event,
+    WordUpsert, clip_context, paper_url_from_input, recent_chat_messages, sse_event,
 };
 use web_sys::AbortController;
 
@@ -107,6 +108,57 @@ impl ExplainPhase {
     }
 }
 
+/// 解説のあとのチャット（続けて質問する）。対象の解説と一緒に消え、保存はしない。
+#[derive(Default)]
+pub struct Chat {
+    pub open: bool,
+    /// 質問と回答が交互。回答待ち・失敗のあいだは最後が質問
+    pub turns: Vec<ChatMessage>,
+    /// 生成中の回答（失敗したときは受信できた分）
+    pub answer: String,
+    pub phase: ExplainPhase,
+    /// 次の描画で最後の質問が上に来るようにスクロールする（質問がまだ無ければチャットを見せる）
+    pub scroll_to_question: bool,
+    /// 次の描画で質問欄にフォーカスを移す
+    pub focus_input: bool,
+    /// 質問欄に戻す文字（回答が届く前に止めた質問）
+    pub restore_input: Option<String>,
+    /// 質問ごとに増える番号（中止した回答の遅れて届いたイベントを捨てる）
+    seq: u64,
+    controller: Option<AbortController>,
+}
+
+impl Chat {
+    fn abort(&mut self) {
+        if let Some(c) = self.controller.take() {
+            c.abort();
+        }
+        self.seq += 1;
+    }
+
+    fn reset(&mut self) {
+        self.abort();
+        *self = Self {
+            seq: self.seq,
+            ..Self::default()
+        };
+    }
+
+    /// 回答を確定する。
+    fn finish(&mut self) {
+        self.controller = None;
+        if self.answer.trim().is_empty() {
+            self.phase = ExplainPhase::Error("回答が空でした".into());
+            return;
+        }
+        self.turns.push(ChatMessage {
+            role: ChatRole::Assistant,
+            content: std::mem::take(&mut self.answer),
+        });
+        self.phase = ExplainPhase::Idle;
+    }
+}
+
 #[derive(Default)]
 pub struct Explain {
     pub phase: ExplainPhase,
@@ -124,6 +176,7 @@ pub struct Explain {
     pub selected_tag: Option<usize>,
     /// 選んだ文法項目を本文で見つけてハイライトできたか
     pub highlight_found: bool,
+    pub chat: Chat,
     /// 解説ごとに増える番号。中止した解説から遅れて届いたイベントを捨てる
     seq: u64,
     controller: Option<AbortController>,
@@ -146,6 +199,7 @@ impl Explain {
         self.target = None;
         self.from_cache = false;
         self.clear_tags();
+        self.chat.reset();
     }
 
     fn clear_tags(&mut self) {
@@ -846,6 +900,7 @@ pub fn start_explain(this: &SharedRef, ctx: &egui::Context, regenerate: bool) {
         s.explain.markdown.clear();
         s.explain.from_cache = false;
         s.explain.clear_tags();
+        s.explain.chat.reset();
         s.explain.target = Some((sel.mode, sel.text.clone()));
 
         if sel.text.chars().count() > MAX_TEXT_CHARS {
@@ -973,6 +1028,144 @@ pub fn stop_explain(this: &SharedRef) {
     if s.explain.phase.is_running() {
         s.explain.abort();
         s.explain.phase = ExplainPhase::Error("中止しました".into());
+    }
+}
+
+/// チャットを開く（閉じても会話は残る）。
+pub fn open_chat(this: &SharedRef) {
+    // スマホでは会話を読みやすいようシートを全体まで上げる
+    dom::raise_sheet(dom::Sheet::Full);
+    let mut s = this.borrow_mut();
+    let chat = &mut s.explain.chat;
+    chat.open = true;
+    chat.focus_input = true;
+    chat.scroll_to_question = true;
+}
+
+pub fn close_chat(this: &SharedRef) {
+    this.borrow_mut().explain.chat.open = false;
+}
+
+/// 続けて質問する。受け付けたら true（回答の生成中・空の質問は受け付けない）。
+/// 直前の質問が失敗していたら、その質問は置き換える。
+pub fn send_chat(this: &SharedRef, ctx: &egui::Context, question: &str) -> bool {
+    let question: String = question
+        .trim()
+        .chars()
+        .take(MAX_CHAT_QUESTION_CHARS)
+        .collect();
+    let (req, seq, signal) = {
+        let mut s = this.borrow_mut();
+        let Some(sel) = s.selection.clone() else {
+            return false;
+        };
+        if question.is_empty() || s.explain.phase.is_running() || s.explain.chat.phase.is_running()
+        {
+            return false;
+        }
+        let Ok(controller) = AbortController::new() else {
+            return false;
+        };
+        let signal = controller.signal();
+        let explanation: String = s
+            .explain
+            .markdown
+            .chars()
+            .take(MAX_CHAT_ANSWER_CHARS)
+            .collect();
+        let chat = &mut s.explain.chat;
+        chat.abort();
+        if chat.turns.last().is_some_and(|t| t.role == ChatRole::User) {
+            chat.turns.pop();
+        }
+        chat.turns.push(ChatMessage {
+            role: ChatRole::User,
+            content: question,
+        });
+        chat.answer.clear();
+        chat.phase = ExplainPhase::Connecting;
+        chat.controller = Some(controller);
+        chat.scroll_to_question = true;
+        let req = ChatRequest {
+            mode: sel.mode,
+            context: clip_context(&sel.context, &sel.text, MAX_CONTEXT_CHARS),
+            text: sel.text,
+            explanation,
+            messages: recent_chat_messages(&chat.turns).to_vec(),
+        };
+        (req, chat.seq, signal)
+    };
+    ctx.request_repaint();
+
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let on_event = {
+            let this = this.clone();
+            let ctx = ctx.clone();
+            move |ev: paper_reader_shared::SseEvent| {
+                let mut s = this.borrow_mut();
+                let chat = &mut s.explain.chat;
+                if chat.seq != seq {
+                    return;
+                }
+                match ev.event.as_str() {
+                    sse_event::QUEUED => chat.phase = ExplainPhase::Queued,
+                    sse_event::STARTED => chat.phase = ExplainPhase::Connecting,
+                    sse_event::TOKEN => {
+                        chat.phase = ExplainPhase::Streaming;
+                        chat.answer.push_str(&ev.data);
+                    }
+                    sse_event::DONE => chat.finish(),
+                    sse_event::ERROR => {
+                        chat.phase = ExplainPhase::Error(ev.data);
+                        chat.controller = None;
+                    }
+                    _ => {}
+                }
+                ctx.request_repaint();
+            }
+        };
+        let result = crate::api::stream_chat(&req, &signal, on_event).await;
+        let failed = {
+            let mut s = this.borrow_mut();
+            let chat = &mut s.explain.chat;
+            if chat.seq != seq || signal.aborted() {
+                return;
+            }
+            chat.controller = None;
+            match result {
+                Err(msg) => chat.phase = ExplainPhase::Error(msg),
+                // done も error も来ないまま閉じられた
+                Ok(()) if chat.phase.is_running() => {
+                    chat.phase = ExplainPhase::Error("サーバーとの接続が途中で切れました".into());
+                }
+                Ok(()) => {}
+            }
+            matches!(chat.phase, ExplainPhase::Error(_))
+        };
+        ctx.request_repaint();
+        if failed {
+            refresh_health(&this, &ctx);
+        }
+    });
+    true
+}
+
+/// 回答の生成を止める。受信できた分は残し、まだ何も無ければ質問を入力欄に戻す。
+pub fn stop_chat(this: &SharedRef) {
+    let mut s = this.borrow_mut();
+    let chat = &mut s.explain.chat;
+    if !chat.phase.is_running() {
+        return;
+    }
+    chat.abort();
+    if chat.answer.trim().is_empty() {
+        chat.restore_input = chat.turns.pop().map(|t| t.content);
+        chat.answer.clear();
+        chat.phase = ExplainPhase::Idle;
+    } else {
+        chat.finish();
     }
 }
 
@@ -1348,7 +1541,10 @@ pub fn on_shortcut(this: &SharedRef, ctx: &egui::Context, shortcut: dom::Shortcu
         dom::Shortcut::Explain => {
             let ready = {
                 let mut s = this.borrow_mut();
-                let ready = s.selection.is_some() && !s.explain.phase.is_running();
+                // 会話がある解説は E キーで作り直さない（会話が消えるため）
+                let ready = s.selection.is_some()
+                    && !s.explain.phase.is_running()
+                    && s.explain.chat.turns.is_empty();
                 if ready {
                     s.tab = Tab::Explain;
                 }

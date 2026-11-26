@@ -53,6 +53,8 @@ pub struct PaperReaderApp {
     focus_input: bool,
     /// この描画で、検索欄（HTML の入力欄）を重ねたか。重ねなければ隠す
     search_input_placed: bool,
+    /// コマンドパレットを開く（⚙ のメニューから）
+    open_palette: Option<crate::command_palette::Opener>,
 }
 
 impl PaperReaderApp {
@@ -122,6 +124,31 @@ impl PaperReaderApp {
             log::error!("検索欄を作れません: {e}");
         }
 
+        let ctx = cc.egui_ctx.clone();
+        let shared_for_palette = shared.clone();
+        let shared_for_items = shared.clone();
+        let shared_for_guard = shared.clone();
+        let palette_shared = shared.clone();
+        let palette_ctx = cc.egui_ctx.clone();
+        let open_palette = match crate::command_palette::init(
+            // 不具合・要望の画面の上には出さない
+            move || !shared_for_guard.borrow().feedback.open,
+            move |query| {
+                // 開いたときに、まだ読んでいない一覧があれば読み込む（次に打った文字から反映する）
+                if palette_shared.borrow().papers_stale {
+                    state::refresh_papers(&palette_shared, &palette_ctx);
+                }
+                crate::commands::items(&shared_for_items, query)
+            },
+            move |command| crate::commands::run(&shared_for_palette, &ctx, command),
+        ) {
+            Ok(open) => Some(open),
+            Err(e) => {
+                log::error!("コマンドパレットを使えません: {e}");
+                None
+            }
+        };
+
         let theme = dom::load_theme();
         set_theme(&cc.egui_ctx, theme);
 
@@ -136,6 +163,7 @@ impl PaperReaderApp {
             mobile: None,
             focus_input: false,
             search_input_placed: false,
+            open_palette,
         }
     }
 
@@ -288,6 +316,16 @@ impl PaperReaderApp {
                 }
             }
             ui.separator();
+            if !self.is_mobile()
+                && let Some(open) = &self.open_palette
+                && ui
+                    .button("⌨ コマンドパレット（⌘K / Ctrl+K）")
+                    .on_hover_text("操作・節・論文を文字で絞り込んで実行します")
+                    .clicked()
+            {
+                ui.close();
+                open();
+            }
             if ui.button("💬 不具合・要望を送る…").clicked() {
                 state::open_feedback(&self.shared, ui.ctx());
                 ui.close();
@@ -1706,6 +1744,12 @@ impl eframe::App for PaperReaderApp {
         }
 
         self.sync_recent_bar();
+        let requested = self.shared.borrow_mut().requested_theme.take();
+        if let Some(theme) = requested {
+            self.theme = theme;
+            dom::apply_theme(theme);
+            set_theme(&ctx, theme);
+        }
         let p = theme::palette(&ctx);
         self.search_input_placed = false;
         egui::CentralPanel::default_margins()

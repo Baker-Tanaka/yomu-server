@@ -373,6 +373,8 @@ pub struct Shared {
     pub papers: PapersStatus,
     pub read_later: ReadLater,
     pub search_view: SearchView,
+    /// コマンドパレットで選んだ配色（次の描画で画面に反映する）
+    pub requested_theme: Option<dom::ThemeChoice>,
     /// 表示中の論文の付箋
     pub bookmark: Option<paper_reader_shared::Bookmark>,
     /// 付箋の操作の失敗・注意

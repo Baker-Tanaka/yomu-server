@@ -32,6 +32,8 @@ const RESERVED_IDS: &[&str] = &[
     "toc-panel",
     "reading-progress",
     "command-palette",
+    "command-palette-input",
+    "command-palette-list",
 ];
 
 /// MathML の要素（ammonia は名前空間を検証したうえで許可する）。

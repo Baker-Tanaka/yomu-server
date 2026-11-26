@@ -29,7 +29,7 @@
     片方しか無ければそれを返す（web は設定に合わせて節を隠すか、「付けて解説し直す」を出す）
   - `event: queued`（ほかの解説の生成待ち）→ `event: started` → `event: token`（data は追記する文字列）… → `event: done`
   - 英文は `token`（「## 和訳」と和訳）… → `event: tags` → `token`（文構造・文法ポイント・語句）… の順。キャッシュのヒット時は `cached` → `tags` → `token`（全文）
-  - `tags` の data: `[{ tag_id, name, category, span, hint, point }]`
+  - `tags` の data: `[{ tag_id, name, category, span, hint, guide }]`（`guide` は `{ summary, form, examples: [{ en, ja }], toeic, caution }`）
   - 失敗時は `event: error`（data はエラーメッセージ）。入力の検証エラーは 400 と `{ "error": "..." }`
   - text は 2,000 文字、context は 4,000 文字まで。LLM への同時リクエストは 1 件で、クライアントが切断すると生成も止めます
   - 最後まで生成できた解説は `explain_cache` に保存します。キーは `sha256(LLM_MODEL, mode, text, context, プロンプトのバージョン)`。
@@ -59,7 +59,7 @@
   → `{ title, labels, issue_body, llm_labeled }`（LLM のラベル付けは同時実行 1 件の枠を使い、20 秒待っても空かなければラベル無し）
 - `POST /api/feedback` body: `{ title, body, labels, include_context, context }` → 保存した 1 件（`status` は `created` か `pending`）
 - `POST /api/feedback/<id>/retry` → 送り直した結果（GitHub 未設定なら 400）
-- `GET /api/grammar-tags` → `{ categories: [string], tags: [{ id, name, category, aliases, hint, point, count }] }`（count は履歴の英文での出現回数）
+- `GET /api/grammar-tags` → `{ categories: [string], tags: [{ id, name, category, aliases, hint, guide, count }] }`（count は履歴の英文での出現回数）
 - `POST /api/admin/reload-grammar` → `{ tags }`（127.0.0.1 から直接の要求のみ。それ以外は 403）
 - `GET /api/history?paper=<論文 ID>` → `{ entries: [{ id, paper_id, paper_title, mode, text, context, updated_at, has_explanation }] }`
   - 新しい順に最大 200 件。`paper` を省くと全論文。`has_explanation` は今のモデルの解説がキャッシュにあるか

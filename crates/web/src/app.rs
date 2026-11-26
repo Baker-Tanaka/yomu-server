@@ -10,7 +10,7 @@ use paper_reader_shared::{
     APP_VERSION, DictEntry, DictResponse, ExplainTag, FeedbackItem, FeedbackLabel,
     FeedbackListResponse, GIT_HASH, GrammarTagInfo, GrammarTagsResponse, HistoryEntry,
     MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode, ReadLaterItem, ReadLaterPut,
-    SLASH_READING_HEADING, SearchItem, SearchSort, WordSource, build_version_label,
+    SLASH_READING_HEADING, SearchItem, SearchSort, TagGuide, WordSource, build_version_label,
     paper_url_from_input, plain_arrows, pos_groups, pos_summary, version_label, without_section,
 };
 
@@ -2977,21 +2977,39 @@ fn tag_detail(ui: &mut egui::Ui, p: &Palette, tag: &ExplainTag, found: bool) {
                 }
             }
             ui.add_space(2.0);
-            ui.label(RichText::new(&tag.hint).size(13.5).color(p.text));
-            point_line(ui, p, &tag.point);
+            if tag.guide.summary.is_empty() {
+                ui.label(RichText::new(&tag.hint).size(13.5).color(p.text));
+            } else {
+                ui.label(RichText::new(&tag.guide.summary).size(14.0).color(p.strong));
+                guide_body(ui, p, &tag.guide);
+            }
         });
 }
 
-/// 文法項目の「つかみ方」（無ければ何も出さない）。
-fn point_line(ui: &mut egui::Ui, p: &Palette, point: &str) {
-    if !point.is_empty() {
-        ui.add_space(3.0);
-        ui.label(
-            RichText::new(format!("つかみ方: {point}"))
-                .size(13.0)
-                .color(p.accent),
-        );
+/// 文法項目の解説のうち、要約より下（形・例文・TOEIC・注意）。空の欄は出さない。
+fn guide_body(ui: &mut egui::Ui, p: &Palette, guide: &TagGuide) {
+    guide_section(ui, p, "形", &guide.form);
+    if !guide.examples.is_empty() {
+        guide_heading(ui, p, "例文");
+        for example in &guide.examples {
+            ui.label(RichText::new(&example.en).size(13.5).color(p.strong));
+            ui.label(RichText::new(&example.ja).size(12.5).color(p.weak));
+        }
     }
+    guide_section(ui, p, "TOEIC では", &guide.toeic);
+    guide_section(ui, p, "注意", &guide.caution);
+}
+
+fn guide_section(ui: &mut egui::Ui, p: &Palette, title: &str, body: &str) {
+    if !body.is_empty() {
+        guide_heading(ui, p, title);
+        ui.label(RichText::new(body).size(13.5).color(p.text));
+    }
+}
+
+fn guide_heading(ui: &mut egui::Ui, p: &Palette, title: &str) {
+    ui.add_space(5.0);
+    ui.label(RichText::new(title).size(12.0).strong().color(p.accent));
 }
 
 /// カテゴリ → タグ。
@@ -3059,11 +3077,16 @@ fn grammar_tag_row(ui: &mut egui::Ui, p: &Palette, tag: &GrammarTagInfo, with_ca
             theme::chip(ui, &tag.category, p.accent, p.accent_soft);
         }
     });
-    if !tag.point.is_empty() {
-        ui.indent(("grammar-point", &tag.id), |ui| {
-            point_line(ui, p, &tag.point)
-        });
+    if tag.guide.summary.is_empty() {
+        return;
     }
+    ui.indent(("grammar-guide", &tag.id), |ui| {
+        ui.label(RichText::new(&tag.guide.summary).size(13.0).color(p.text));
+        // 項目が多いので、要約より下は畳んでおく
+        egui::CollapsingHeader::new(RichText::new("くわしく").size(12.5).color(p.accent))
+            .id_salt(("grammar-more", &tag.id))
+            .show(ui, |ui| guide_body(ui, p, &tag.guide));
+    });
 }
 
 enum PaperAction {

@@ -714,12 +714,34 @@ pub struct ExplainTag {
     pub category: String,
     /// 英文中で該当する部分
     pub span: String,
-    /// タグの説明（grammar_tags.yaml の hint）
+    /// タグの 1 行説明（grammar_tags.yaml の hint。guide が空のときに表示する）
     #[serde(default)]
     pub hint: String,
-    /// 理解の手がかり（grammar_tags.yaml の point。無ければ空）
+    /// 画面に出す解説（grammar_tags.yaml の guide。無ければ空）
     #[serde(default)]
-    pub point: String,
+    pub guide: TagGuide,
+}
+
+/// 文法項目の解説の例文。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TagExample {
+    pub en: String,
+    pub ja: String,
+}
+
+/// 文法項目の解説（TOEIC 対策向け。画面にだけ出し、LLM には渡さない）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TagGuide {
+    /// ひとことで言うと
+    pub summary: String,
+    /// 形
+    pub form: String,
+    pub examples: Vec<TagExample>,
+    /// TOEIC での見分け方・解き方
+    pub toeic: String,
+    /// 注意（無ければ空）
+    pub caution: String,
 }
 
 /// 文法タグ 1 件（`GET /api/grammar-tags`）。
@@ -731,7 +753,7 @@ pub struct GrammarTagInfo {
     pub aliases: Vec<String>,
     pub hint: String,
     #[serde(default)]
-    pub point: String,
+    pub guide: TagGuide,
     /// 履歴に出てきた回数（その文法項目を含む英文の数）
     pub count: u64,
 }

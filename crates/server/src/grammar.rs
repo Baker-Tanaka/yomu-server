@@ -1,12 +1,12 @@
 //! 文法タグ（data/grammar_tags.yaml）の読み込みと、LLM によるタグ付けの入出力。
 //!
-//! LLM に渡すのはタグの id / name / hint（このリポジトリで自作したもの）だけで、point は画面にだけ出す。
+//! LLM に渡すのはタグの id / name / hint（このリポジトリで自作したもの）だけで、guide は画面にだけ出す。
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
-use paper_reader_shared::ExplainTag;
+use paper_reader_shared::{ExplainTag, TagGuide};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -48,9 +48,9 @@ pub struct TagDef {
     #[serde(default)]
     pub aliases: Vec<String>,
     pub hint: String,
-    /// 画面に出す「つかみ方」。LLM には渡さない
+    /// 画面に出す解説。LLM には渡さない
     #[serde(default)]
-    pub point: String,
+    pub guide: TagGuide,
     /// このタグが付いたら一緒に付けるタグ（より一般的な項目）
     #[serde(default)]
     pub implies: Vec<String>,
@@ -110,7 +110,7 @@ impl GrammarData {
                     category: tag.category.clone(),
                     span: d.span.clone(),
                     hint: tag.hint.clone(),
-                    point: tag.point.clone(),
+                    guide: tag.guide.clone(),
                 })
             })
             .collect()
@@ -375,7 +375,11 @@ tags:
     name: 受動態
     category: 受動態
     hint: "be + p.p.。"
-    point: "つかみ方の文。"
+    guide:
+      summary: "画面だけの要約。"
+      examples:
+        - en: "It is done."
+          ja: "終わった。"
   - id: appositive-that
     name: 同格の that
     category: 論文構文
@@ -396,6 +400,25 @@ tags:
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/grammar_tags.yaml");
         let g = GrammarData::load(&path).unwrap();
         assert!(g.tags.len() >= 60, "{}", g.tags.len());
+        // すべてのタグに解説がそろっている（caution だけは省略できる）
+        for t in &g.tags {
+            let guide = &t.guide;
+            for (field, value) in [
+                ("summary", &guide.summary),
+                ("form", &guide.form),
+                ("toeic", &guide.toeic),
+            ] {
+                assert!(!value.trim().is_empty(), "{}: {field}", t.id);
+            }
+            assert!(!guide.examples.is_empty(), "{}: examples", t.id);
+            for e in &guide.examples {
+                assert!(
+                    !e.en.trim().is_empty() && !e.ja.trim().is_empty(),
+                    "{}",
+                    t.id
+                );
+            }
+        }
         // すべてのカテゴリにタグがある
         for cat in CATEGORIES {
             assert!(g.tags.iter().any(|t| t.category == *cat), "{cat}");
@@ -539,17 +562,20 @@ tags:
         assert_eq!(ids.as_array().unwrap().len(), 5);
         let prompt = tagging_system_prompt(&g);
         assert!(prompt.contains("relative-adverb: 関係副詞"));
-        // point は画面用で、タグ付けのプロンプトには入れない
-        assert!(!prompt.contains("つかみ方の文"));
-        assert_eq!(
-            g.resolve(&[DetectedTag {
+        // guide は画面用で、タグ付けのプロンプトには入れない
+        assert!(!prompt.contains("画面だけの要約"));
+        assert!(!prompt.contains("It is done."));
+        let guide = g
+            .resolve(&[DetectedTag {
                 tag_id: "passive".into(),
                 span: String::new(),
                 confidence: 0.9,
-            }])[0]
-                .point,
-            "つかみ方の文。"
-        );
+            }])
+            .remove(0)
+            .guide;
+        assert_eq!(guide.summary, "画面だけの要約。");
+        assert_eq!(guide.examples[0].ja, "終わった。");
+        assert_eq!(guide.caution, "");
     }
 
     #[test]

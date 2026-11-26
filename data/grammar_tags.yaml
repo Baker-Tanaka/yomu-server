@@ -6,8 +6,10 @@
 #     時制 / 仮定法 / 助動詞 / 不定詞 / 動名詞 / 分詞 / 受動態 / 関係詞 / 比較 / 冠詞・名詞 / 名詞 / 代名詞 /
 #     形容詞 / 副詞・語法 / 前置詞 / 接続詞 / 文型・語法 / 論文構文
 # - aliases: 別名（タグ付けの手がかり）
-# - hint: LLM 向けの 1 行説明（一般的な英文法の知識で自作したもの。市販の教材の内容は書かない）
-# - point: 画面に出す「つかみ方」（省略可）。LLM には渡さないので、タグ付けのプロンプトは長くならない
+# - hint: LLM 向けの 1 行説明（一般的な英文法の知識で自作したもの。市販の教材の内容は書かない）。画面には guide が無いときだけ出す
+# - guide: 画面に出す解説（TOEIC 対策向けに自作したもの）。LLM には渡さないので、タグ付けのプロンプトは長くならない
+#     summary: ひとことで / form: 形 / examples: 例文（en, ja） / toeic: TOEIC での見分け方 / caution: 注意（省略可）
+#     記事や市販の教材の文章・例文は写さない
 # - implies: このタグが付いたら一緒に付けるタグ（より一般的な項目。省略可）
 #
 # このファイルを変えると、文の解説キャッシュのキーが変わる（作り直される）。
@@ -19,31 +21,72 @@ tags:
     category: 時制
     aliases: [have p.p., 継続・経験・完了・結果]
     hint: "have/has + 過去分詞。過去の出来事が現在とつながっている（継続・経験・完了・結果）ことを表す。"
-    point: "訳語や用法の分類より、「過去から今まで幅があり、話の中心は今」とつかむ。過去形は過去の出来事だけを述べ、今どうなのかは示さない。"
+    guide:
+      summary: "過去のことを「今とつなげて」述べる形。"
+      form: "have / has + 過去分詞"
+      examples:
+        - en: "Sales have increased since April."
+          ja: "4月以降、売上は伸びている。"
+        - en: "We have already received your order."
+          ja: "ご注文はすでに承っております。"
+      toeic: "since 〜（〜以来）や over the past three years（過去3年で）があれば、現在完了（現在完了進行形を含む）を第一候補にする。already / yet / so far も手がかり。"
+      caution: "yesterday、last week、in 2020、three days ago のように過去の一点を示す語があれば、過去形を使う。"
   - id: past-perfect
     name: 過去完了
     category: 時制
     aliases: [had p.p., 大過去]
     hint: "had + 過去分詞。過去のある時点より前の出来事や、その時点までの継続を表す。"
-    point: "現在完了の「幅」を、そのまま過去の側へずらした形。基準になる過去の時点がどこかを探す。"
+    guide:
+      summary: "過去のある時点より「さらに前」を表す形。"
+      form: "had + 過去分詞"
+      examples:
+        - en: "The meeting had already started when I arrived."
+          ja: "私が着いたとき、会議はもう始まっていた。"
+      toeic: "by the time + 過去形、before + 過去形 などで基準になる過去の時点を見つける。それより前に起きた側の動詞が had + 過去分詞。"
+      caution: "過去のことが2つあるだけで使うとは限らない。before や after で前後が明らかなときは、過去形ですむことも多い。"
   - id: future-perfect
     name: 未来完了
     category: 時制
     aliases: [will have p.p.]
     hint: "will have + 過去分詞。未来のある時点までに完了・継続していることを表す。"
-    point: "現在完了の「幅」を未来の側へずらした形。未来のどの時点までの話かを確かめる。"
+    guide:
+      summary: "未来の期限までに「終わっている・続いている」ことを表す形。"
+      form: "will have + 過去分詞"
+      examples:
+        - en: "By next Friday, we will have shipped all the orders."
+          ja: "来週の金曜までに、すべての注文を発送し終えます。"
+      toeic: "by + 未来の時点、by the time + 現在形 があれば、will have + 過去分詞を考える。"
+      caution: "by the time の節の中は、未来のことでも現在形にする。"
   - id: progressive
     name: 進行形
     category: 時制
     aliases: [be doing, 現在進行形, 過去進行形, 予定を表す進行形]
     hint: "be + 現在分詞。ある時点で動作が進行中であること、一時的な状態、すでに準備が進んでいる予定を表す。状態を表す動詞はふつう進行形にしない。"
-    point: "中心は「途中」。動作が少しでも進んでいると考えられるので、手配が始まった予定にも使える。状態そのものを表す動詞（resemble など）は途中を考えにくい。"
+    guide:
+      summary: "動作が「途中」であることを表す形。決まった予定にも使う。"
+      form: "be + 〜ing（時制は be で表す）"
+      examples:
+        - en: "We are currently reviewing your application."
+          ja: "ただいまお申し込みを審査中です。"
+        - en: "I am meeting the client tomorrow."
+          ja: "明日、顧客と会う予定です。"
+      toeic: "currently や at the moment は現在進行形の手がかり。過去のある時点で進行中なら was / were 〜ing。予定表にある未来の予定にも現在進行形が使われる。"
+      caution: "know、own、belong のように状態を表す動詞は、ふつう進行形にしない。"
   - id: time-condition-clause
     name: 時・条件の副詞節
     category: 時制
     aliases: [when/if 節の現在形, 未来のことを現在形で]
     hint: "when, if, once, until などが導く副詞節では、未来のことでも現在形（現在完了形）を使う。"
-    point: "現在形になるのは副詞節の中だけで、主節の未来は未来の形で表す。同じ when や if でも、名詞節（いつ〜か・〜かどうか）なら未来のことは will で表す。"
+    guide:
+      summary: "「〜するとき」「もし〜なら」の節では、未来のことも現在形。"
+      form: "when / if / once / until / as soon as など + 現在形, 主節は will など"
+      examples:
+        - en: "We will contact you as soon as the item arrives."
+          ja: "商品が届きしだい、ご連絡します。"
+        - en: "If it rains tomorrow, the event will be held indoors."
+          ja: "明日雨なら、催しは屋内で行います。"
+      toeic: "空所が when、if、before、after、until、once、as soon as、by the time、unless の節の中にあれば、まず will の入った選択肢を外し、現在の話や未来の話なら現在形（完了を表すなら現在完了）を選ぶ。"
+      caution: "同じ if や when でも「〜かどうか」「いつ〜するか」の意味（名詞節）なら、未来は will で表す。例: I don't know when he will arrive."
 
   # ── 仮定法 ──
   - id: subjunctive-past
@@ -51,24 +94,57 @@ tags:
     category: 仮定法
     aliases: [If S 過去形, S would do]
     hint: "If + S + 過去形, S + would/could + 原形。現在の事実に反する仮定を表す。be 動詞は主語にかかわらず were を使うことが多い。"
-    point: "時制を一つ過去へずらして「現実ではなく想定の話」と示す。名前は過去でも、内容は今のこと。"
+    guide:
+      summary: "「今は事実と違うけれど、もし〜なら」という想定。"
+      form: "If + S + 過去形, S + would / could / might + 動詞の原形"
+      examples:
+        - en: "If we had more staff, we could finish the project sooner."
+          ja: "もっと人手があれば、その企画を早く終えられるのに。"
+      toeic: "主節の would / could + 原形と、if 節の過去形はセット。片方が空所なら、もう片方の形から決める。"
+      caution: "形は過去でも、意味は今の話。be 動詞は主語が I や it でも were を使うことがある。"
   - id: subjunctive-past-perfect
     name: 仮定法過去完了
     category: 仮定法
     aliases: [If S had p.p., would have p.p.]
     hint: "If + S + had 過去分詞, S + would have 過去分詞。過去の事実に反する仮定を表す。"
-    point: "過去の事実と違う想定は、さらにずらして had p.p. にする。名前は形に、意味は一つ手前の時にある。"
+    guide:
+      summary: "「あのとき、もし〜だったら」と過去の事実に反する想定をする形。"
+      form: "If + S + had + 過去分詞, S + would / could / might have + 過去分詞"
+      examples:
+        - en: "If we had left earlier, we would have caught the train."
+          ja: "もっと早く出ていれば、電車に間に合ったのに。"
+      toeic: "would have + 過去分詞が見えたら、if 節は had + 過去分詞が基本。逆も同じ。"
+      caution: "主節が「今」の話（now など）なら、would + 原形になる。例: If I had taken that job, I would live in Osaka now."
   - id: if-omission-inversion
     name: if の省略と倒置
     category: 仮定法
     aliases: [Had S p.p., Were S to, Should S]
     hint: "仮定法の if を省略すると、Were/Had/Should が主語の前に出る（例: Had we known, ... / Should any error occur, ...）。"
-    point: "文頭が Were / Had / Should なのに疑問文でなければ、if の省略を疑う。語順を戻して if を補うと読める。"
+    guide:
+      summary: "if を省くと、Should / Were / Had が主語の前に出る。"
+      form: "Should + S + 原形 / Were + S ... / Had + S + 過去分詞"
+      examples:
+        - en: "Should you have any questions, please contact us."
+          ja: "ご不明な点がございましたら、お問い合わせください。"
+        - en: "Had we known about the delay, we would have changed the schedule."
+          ja: "遅れを知っていたら、日程を変えていたでしょう。"
+      toeic: "文頭が空所で、後ろが「主語 + 動詞の原形, please 〜」なら Should を考える。ビジネス文書の定型表現。had + 過去分詞が後ろにある形なら Had。"
+      caution: "疑問文と同じ語順でも、文末が「?」でなければ条件を表している。if を補って読むとよい。"
   - id: subjunctive-idioms
     name: 仮定法を含む慣用表現
     category: 仮定法
     aliases: [I wish, as if, it is time, without, but for]
     hint: "I wish / as if / It is time / without・but for など、仮定法を使う決まった言い方。"
+    guide:
+      summary: "I wish や as if など、仮定法と一緒に使う決まった言い方。"
+      form: "I wish + 過去形 / as if + 過去形 / without・but for + 名詞, S would ..."
+      examples:
+        - en: "Without your support, we could not have completed the project."
+          ja: "ご支援がなければ、この企画は完了できませんでした。"
+        - en: "I wish I could attend the conference."
+          ja: "その会議に出席できたらいいのですが。"
+      toeic: "without や but for で始まる文は、主節の形を確かめる。今の話なら would + 原形、過去の話なら would have + 過去分詞。"
+      caution: "as if の後は、事実かもしれない内容なら直説法も使う。"
 
   # ── 助動詞 ──
   - id: modal-inference
@@ -76,17 +152,46 @@ tags:
     category: 助動詞
     aliases: [may, might, could, must, should, can't]
     hint: "may・might・could・must・should・can't などで、確信の度合いを伴う推量を表す。論文では主張を和らげる（ヘッジ）用法が多い。"
+    guide:
+      summary: "「どれくらい確かだと思うか」を助動詞で表す。"
+      form: "may / might / could / must / should / can't + 動詞の原形"
+      examples:
+        - en: "The shipment may be delayed because of the storm."
+          ja: "嵐のため、配送は遅れるかもしれません。"
+        - en: "The package should arrive by Monday."
+          ja: "荷物は月曜までに届くはずです。"
+      toeic: "Part 7 では確かさの強さを読み分ける。must（〜に違いない）が強く、should（〜のはず）、may・might・could（〜かもしれない）は弱め。can't は「〜のはずがない」。論文では断定を避けるためによく使う。"
+      caution: "同じ語が許可や義務の意味にもなる（may = 〜してもよい、must = 〜しなければならない）。文脈で判断する。"
   - id: modal-have-pp
     name: 助動詞+have p.p.
     category: 助動詞
     aliases: [must have p.p., may have p.p., should have p.p.]
     hint: "助動詞 + have + 過去分詞。過去の事柄についての推量や、実現しなかったことへの後悔・非難を表す。"
+    guide:
+      summary: "過去のことへの推量や、「〜すべきだったのに」を表す。"
+      form: "助動詞 + have + 過去分詞"
+      examples:
+        - en: "You should have received a confirmation e-mail."
+          ja: "確認メールが届いているはずです。"
+        - en: "He must have missed the train."
+          ja: "彼は電車に乗り遅れたに違いない。"
+      toeic: "must have（〜したに違いない）、may / might have（〜したかもしれない）、should have（〜すべきだったのに／〜したはずだ）、cannot have（〜したはずがない）を意味で区別する。過去の話の空所では候補になる。"
+      caution: "should have は「しなかった後悔」と「完了しているはず」の両方がある。前後の内容で決める。"
   - id: modal-will
     name: will の用法
     category: 助動詞
     aliases: [意志, 予測, 習性, 拒絶, "won't"]
     hint: "will は意志・確信のある予測・習性を表し、否定の won't は拒絶（どうしても〜しない）も表す。"
-    point: "根っこは「きっとそうする・そうなる」という強い見込みや意志。予測・習性・拒絶はそこからの広がりと考える。"
+    guide:
+      summary: "will の中心は「きっとそうする・そうなる」という意志や見込み。"
+      form: "will + 動詞の原形（否定は will not / won't）"
+      examples:
+        - en: "I will send you the revised estimate today."
+          ja: "本日、修正した見積書をお送りします。"
+        - en: "The printer won't start."
+          ja: "プリンターがどうしても起動しない。"
+      toeic: "メールや会話では、その場で決めた申し出（I'll 〜）や、未来の予告（The office will be closed.）として出る。tomorrow や next week があり、時・条件の副詞節の外なら、未来の形が候補。"
+      caution: "won't は「〜しないだろう」のほか、「どうしても〜しない」という拒絶も表す。"
 
   # ── 不定詞 ──
   - id: infinitive-noun
@@ -94,39 +199,102 @@ tags:
     category: 不定詞
     aliases: [to do（〜すること）]
     hint: "to + 原形が「〜すること」として主語・目的語・補語になる。"
-    point: "to 不定詞には「これから向かう先」という感覚があり、これからの行為や目標を表す場面でよく合う。"
+    guide:
+      summary: "to + 動詞が「〜すること」になり、主語・目的語・補語になる。"
+      form: "to + 動詞の原形"
+      examples:
+        - en: "We plan to open a new branch next year."
+          ja: "来年、新しい支店を開く予定です。"
+      toeic: "plan、decide、hope、expect、agree、offer、refuse などの後の空所は、to + 原形が候補。これから先のことを表す動詞に多い。"
+      caution: "enjoy や finish の後は to ではなく 〜ing（動名詞）。"
   - id: infinitive-adjective
     name: 不定詞の形容詞的用法
     category: 不定詞
     aliases: [to do（〜するための・〜すべき）]
     hint: "to + 原形が直前の名詞を後ろから修飾する（a way to solve ...）。"
+    guide:
+      summary: "to + 動詞が、前の名詞を「〜するための・〜すべき」と説明する。"
+      form: "名詞 + to + 動詞の原形"
+      examples:
+        - en: "We need a better way to track orders."
+          ja: "注文を追跡する、もっと良い方法が必要だ。"
+      toeic: "ability、opportunity、plan、effort、decision などの名詞の後の空所は、to + 原形が候補。the first / the last + 名詞の後でもよく使う。"
+      caution: "名詞の後なら何でも to ではない。方法は a way to do と a way of doing の両方があるが、possibility of doing のように of を使う名詞もある。"
   - id: infinitive-adverb
     name: 不定詞の副詞的用法
     category: 不定詞
     aliases: [目的, 結果, 原因, in order to]
     hint: "to + 原形が動詞や文を修飾し、目的（〜するために）・結果・原因・判断の根拠などを表す。"
+    guide:
+      summary: "to + 動詞が「〜するために」などの意味で、動詞や文を説明する。"
+      form: "to + 動詞の原形（in order to も同じ目的の意味）"
+      examples:
+        - en: "To receive a discount, please enter the code below."
+          ja: "割引を受けるには、下のコードを入力してください。"
+        - en: "We are pleased to announce our new service."
+          ja: "新サービスをお知らせできることを、うれしく思います。"
+      toeic: "文がそろっているのに、文頭や文末に動詞を入れる空所があれば、to + 原形（目的）をまず考える。be pleased to、be happy to は感情の理由を表す定番。"
+      caution: "文頭の To 〜 は、後にカンマと主節が続けば目的。後にすぐ述語動詞が続けば「〜することは」という主語。"
   - id: infinitive-subject
     name: 不定詞の意味上の主語
     category: 不定詞
     aliases: [for A to do, of A to do]
     hint: "for + A + to do の形で、不定詞の動作をする人・物を示す。"
+    guide:
+      summary: "to の動作を「だれがするのか」を、for や of で示す。"
+      form: "for + 人・物 + to do（人の性格を述べる kind などの後は of + 人 + to do）"
+      examples:
+        - en: "It is necessary for all employees to attend the training."
+          ja: "全社員がその研修に出席する必要があります。"
+        - en: "It was kind of you to help us."
+          ja: "手伝ってくださって、ご親切にありがとうございました。"
+      toeic: "It is + 形容詞 + (空所) + 人 + to do の形なら、necessary や important などは for、kind、generous、careless など人の性格や態度を表す語は of。"
+      caution: "for + 人は to の動作をする側。文全体の主語とは別。"
   - id: bare-infinitive
     name: 原形不定詞
     category: 不定詞
     aliases: [help O do, make O do]
     hint: "to の付かない動詞の原形。使役動詞・知覚動詞・help の後などで使う。"
+    guide:
+      summary: "使役動詞などの後では、to を付けずに動詞の原形を置く。"
+      form: "make / let / have + O + 原形、help + (O) +（to）原形"
+      examples:
+        - en: "The manager had her assistant book the flight."
+          ja: "部長は助手に航空券を予約させた。"
+        - en: "This software helps users manage their schedules."
+          ja: "このソフトは、利用者の予定管理に役立つ。"
+      toeic: "make、let、have + 人 + (空所) なら原形が候補。help は原形も to do も正しい。"
+      caution: "同じ「させる」でも、get、ask、allow、encourage は O + to do。受動態では to が戻る（be made to do）。"
   - id: infinitive-so-as-to
     name: so as to / so ... as to
     category: 不定詞
     aliases: [so as to do, so ~ as to do, 目的, 結果・程度]
     hint: "so as to + 原形は目的（〜するために）、so + 形容詞・副詞 + as to + 原形は程度・結果（〜するほど…）を表す。"
-    point: "so as to のように語が続けば目的。so と as to が離れ、間に形容詞・副詞があれば、程度とその結果として読む。so that と so ... that の関係に似ている。"
+    guide:
+      summary: "so as to は「〜するために」、so ... as to は「〜するほど…」。"
+      form: "so as to + 原形 / so + 形容詞・副詞 + as to + 原形"
+      examples:
+        - en: "We left early so as to avoid the traffic."
+          ja: "渋滞を避けるために、早く出た。"
+        - en: "Would you be so kind as to send me the file?"
+          ja: "ファイルを送っていただけますでしょうか。"
+      toeic: "目的を表す to、in order to、so as to は後ろが動詞の原形。後ろが「主語 + 動詞」なら so that を選ぶ。"
+      caution: "否定は so as not to do（〜しないように）。so と as が離れているときは、程度・結果として読む。"
   - id: infinitive-idioms
     name: 不定詞を含む慣用表現
     category: 不定詞
     aliases: [be supposed to, be likely to, All S have to do is]
     hint: "be supposed to（〜することになっている）、be likely to（〜しそうだ）、All S have to do is (to) do（S は〜しさえすればよい）などの決まった言い方。"
-    point: "丸暗記の前に構造を見る。All S have to do は「S がしなければならないことはそれだけ」。be supposed to は「〜するとされている」から、予定や義務の意味に広がる。"
+    guide:
+      summary: "to を含んだまま、ひとかたまりで覚えたい表現。"
+      form: "be scheduled to / be expected to / be likely to / be supposed to + 原形、All S have to do is (to) do"
+      examples:
+        - en: "The new store is scheduled to open in May."
+          ja: "新店舗は5月に開店する予定です。"
+        - en: "All you have to do is fill out this form."
+          ja: "この用紙に記入するだけで結構です。"
+      toeic: "be scheduled to、be expected to、be required to、be eligible to、be able to、be willing to は、まとめて覚える。be の後の分詞や形容詞を見たら、to + 原形が続くかを確かめる。"
+      caution: "be used to + 原形は「〜するために使われる」。be used to + 〜ing は「〜に慣れている」で別の表現。"
 
   # ── 動名詞 ──
   - id: gerund-subject-object
@@ -134,19 +302,46 @@ tags:
     category: 動名詞
     aliases: [doing（〜すること）, 前置詞+動名詞]
     hint: "動詞の -ing 形が名詞として主語・目的語・前置詞の目的語になる（by using ..., Training the model is ...）。"
-    point: "動詞を名詞にした形。前置詞の後に動作を置くときは -ing にする。be used to や look forward to の to は前置詞。"
+    guide:
+      summary: "動詞に -ing を付けて「〜すること」という名詞にした形。"
+      form: "〜ing（主語・目的語・前置詞の後に置く）"
+      examples:
+        - en: "By ordering online, you can save time."
+          ja: "オンラインで注文すれば、時間を節約できます。"
+        - en: "Hiring new staff takes time."
+          ja: "新しい人を採用するのは時間がかかる。"
+      toeic: "前置詞の直後の空所で、後ろに目的語があれば動名詞を選ぶ（by reducing costs）。同じ位置でも、後ろに目的語がなく the や形容詞が前にあれば、名詞（reduction）を考える。"
+      caution: "look forward to、be committed to、be used to（〜に慣れている）の to は前置詞なので、後ろは 〜ing。"
   - id: gerund-vs-infinitive
     name: 動名詞と不定詞の使い分け
     category: 動名詞
     aliases: [enjoy doing, decide to do, stop doing / stop to do]
     hint: "目的語に動名詞をとる動詞と不定詞をとる動詞の区別、どちらもとるが意味が変わる動詞。"
-    point: "傾向として、to 不定詞は「これからすること」（希望・意図・申し出）、動名詞は繰り返し・中止・回避の対象と結びつきやすい。例外もあるので手がかりとして使う。"
+    guide:
+      summary: "後に 〜ing と to do のどちらを置くかは、前の動詞で決まる。"
+      form: "動詞 + 〜ing / 動詞 + to do"
+      examples:
+        - en: "We are considering moving our office."
+          ja: "オフィスの移転を検討しています。"
+        - en: "They decided to postpone the launch."
+          ja: "発売の延期を決めた。"
+      toeic: "〜ing をとる: enjoy、finish、avoid、consider、suggest、recommend、postpone、mind。to do をとる: decide、plan、hope、expect、agree、offer、refuse、fail。空所の直前の動詞を見て選ぶ。"
+      caution: "remember / forget は 〜ing が「したこと」、to do が「これからすること」。stop doing は「〜するのをやめる」、stop to do は「〜するために立ち止まる・手を止める」。"
   - id: gerund-idioms
     name: 動名詞の慣用表現
     category: 動名詞
     aliases: [on doing, spend time doing, be busy doing, have difficulty doing]
     hint: "on doing（〜するとすぐに）、spend 時間 (in) doing（〜して時間を費やす）、have difficulty (in) doing（〜するのに苦労する）などの決まった言い方。"
-    point: "on は「接している」が基本の感覚で、on doing は二つの出来事が間を置かずに続くことを表す。spend や busy の後の in はよく省略される。"
+    guide:
+      summary: "-ing と組み合わせて使う決まった言い方。"
+      form: "spend + 時間・お金 +（in）〜ing / have difficulty（in）〜ing / be busy 〜ing / on 〜ing"
+      examples:
+        - en: "We spent two weeks preparing the proposal."
+          ja: "提案書の準備に2週間かけた。"
+        - en: "On arriving at the hotel, please show your ID."
+          ja: "ホテルに着いたら、身分証を提示してください。"
+      toeic: "spend 時間、have difficulty / trouble、be busy の後の空所は 〜ing が候補。on / upon 〜ing は「〜するとすぐに・〜したら」。"
+      caution: "文中の in はよく省略される。in がなくても to do にはしない。"
 
   # ── 分詞 ──
   - id: present-participle-postmodifier
@@ -154,37 +349,87 @@ tags:
     category: 分詞
     aliases: [名詞 + doing]
     hint: "名詞 + 現在分詞（+ 語句）で「〜している名詞」と後ろから修飾する（models using attention）。"
-    point: "分詞は名詞を説明する側。名詞の後ろの -ing を述語動詞と取り違えないよう、文の本当の動詞を先に探す。"
+    guide:
+      summary: "名詞の後の 〜ing が「〜している名詞」と説明する。"
+      form: "名詞 + 〜ing + 語句"
+      examples:
+        - en: "Employees working remotely must submit a weekly report."
+          ja: "在宅で働く社員は、週次報告を提出しなければならない。"
+      toeic: "文に述語動詞（上の例では must submit）がもうあるなら、名詞の後の空所は分詞。名詞が「する」側なら 〜ing。空所の後に目的語があることも手がかりになる。"
+      caution: "名詞の後の 〜ing を、文の述語と読み違えない。"
   - id: past-participle-postmodifier
     name: 過去分詞の後置修飾
     category: 分詞
     aliases: [名詞 + p.p.]
     hint: "名詞 + 過去分詞（+ 語句）で「〜された名詞」と後ろから修飾する（the method proposed in [3]）。"
-    point: "過去形と同じ形のことがある。後ろに文の本当の動詞があれば、手前の語は名詞を説明する過去分詞。"
+    guide:
+      summary: "名詞の後の過去分詞が「〜された名詞」と説明する。"
+      form: "名詞 + 過去分詞 + 語句"
+      examples:
+        - en: "All items purchased online can be returned within 30 days."
+          ja: "オンラインで購入した全商品は、30日以内なら返品できます。"
+      toeic: "文の述語が別にあるなら、名詞の後の空所は分詞。名詞が「される」側で、他動詞なのに後ろに目的語がなければ過去分詞を選ぶ。"
+      caution: "過去形と同じ形の語が多い。後ろに本当の述語があれば、手前の語は過去分詞。"
   - id: participial-construction
     name: 分詞構文
     category: 分詞
     aliases: [doing ..., S V, 付帯状況]
     hint: "分詞で始まる句が副詞として働き、時・理由・付帯状況・結果などを表す（..., achieving state-of-the-art results）。"
-    point: "主節の主語を分詞の前に置いてみる。主語が「する」関係なら -ing、「される」関係なら p.p.（being が省略された形）。"
+    guide:
+      summary: "分詞のまとまりが、「〜しながら・〜なので」などと文を説明する。"
+      form: "〜ing ... , S + V / 過去分詞 ... , S + V / S + V ... , 〜ing"
+      examples:
+        - en: "Located near the station, the hotel is popular with business travelers."
+          ja: "駅の近くにあるため、そのホテルは出張客に人気だ。"
+        - en: "Sales rose sharply, exceeding our target."
+          ja: "売上は急増し、目標を上回った。"
+      toeic: "文頭の空所は、まず主節の主語を見る。主語が「する」側なら 〜ing、「される」側なら過去分詞（上の例は、ホテルが置かれている側）。when や while の後でも同じ考え方（When using the machine, ...）。"
+      caution: "分詞の主語は、原則として主節の主語と同じ。時・理由などの意味は文脈で決める。"
   - id: perfect-participle
     name: 完了形の分詞構文
     category: 分詞
     aliases: [having p.p., 完了分詞]
     hint: "Having + 過去分詞 で始まる分詞構文。主節より前に起きたことを表す（Having trained the model, ...）。"
+    guide:
+      summary: "Having + 過去分詞で「〜した後で・〜したので」と先の出来事を表す。"
+      form: "Having + 過去分詞 ... , S + V"
+      examples:
+        - en: "Having reviewed the contract, we are ready to sign it."
+          ja: "契約書を確認しましたので、署名の準備ができています。"
+      toeic: "主節より前に終わったことを表し、主節の主語がその動作をする。Part 7 では「〜してから／〜したので」と読めばよい。"
+      caution: "否定は Not having + 過去分詞。"
     implies: [participial-construction]
   - id: absolute-participial
     name: 独立分詞構文
     category: 分詞
     aliases: [with O doing, 意味上の主語つきの分詞構文]
     hint: "分詞の前に主節と異なる意味上の主語が置かれた分詞構文（all things considered, with X increasing ...）。"
+    guide:
+      summary: "分詞の前に、主節とは別の主語が付いた形。"
+      form: "別の主語 + 分詞 ... , S + V / with + 名詞 + 分詞"
+      examples:
+        - en: "Weather permitting, the event will be held outdoors."
+          ja: "天気がよければ、催しは屋外で行います。"
+        - en: "With sales increasing, the company plans to hire more staff."
+          ja: "売上が伸びているので、会社は増員する予定だ。"
+      toeic: "Part 7 の読解で「だれが何をして」を取り違えないことが大事。分詞の直前の名詞が、その分詞の主語。Weather permitting はそのまま覚える。"
+      caution: "with + 名詞 + 分詞は「〜した状態で・〜なので」。名詞がする側なら 〜ing、される側なら過去分詞。"
     implies: [participial-construction]
   - id: emotion-participle
     name: 感情を表す分詞
     category: 分詞
     aliases: [surprising / surprised, interesting / interested, confusing / confused]
     hint: "感情を引き起こす意味の他動詞の分詞。-ing は「（人を）〜させるような」、-ed は「〜させられた（〜している）」を表す。"
-    point: "人か物かではなく、感情を「引き起こす側」なら -ing、「受ける側」なら -ed。人が主語でも、周りにその感情を起こすなら -ing になる。"
+    guide:
+      summary: "気持ちを起こす側は -ing、気持ちを感じる側は -ed。"
+      form: "-ing（〜させるような） / -ed（〜している・〜させられた）"
+      examples:
+        - en: "The sales results were disappointing."
+          ja: "売上の結果は期待外れだった。"
+        - en: "We were disappointed with the sales results."
+          ja: "私たちは売上の結果にがっかりした。"
+      toeic: "interesting / interested、satisfying / satisfied などが選択肢に並んだら、修飾される名詞や主語が気持ちを「起こす」か「感じる」かを確かめる。satisfied customers は「満足した客」。"
+      caution: "人なら必ず -ed とは限らない。an interesting speaker は「聞き手の興味を引く話し手」。"
 
   # ── 受動態 ──
   - id: passive
@@ -192,13 +437,31 @@ tags:
     category: 受動態
     aliases: [be p.p.]
     hint: "be + 過去分詞。動作を受ける側を主語にする。論文では手順や結果の記述で多用される。"
-    point: "行為者が分かりきっている、重要でない、示したくないときに使いやすく、by 〜 がないことも多い。わざわざ by 〜 を置けば、その行為者に注目が向く。"
+    guide:
+      summary: "「〜される」の形。動作を受ける側が主語になる。"
+      form: "be + 過去分詞（行う人は必要なら by 〜）"
+      examples:
+        - en: "The report will be submitted by Friday."
+          ja: "報告書は金曜までに提出されます。"
+        - en: "All visitors are required to wear a badge."
+          ja: "来訪者は全員、バッジの着用が必要です。"
+      toeic: "動詞の形を選ぶ問題では、空所の後を見る。他動詞なのに目的語がなければ受動態、目的語があれば能動態が基本。次に、時を示す語で時制を決める。"
+      caution: "send や offer のように目的語を2つとる動詞は、受動態でも目的語が1つ残る。happen、arrive などの自動詞は受動態にしない。"
   - id: passive-progressive-perfect
     name: 受動態の進行形・完了形
     category: 受動態
     aliases: [be being p.p., have been p.p.]
     hint: "be being + 過去分詞（進行形）、have been + 過去分詞（完了形）の受動態。"
-    point: "being があれば「されている最中」、have been なら「されて今に至る・すでにされた」。時制が複雑に見えても、まず主語が「する側か、される側か」を確かめる。"
+    guide:
+      summary: "「今〜されている最中」「〜されてしまった」を表す受動態。"
+      form: "be being + 過去分詞（最中） / have been + 過去分詞（完了・継続）"
+      examples:
+        - en: "The elevator is being repaired."
+          ja: "エレベーターは修理中です。"
+        - en: "Your order has been shipped."
+          ja: "ご注文の品は発送されました。"
+      toeic: "Part 1 の写真では、is being + 過去分詞は「人が今その作業をしている場面」を指すのが基本。Part 5 では、受け身かどうかを決めてから、時制を決める。"
+      caution: "is being displayed のように、状態を述べる文で使われる動詞もある。写真に作業中の人がいなくても、すぐに誤りと決めない。"
     implies: [passive]
 
   # ── 関係詞 ──
@@ -207,32 +470,87 @@ tags:
     category: 関係詞
     aliases: [who, which, that, 目的格の省略, 接触節]
     hint: "who/which/that が先行詞を修飾する節を導く。目的格の関係代名詞は省略されることが多い（the method we propose = the method that we propose）。"
-    point: "関係詞節は前の名詞を説明するまとまり。前から読むときは名詞でいったん区切り、後ろを説明として足していく。先行詞の直後の that の次に動詞があれば、主格の関係代名詞を疑う。"
+    guide:
+      summary: "前の名詞（先行詞）に、後ろから文で説明を足す。"
+      form: "人 + who / 物 + which / どちらにも that（目的格は whom / which / that で省略可）"
+      examples:
+        - en: "We are looking for someone who can speak Chinese."
+          ja: "中国語を話せる人を探しています。"
+        - en: "The laptop (that) I ordered has not arrived yet."
+          ja: "注文したノートパソコンがまだ届かない。"
+      toeic: "空所の後ろが動詞なら主格（who / which / that）。「主語 + 動詞」で目的語が欠けていれば目的格（whom / which / that）。次に、先行詞が人か物かで選ぶ。"
+      caution: "the staff you need のように、名詞の直後に「主語 + 動詞」が続けば、目的格の省略を疑う。"
   - id: relative-whose
     name: 関係代名詞 whose
     category: 関係詞
     aliases: [所有格の関係代名詞]
     hint: "whose + 名詞 で、先行詞の所有するものについて説明する節を導く。"
+    guide:
+      summary: "whose は「その人（物）の〜」とつなぐ。"
+      form: "先行詞 + whose + 名詞 + ..."
+      examples:
+        - en: "Customers whose membership has expired must register again."
+          ja: "会員資格が切れたお客様は、再登録が必要です。"
+      toeic: "空所の直後が冠詞のない名詞で、「先行詞の＋その名詞」とつながれば whose。先行詞は人でも物でもよい。"
+      caution: "who's は who is / who has の短縮形で、whose とは別。"
   - id: relative-what
     name: 関係代名詞 what
     category: 関係詞
     aliases: [what（〜すること・もの）]
     hint: "what は先行詞を含み「〜すること・もの」という名詞節を作る。"
+    guide:
+      summary: "what は「〜すること・もの」。前に先行詞がいらない。"
+      form: "what + 欠けのある文（= the thing(s) that ...）"
+      examples:
+        - en: "What we need now is more time."
+          ja: "今必要なのは、もっと時間があることだ。"
+        - en: "Please let us know what you think."
+          ja: "ご意見をお聞かせください。"
+      toeic: "空所の前に先行詞の名詞がなく、後ろの文で主語か目的語が欠けていれば what。前に名詞があれば which / that、後ろの文が欠けていなければ that や whether を考える。"
+      caution: "what の節は名詞の働きをするので、主語・目的語・補語になる。"
   - id: relative-adverb
     name: 関係副詞
     category: 関係詞
     aliases: [where, when, why, how]
     hint: "where/when/why/how が場所・時・理由・方法の先行詞を修飾する節を導く。"
+    guide:
+      summary: "場所・時・理由の名詞に、欠けのない文で説明を足す。"
+      form: "場所 + where / 時 + when / reason + why + 完全な文（how は the way と並べない）"
+      examples:
+        - en: "This is the room where the interviews will be held."
+          ja: "ここが面接を行う部屋です。"
+      toeic: "空所の後ろが完全な文なら関係副詞、主語や目的語が欠けていれば関係代名詞。先行詞が場所でも、後ろが欠けていれば which / that になる。"
+      caution: "the way how とは言わず、the way か how の一方を使う。"
   - id: non-restrictive
     name: 関係詞の非制限用法
     category: 関係詞
     aliases: ["カンマ + which", "カンマ + who", 継続用法]
     hint: "カンマの後の関係詞節で、先行詞（や前の文全体）に補足説明を加える。"
+    guide:
+      summary: "カンマの後の which / who は、補足を付け足す。"
+      form: "先行詞 , which / who + ...（, ）"
+      examples:
+        - en: "Our new office, which opens in June, is near the station."
+          ja: "当社の新オフィスは6月開業で、駅の近くにあります。"
+        - en: "Sales fell, which surprised the managers."
+          ja: "売上が落ち、そのことに管理職は驚いた。"
+      toeic: "カンマの直後の空所に that は入れられない。物なら which、人なら who。前から「そしてそれは〜」と読むと分かりやすい。"
+      caution: ", which は、直前の名詞だけでなく前の内容全体を受けることもある。"
   - id: preposition-relative
     name: 前置詞+関係代名詞
     category: 関係詞
     aliases: [in which, by which, of which]
     hint: "in which / by which など、前置詞が関係代名詞の前に出た形。"
+    guide:
+      summary: "関係代名詞の前に前置詞が出た形。"
+      form: "先行詞 + 前置詞 + which / whom + 完全な文"
+      examples:
+        - en: "The conference in which we participated was held in Singapore."
+          ja: "私たちが参加した会議は、シンガポールで開かれた。"
+        - en: "We hired two engineers, both of whom have overseas experience."
+          ja: "技術者を2人採用し、2人とも海外経験がある。"
+      toeic: "前置詞の直後の空所は、物なら which、人なら whom（that や who は入れない）。前置詞は、後ろの動詞や先行詞との組み合わせで決まる（participate in）。"
+      caution: "all of which、some of whom のように、数量を表す語と一緒にも使う。"
 
   # ── 比較 ──
   - id: comparison-as
@@ -240,21 +558,59 @@ tags:
     category: 比較
     aliases: [as ... as, not as ... as, 倍数表現]
     hint: "as + 原級 + as で同程度を表す。twice as ... as などの倍数表現も含む。"
+    guide:
+      summary: "as ... as で「同じくらい〜」を表す。"
+      form: "as + 形容詞・副詞の原級 + as / twice as ... as / not as ... as"
+      examples:
+        - en: "Please reply as soon as possible."
+          ja: "できるだけ早くご返信ください。"
+        - en: "The new model is not as expensive as the old one."
+          ja: "新型は旧型ほど高くない。"
+      toeic: "as と as の間は原級。比較級や最上級は入らない。形容詞か副詞かは、as を取り除いた文で決める（動詞を修飾するなら副詞）。"
+      caution: "twice、three times などの倍数は、最初の as の前に置く。"
   - id: comparative
     name: 比較級
     category: 比較
     aliases: [-er than, more ... than]
     hint: "比較級 + than で二者を比べる。much / significantly などで差の大きさを強める。"
+    guide:
+      summary: "2つを比べて「より〜」を表す。"
+      form: "比較級（-er / more ...）+ than"
+      examples:
+        - en: "This year's budget is much larger than last year's."
+          ja: "今年の予算は昨年より大幅に多い。"
+      toeic: "後ろに than があれば比較級。比較級を強めるのは much、far、even、still、a lot、significantly で、very は使えない。"
+      caution: "than がなくても、of the two があれば the + 比較級になる。"
   - id: superlative
     name: 最上級
     category: 比較
     aliases: [the -est, the most]
     hint: "the + 最上級で三者以上の中で最も〜であることを表す。"
+    guide:
+      summary: "3つ以上の中で「いちばん〜」を表す。"
+      form: "the + 最上級（-est / most ...）+ in / of / that 節"
+      examples:
+        - en: "This is the most popular item in our store."
+          ja: "これは当店で一番人気の商品です。"
+        - en: "It is the best proposal that we have ever received."
+          ja: "これまで受けた中で最良の提案です。"
+      toeic: "in + 場所・集団、of the three、of all、ever があれば最上級が候補。所有格の後は the を付けない（our latest model）。"
+      caution: "副詞の最上級は the がないこともある。one of the + 最上級の後は複数名詞。"
   - id: comparison-idioms
     name: 比較の慣用表現
     category: 比較
     aliases: [the 比較級, the 比較級, no more than, rather than]
     hint: "the + 比較級 ..., the + 比較級 ...（〜すればするほど…）や no more than などの決まった比較表現。"
+    guide:
+      summary: "比較の形を使った決まった言い方。"
+      form: "the + 比較級 ..., the + 比較級 ... / no later than / more than / rather than"
+      examples:
+        - en: "The sooner you register, the bigger the discount will be."
+          ja: "早く登録するほど、割引が大きくなります。"
+        - en: "Please submit the form no later than March 10."
+          ja: "3月10日までに用紙を提出してください。"
+      toeic: "文頭が The + 比較級なら、後半も the + 比較級。no later than（遅くとも〜までに）は期限の案内で出る。no more than は「〜にすぎない」、no less than は「〜も」。"
+      caution: "not more than（多くても〜）と no more than（〜しかない）は、感じが違う。"
 
   # ── 冠詞・名詞 / 名詞 ──
   - id: definite-article
@@ -262,11 +618,31 @@ tags:
     category: 冠詞・名詞
     aliases: [the]
     hint: "the は文脈で特定できるもの、唯一のもの、後ろの修飾語で限定されるものに付く。"
+    guide:
+      summary: "the は「どれのことか相手にも分かる」ときに付ける。"
+      form: "the + 名詞"
+      examples:
+        - en: "We received an order yesterday. The order will be shipped today."
+          ja: "昨日注文を受けました。その注文は本日発送します。"
+        - en: "Please check the schedule for next week."
+          ja: "来週の予定を確認してください。"
+      toeic: "Part 5 では the が直接問われるより、手がかりになる。a / an / the の後の空所には名詞のまとまりが入り、空所が最後なら名詞を選ぶ。Part 7 の the + 名詞は、前に出た物事を指していることが多い。"
+      caution: "初めて出る単数の可算名詞は a / an。同じ物を2回目に言うときは the。"
   - id: countable-uncountable
     name: 可算・不可算
     category: 名詞
     aliases: [数えられる名詞, 数えられない名詞]
     hint: "数えられる名詞と数えられない名詞の区別。data, information, research などの扱い。"
+    guide:
+      summary: "英語では、数えられない名詞に a や複数の -s を付けない。"
+      form: "可算: a report / reports　不可算: information / equipment"
+      examples:
+        - en: "For more information, please visit our website."
+          ja: "詳しくは当社のウェブサイトをご覧ください。"
+        - en: "We have purchased some new equipment."
+          ja: "新しい機器を購入しました。"
+      toeic: "information、equipment、furniture、advice、luggage、merchandise は不可算の定番。many / few / a number of は複数名詞、much / little / an amount of は不可算名詞に使う。単数の可算名詞は、冠詞などなしでは置けない。"
+      caution: "data は複数扱いと単数扱いの両方がある。research はふつう不可算（論文では researches としない）。"
 
   # ── 代名詞 ──
   - id: it-formal
@@ -274,21 +650,61 @@ tags:
     category: 代名詞
     aliases: [It is ... to do, It is ... that, make it possible to]
     hint: "It が後ろの不定詞・that 節を受ける形式主語、または make it ... to do の形式目的語。"
+    guide:
+      summary: "長い中身は後ろに回して、先に it を置く。"
+      form: "It is + 形容詞 + to do / that 節　　make / find + it + 形容詞 + to do"
+      examples:
+        - en: "It is important to back up your files."
+          ja: "ファイルのバックアップを取ることは大切です。"
+        - en: "The new system makes it easier to track expenses."
+          ja: "新しい仕組みで、経費の追跡が楽になる。"
+      toeic: "make / find +（空所）+ 形容詞 + to do の空所は it。後ろの to do や that 節が本当の中身だと分かれば、長い文も読める。"
+      caution: "make it easier の easier は形容詞。副詞の easily は入らない。"
   - id: one-another-other
     name: one / another / the other
     category: 代名詞
     aliases: [the others, others]
     hint: "one（不特定の 1 つ）、another（別の 1 つ）、the other（残りの 1 つ）、the others / others の区別。"
+    guide:
+      summary: "残りが決まっていれば the、決まっていなければ付けない。"
+      form: "one / another（別の1つ） / the other（残りの1つ） / others（ほかのいくつか） / the others（残り全部）"
+      examples:
+        - en: "I don't like this design. Could you show me another?"
+          ja: "このデザインは好みではありません。別のを見せてもらえますか。"
+        - en: "One of the two printers works, but the other is broken."
+          ja: "2台のプリンターの1台は動くが、もう1台は壊れている。"
+      toeic: "空所の後を見る。another + 単数名詞、other + 複数名詞・不可算名詞。後ろに名詞がなく複数の意味なら others か the others。"
+      caution: "another two weeks（さらに2週間）のように、数とまとまりの前にも使える。each other / one another は「お互い」。"
   - id: reflexive
     name: 再帰代名詞
     category: 代名詞
     aliases: [itself, themselves]
     hint: "-self / -selves。主語自身を目的語にするときや、強調に使う。"
+    guide:
+      summary: "-self は「自分自身を・自分で」。"
+      form: "myself / yourself / himself / herself / itself / ourselves / themselves"
+      examples:
+        - en: "Ms. Sato prepared the entire report herself."
+          ja: "佐藤さんは報告書を全部自分で作った。"
+        - en: "Please introduce yourself to the team."
+          ja: "チームに自己紹介してください。"
+      toeic: "代名詞の問題では、文がもうそろっていて空所がなくても成り立つなら、強調の -self。目的語が主語と同じ人を指す場合も -self。by oneself は「ひとりで」。"
+      caution: "名詞の前なら所有格（his report）。on one's own も「自分で」で、こちらは所有格を使う。"
   - id: those-who
     name: those who / that of
     category: 代名詞
     aliases: [those of, that of]
     hint: "those who（〜する人々）、比較で名詞の繰り返しを避ける that of / those of。"
+    guide:
+      summary: "those who は「〜する人々」。that of は名詞の繰り返しを避ける。"
+      form: "those who + 複数形の動詞 / that of（単数）・those of（複数）"
+      examples:
+        - en: "Those who wish to attend should register by Friday."
+          ja: "出席を希望する方は、金曜までに登録してください。"
+        - en: "Our prices are lower than those of our competitors."
+          ja: "当社の価格は競合他社の価格より安い。"
+      toeic: "who の前の空所で、後ろの動詞が複数形なら those（単数の anyone は動詞も単数）。比較の than の後では、比べる名詞が単数なら that、複数なら those。"
+      caution: "those interested（興味のある方）のように、who + be が省かれた形もよく出る。"
 
   # ── 形容詞 ──
   - id: adjective-usage
@@ -296,6 +712,16 @@ tags:
     category: 形容詞
     aliases: [補語の形容詞, 名詞を修飾する形容詞]
     hint: "名詞を直接修飾する限定用法と、補語になる叙述用法。用法によって意味が変わる形容詞もある。"
+    guide:
+      summary: "形容詞は、名詞を説明するか、補語になる。"
+      form: "形容詞 + 名詞 / be・become・remain などの後 / make・keep + O + 形容詞"
+      examples:
+        - en: "We offer affordable services."
+          ja: "手ごろな料金のサービスを提供しています。"
+        - en: "Please keep the entrance clear."
+          ja: "入口はふさがないでください。"
+      toeic: "品詞問題の基本。冠詞と名詞の間なら形容詞が第一候補（an effective method）。be、seem、remain の後で主語の様子を述べるなら形容詞。語尾 -ful、-ive、-able、-al、-ous は手がかりになる。"
+      caution: "friendly、costly、timely は -ly でも形容詞。alive や asleep は名詞の前に置かない。"
 
   # ── 副詞・語法 ──
   - id: sentence-adverb
@@ -303,11 +729,29 @@ tags:
     category: 副詞・語法
     aliases: [Interestingly, Notably, Surprisingly]
     hint: "文頭などに置かれ、文全体に対する話し手の判断を表す副詞（Notably, ...）。"
+    guide:
+      summary: "文頭などの副詞が、文全体にコメントする。"
+      form: "副詞 , S + V（Fortunately / Unfortunately / Notably など）"
+      examples:
+        - en: "Unfortunately, the item is out of stock."
+          ja: "あいにく、その商品は在庫切れです。"
+      toeic: "文がそろっていて、文頭のカンマの前が空所なら副詞。Part 6 では、前の文との関係から選ぶ。逆接は however、結果は therefore / as a result、追加は moreover / in addition。"
+      caution: "however などは副詞なので、カンマだけで2つの文をつなげない。接続詞の but や although とは別。"
   - id: frequency-degree-adverb
     name: 頻度・程度の副詞
     category: 副詞・語法
     aliases: [often, rarely, largely, slightly]
     hint: "頻度（often, rarely）や程度（largely, slightly, significantly）を表す副詞とその位置。"
+    guide:
+      summary: "副詞は「どれくらいの頻度・程度か」を足す。"
+      form: "一般動詞の前、be 動詞や最初の助動詞の後が基本"
+      examples:
+        - en: "The software is regularly updated."
+          ja: "そのソフトは定期的に更新されている。"
+        - en: "Prices have risen slightly."
+          ja: "価格はわずかに上がった。"
+      toeic: "be + 空所 + 過去分詞、助動詞 + 空所 + 動詞、空所を抜いても文が成り立つ位置は、副詞が候補。hardly / rarely は否定の意味。nearly と almost は「ほぼ」。"
+      caution: "hard（熱心に）と hardly（ほとんど〜ない）、late（遅く）と lately（最近）は意味が違う。"
 
   # ── 前置詞 ──
   - id: preposition-meaning
@@ -315,11 +759,31 @@ tags:
     category: 前置詞
     aliases: [by, with, via, in, on]
     hint: "前置詞が表す時・場所・手段・対象などの意味の使い分け。"
+    guide:
+      summary: "前置詞は、時・場所・手段などの関係を示す。"
+      form: "前置詞 + 名詞・動名詞"
+      examples:
+        - en: "Please submit the report by Friday."
+          ja: "報告書は金曜までに提出してください。"
+        - en: "The store will be closed until Monday."
+          ja: "店は月曜まで休業します。"
+      toeic: "by は期限（それまでに1回終える）、until は継続（その時までずっと）。for + 期間の長さ、during + 特定の期間。within + 期間は「〜以内に」。at は時刻、on は日付・曜日、in は月・年。"
+      caution: "訳が同じ「まで」でも、動詞が submit のような1回の動作なら by、stay や remain のような継続なら until。"
   - id: group-preposition
     name: 群前置詞
     category: 前置詞
     aliases: [due to, in terms of, in addition to, according to]
     hint: "due to, in terms of, compared with など、2 語以上で 1 つの前置詞として働く表現。"
+    guide:
+      summary: "2語以上で、1つの前置詞として働く。"
+      form: "due to / in addition to / in spite of / regardless of など + 名詞・動名詞"
+      examples:
+        - en: "Due to bad weather, the flight was canceled."
+          ja: "悪天候のため、その便は欠航した。"
+        - en: "In addition to a salary, we offer a housing allowance."
+          ja: "給与に加えて、住宅手当を支給します。"
+      toeic: "接続詞と迷ったら後ろの形を見る。名詞だけなら前置詞（due to、because of、despite、during）、主語 + 動詞なら接続詞（because、although、while）。意味が近い組を並べて覚える。"
+      caution: "despite には of を付けない（in spite of には付く）。before、after、until は、前置詞にも接続詞にもなる。"
 
   # ── 接続詞 ──
   - id: coordinating-conjunction
@@ -327,22 +791,59 @@ tags:
     category: 接続詞
     aliases: [and, but, or, both A and B, not only A but also B]
     hint: "and, but, or などで文法的に対等なものをつなぐ。both A and B などの相関表現も含む。"
+    guide:
+      summary: "and / but / or は、同じ形のものを対等につなぐ。"
+      form: "A and B / both A and B / either A or B / neither A nor B / not only A but also B"
+      examples:
+        - en: "You can pay either online or at the counter."
+          ja: "支払いは、オンラインと窓口のどちらでもできます。"
+      toeic: "both、either、neither、not only が見えたら、相手の語（and、or、nor、but also）を選ぶ。A と B は同じ品詞や形にそろえる。"
+      caution: "either A or B と neither A nor B の動詞は、ふつう B に合わせる。both A and B は複数扱い。"
   - id: subordinating-conjunction
     name: 従属接続詞
     category: 接続詞
     aliases: [because, although, while, whereas, since]
     hint: "because, although, while, whereas などが理由・譲歩・対比などの副詞節を導く。"
+    guide:
+      summary: "「〜なので」「〜だけれど」などで、節を主節につなぐ。"
+      form: "because / although / while / since / unless など + 主語 + 動詞"
+      examples:
+        - en: "Although the budget was limited, the event was a success."
+          ja: "予算は限られていたが、催しは成功した。"
+        - en: "Unless you cancel by Monday, you will be charged."
+          ja: "月曜までに取り消さないと、料金がかかります。"
+      toeic: "空所の後が主語 + 動詞なら接続詞、名詞だけなら前置詞を選ぶ。次に、前半と後半の関係（理由・逆接・条件・時）で意味を決める。unless は「〜でない限り」。"
+      caution: "since は「〜以来」と「〜なので」、while は「〜の間」と「一方で」の2つの意味がある。"
   - id: so-that
     name: so that / so ... that 構文
     category: 接続詞
     aliases: [so that S can do, so ~ that, such ~ that]
     hint: "so that + S + V は目的（〜するように）や結果、so + 形容詞・副詞 + that / such + 名詞 + that は「とても〜なので…」を表す。"
-    point: "so that が続けば目的のことが多い（結果の場合もある）。so と that が離れ、間に形容詞・副詞があれば「それほど〜なので…」と読む。"
+    guide:
+      summary: "so that は「〜するように」、so ... that は「とても〜なので」。"
+      form: "so that + S + can / will ...　so + 形容詞・副詞 + that　such +（a）形容詞 + 名詞 + that"
+      examples:
+        - en: "Please arrive early so that we can start on time."
+          ja: "時間どおりに始められるよう、早めにお越しください。"
+        - en: "The seminar was so popular that tickets sold out in a day."
+          ja: "セミナーは大人気で、券は1日で売り切れた。"
+      toeic: "that の前の空所は、直後が形容詞・副詞だけなら so、名詞を含むまとまりなら such。後ろに can / will のある目的の節なら so that。"
+      caution: "so many / so much + 名詞は so を使う。会話や文章では that が省かれることがある。"
   - id: noun-clause-that-whether
     name: 名詞節の that / whether
     category: 接続詞
     aliases: [that 節, whether 節, if 節（〜かどうか）]
     hint: "that（〜ということ）、whether / if（〜かどうか）が名詞節を導き、主語・目的語・補語になる（suggests that ...）。"
+    guide:
+      summary: "that は「〜ということ」、whether は「〜かどうか」。"
+      form: "that / whether / if + 主語 + 動詞（節全体が名詞の働き）"
+      examples:
+        - en: "The report shows that demand is rising."
+          ja: "報告書は、需要が伸びていることを示している。"
+        - en: "Please let us know whether you can attend."
+          ja: "ご出席いただけるかどうか、お知らせください。"
+      toeic: "後ろが完全な文なら that か whether。内容が決まっていれば that、未定なら whether。前置詞の後、to do の前、or not の直前では if ではなく whether。"
+      caution: "後ろの文で主語や目的語が欠けていれば、what を考える。"
 
   # ── 文型・語法 ──
   - id: sentence-pattern-1-3
@@ -350,21 +851,59 @@ tags:
     category: 文型・語法
     aliases: [SV, SVC, SVO]
     hint: "SV / SVC / SVO の基本の文型。動詞が自動詞か他動詞か、補語をとるかに注目する。"
+    guide:
+      summary: "文の骨組みは、動詞の後に何が来るかで決まる。"
+      form: "SV（第1文型） / SVC（第2文型、S = C） / SVO（第3文型）"
+      examples:
+        - en: "The price remains stable."
+          ja: "価格は安定したままだ。"
+        - en: "We will discuss the plan tomorrow."
+          ja: "明日、その計画について話し合います。"
+      toeic: "remain、become、seem の後の空所は補語で、形容詞や名詞が入る（副詞は入らない）。discuss、attend、contact は他動詞で、about や to を付けない。arrive、respond、participate は自動詞で、目的語の前に前置詞が必要。"
+      caution: "同じ動詞でも、意味によって文型が変わる。"
   - id: sentence-pattern-4
     name: 第4文型
     category: 文型・語法
     aliases: [SVOO, give O O]
     hint: "SVOO。動詞の後に「人」と「物」の 2 つの目的語が並ぶ。"
+    guide:
+      summary: "「人に・物を」の順に、目的語が2つ並ぶ。"
+      form: "S + V + O（人）+ O（物）"
+      examples:
+        - en: "We will send you a confirmation e-mail."
+          ja: "確認メールをお送りします。"
+      toeic: "send、give、offer、show、lend の後に「人 + 物」が並ぶ形に慣れる。受動態では目的語が1つ残る（Members are offered a discount.）。"
+      caution: "順番を入れ替えると「物 + to / for + 人」になる。explain、suggest、announce はこの文型にできず、explain the plan to us と言う。"
   - id: sentence-pattern-5
     name: 第5文型
     category: 文型・語法
     aliases: [SVOC, make O C, find O C]
     hint: "SVOC。目的語の後に、目的語の状態を説明する補語が続く（makes the model robust）。"
+    guide:
+      summary: "目的語の後に、「それがどうなのか」を続ける。"
+      form: "S + V + O + C（make / keep / find / consider など）"
+      examples:
+        - en: "We found the training very useful."
+          ja: "その研修はとても役立つと分かった。"
+        - en: "Please keep your receipt handy."
+          ja: "領収書はすぐ出せるようにしておいてください。"
+      toeic: "make / keep / find + O + 空所は、O の状態を述べるなら形容詞（副詞ではない）。O と C の間に「O は C だ」の関係があるかを確かめる。"
+      caution: "語尾が副詞らしく見える方を、日本語訳につられて選ばない。"
   - id: causative-perception
     name: 使役動詞・知覚動詞
     category: 文型・語法
     aliases: [make O do, let O do, allow O to do, enable O to do]
     hint: "make / let / have + O + 原形、allow / enable + O + to do、see / hear + O + do/doing の形。"
+    guide:
+      summary: "「人に〜させる・してもらう」「人が〜するのを見る」の形。"
+      form: "make / let / have + O + 原形　get / allow / enable / ask + O + to do　see / hear + O + 原形・〜ing"
+      examples:
+        - en: "The new tool enables staff to work more efficiently."
+          ja: "新しい道具により、社員はより効率よく働ける。"
+        - en: "I need to have my computer repaired."
+          ja: "パソコンを修理してもらう必要がある。"
+      toeic: "allow、enable、encourage、require、ask + 人の後は to do。make、let、have + 人の後は原形。目的語が「される」側なら、have / get + O + 過去分詞。"
+      caution: "make は強制、let は許可、have は依頼や手配の感じ。"
 
   # ── 論文構文（論文に多い構文） ──
   - id: appositive-that
@@ -372,43 +911,121 @@ tags:
     category: 論文構文
     aliases: [the fact that, the idea that, the assumption that]
     hint: "the fact / idea / assumption / evidence など抽象名詞 + that 節で、that 節がその名詞の内容を説明する（the fact that X → X という事実）。関係代名詞と違い that 節は欠けのない完全な文。"
+    guide:
+      summary: "the fact that 〜 は、that 以下が名詞の中身を説明する。"
+      form: "fact / idea / news / evidence などの名詞 + that + 完全な文"
+      examples:
+        - en: "We are aware of the fact that delivery times have increased."
+          ja: "配送時間が延びていることは認識しています。"
+      toeic: "Part 7 では「〜という事実・知らせ」とまとめて読む。that の後が欠けのない文なら同格、主語や目的語が欠けていれば関係代名詞。"
+      caution: "どの名詞でも同格の that をとれるわけではない。"
   - id: inanimate-subject
     name: 無生物主語
     category: 論文構文
     aliases: [物が主語, This result shows]
     hint: "物や事柄が主語になり、人が主語の日本語に訳し直すと自然になる構文（This finding suggests ... → この結果から〜と分かる）。"
+    guide:
+      summary: "物や事が主語の文は、「〜のおかげで・〜によると」と訳すと自然。"
+      form: "物・事（主語）+ allow / enable / prevent / show など + ..."
+      examples:
+        - en: "This card allows you to enter the building."
+          ja: "このカードで建物に入れます。"
+        - en: "Heavy traffic prevented us from arriving on time."
+          ja: "渋滞のせいで、時間どおりに着けなかった。"
+      toeic: "Part 7 では、主語を理由や手段として読み、人を主語に置き直すと速く分かる。allow + 人 + to do、prevent + 人 + from doing の形も合わせて覚える。"
+      caution: "訳し方は読みやすさのための工夫で、英文の主語は物のまま。"
   - id: nominalization
     name: 名詞構文
     category: 論文構文
     aliases: [名詞化, the application of A to B]
     hint: "動詞・形容詞から派生した名詞（improvement, application, ability など）+ of などで動作を表す構文。名詞を動詞に戻して訳すと分かりやすい（the improvement of X → X を改善すること）。the fact that ... は名詞構文ではなく同格の that。"
+    guide:
+      summary: "動詞や形容詞を名詞にして、短くまとめた表現。"
+      form: "名詞（動詞・形容詞由来）+ of / to / in など"
+      examples:
+        - en: "The completion of the project will take two months."
+          ja: "その企画を完了するには2か月かかる。"
+      toeic: "Part 7 では、名詞を動詞に戻して読む（the completion of the project →「企画を完了すること」）。Part 5 では、the と of の間の空所は名詞（completion）を選ぶ。"
+      caution: "of の後の名詞は、動作をする側のことも、される側のこともある（the arrival of the guests / the repair of the machine）。"
   - id: cleft
     name: 強調構文
     category: 論文構文
     aliases: [It is ... that, It is ... which]
     hint: "It is A that ... で A を強調する。It と that を除いても文が成り立つ点で形式主語と区別する。"
+    guide:
+      summary: "It is と that で挟んだ部分を、強調する。"
+      form: "It is / was + 強調する語句 + that（人なら who も）..."
+      examples:
+        - en: "It was the marketing team that proposed the idea."
+          ja: "その案を出したのは、マーケティングチームだった。"
+      toeic: "TOEIC では主に読解で出会う形。「〜したのは A だ」と読む。It was と that を取り、強調された語句を元の位置に戻して文になれば、強調構文。"
+      caution: "形式主語の It is important that ... は、間が形容詞で、It is と that を取ると文にならない。"
   - id: inversion
     name: 倒置
     category: 論文構文
     aliases: [Not only does, Only then, So ... that]
     hint: "否定語・only・補語などが文頭に出て、主語と（助）動詞の語順が入れ替わる構文。"
+    guide:
+      summary: "強調する語句が文頭に出ると、主語と（助）動詞の順が入れ替わる。"
+      form: "否定語・Only など + 助動詞・be 動詞 + 主語 ... / Enclosed is + 主語"
+      examples:
+        - en: "Enclosed is a copy of your invoice."
+          ja: "請求書の写しを同封いたします。"
+        - en: "Not only did sales increase, but profits also improved."
+          ja: "売上が伸びただけでなく、利益も改善した。"
+      toeic: "ビジネス文書の Enclosed is / Attached are は、後ろの名詞が本当の主語で、is / are はそれに合わせる。Not only、Never、Only after などが文頭なら、後は疑問文の語順。"
+      caution: "Only が主語を修飾するだけなら、倒置しない（Only members can enter.）。"
   - id: parenthetical
     name: 挿入
     category: 論文構文
     aliases: [カンマやダッシュで挟んだ語句, however, in turn]
     hint: "カンマ・ダッシュ・括弧で挟まれた語句が文の途中に入り、主語と動詞などを離している構文。"
+    guide:
+      summary: "途中にはさまれた語句は、いったん外して骨組みを読む。"
+      form: "S , 挿入語句 , V / ダッシュや括弧で挟む形"
+      examples:
+        - en: "Our new product, according to the survey, is popular with young people."
+          ja: "調査によると、当社の新製品は若者に人気だ。"
+      toeic: "主語と動詞の一致の問題では、間にはさまれた語句を外し、本当の主語に動詞を合わせる。Part 7 では、先に主語と動詞をつなげてから、挿入部分を読む。"
+      caution: "as well as や along with ではさまれた名詞は、主語の単数・複数に数えない。"
   - id: ellipsis
     name: 省略
     category: 論文構文
     aliases: [共通語句の省略, while training, if necessary]
     hint: "前に出た語句や「主語 + be 動詞」が省略された形（while (it is) training, if (it is) necessary）。"
+    guide:
+      summary: "言わなくても分かる語は、省かれる。"
+      form: "when / while / if / unless など + 分詞・形容詞・前置詞句（主語 + be を省略）"
+      examples:
+        - en: "If necessary, we can extend the deadline."
+          ja: "必要なら、締め切りを延ばせます。"
+        - en: "Please wear a helmet while working on the site."
+          ja: "現場で作業する間は、ヘルメットを着用してください。"
+      toeic: "接続詞の直後の空所で、主語がなければ分詞や形容詞を考える。する側なら 〜ing、される側なら過去分詞（unless otherwise stated は「特に断りがなければ」）。if necessary、if possible、as requested は定型。"
+      caution: "省かれた「主語 + be」は、主節の主語に合うものか、状況から分かる it が多い。"
   - id: long-subject
     name: 長い主語（主部の特定）
     category: 論文構文
     aliases: [主部が長い, 主語と動詞の距離]
     hint: "修飾語句が付いて主語が長くなり、どこまでが主部で動詞はどれかを見極める必要がある文。"
+    guide:
+      summary: "主語が長い文は、本当の述語動詞を先に見つける。"
+      form: "中心の名詞 + 修飾語句（前置詞句・分詞・関係詞節）+ 述語動詞"
+      examples:
+        - en: "The list of participants in the workshop is attached."
+          ja: "研修会の参加者名簿を添付します。"
+      toeic: "動詞の単数・複数は、直前の名詞ではなく中心の名詞に合わせる（上の例は list なので is）。修飾語句を括弧に入れて考えると、Part 5 の動詞の形も Part 7 の長い文も整理しやすい。"
+      caution: "a number of + 複数名詞は複数扱い、the number of + 複数名詞は単数扱い。"
   - id: parallelism
     name: 並列構造の特定
     category: 論文構文
     aliases: [A, B, and C, both A and B]
     hint: "and / or / カンマでつながれた要素のうち、何と何が並列なのかを見極める必要がある文。"
+    guide:
+      summary: "and や or がつなぐのは、同じ形のもの同士。"
+      form: "A, B, and C（品詞や形をそろえる）"
+      examples:
+        - en: "The job involves answering calls, scheduling meetings, and preparing reports."
+          ja: "仕事は、電話対応、会議の日程調整、報告書の作成です。"
+      toeic: "and や or の近くが空所なら、並んでいる相手の形を見て、同じ品詞・同じ形を選ぶ（〜ing には 〜ing、形容詞には形容詞）。Part 7 では、何と何が並んでいるかを先に決める。"
+      caution: "to や助動詞は、2つ目以降で省かれることがある。"

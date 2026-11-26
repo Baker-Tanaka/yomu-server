@@ -7,14 +7,16 @@ use std::sync::Arc;
 use eframe::egui::{self, Margin, RichText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use paper_reader_shared::{
-    APP_VERSION, DictEntry, DictResponse, ExplainTag, FeedbackItem, FeedbackLabel,
+    APP_VERSION, ChatRole, DictEntry, DictResponse, ExplainTag, FeedbackItem, FeedbackLabel,
     FeedbackListResponse, GIT_HASH, GrammarTagInfo, GrammarTagsResponse, HistoryEntry,
-    MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode, ReadLaterItem, ReadLaterPut,
-    SLASH_READING_HEADING, SearchItem, SearchSort, TagGuide, WordSource, build_version_label,
-    paper_url_from_input, plain_arrows, pos_groups, pos_summary, version_label, without_section,
+    MAX_CHAT_QUESTION_CHARS, MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode,
+    ReadLaterItem, ReadLaterPut, SLASH_READING_HEADING, SearchItem, SearchSort, TagGuide,
+    WordSource, build_version_label, paper_url_from_input, plain_arrows, pos_groups, pos_summary,
+    version_label, without_section,
 };
 
 use crate::dom;
+use crate::search_input::Field;
 use crate::state::{
     self, DictAiPhase, DictStatus, ExplainPhase, FeedbackStage, GrammarOrder, GrammarStatus,
     HealthStatus, HistoryScope, HistoryStatus, PaperStatus, PapersStatus, SearchView, Shared,
@@ -33,6 +35,14 @@ const NARROW_BOTTOM_TAB_WIDTH: f32 = 66.0;
 const SELECTION_PREVIEW_ROWS: usize = 3;
 /// 検索欄の案内文
 const SEARCH_HINT: &str = "arXiv の URL・ID、またはキーワードで検索";
+/// チャットの質問欄の案内文
+const CHAT_HINT: &str = "続けて質問する（Enter で送信）";
+/// チャットを始めるときの質問の例
+const CHAT_SUGGESTIONS: [&str; 3] = [
+    "もっとやさしく説明して",
+    "文法を詳しく説明して",
+    "似た構文の例文を出して",
+];
 /// 論文を開く前の画面に出す「後で読む」の件数
 const READ_LATER_PREVIEW: usize = 3;
 
@@ -51,8 +61,8 @@ pub struct PaperReaderApp {
     mobile: Option<bool>,
     /// 次の描画で入力欄にフォーカスを移す（「別の論文を開く」を押したとき）
     focus_input: bool,
-    /// この描画で、検索欄（HTML の入力欄）を重ねたか。重ねなければ隠す
-    search_input_placed: bool,
+    /// この描画で重ねた HTML の入力欄。重ねなかった欄は隠す
+    placed_inputs: Vec<Field>,
     /// コマンドパレットを開く（⚙ のメニューから）
     open_palette: Option<crate::command_palette::Opener>,
 }
@@ -120,8 +130,13 @@ impl PaperReaderApp {
         // 実験モード（端末の LLM）を前回オンにしていれば読み込む（既定はオフで、何も読まない）
         crate::local_llm::resume(&shared, &cc.egui_ctx);
 
-        if let Err(e) = crate::search_input::init(&cc.egui_ctx, SEARCH_HINT) {
-            log::error!("検索欄を作れません: {e}");
+        for (field, hint, max_len) in [
+            (Field::Search, SEARCH_HINT, None),
+            (Field::Chat, CHAT_HINT, Some(MAX_CHAT_QUESTION_CHARS)),
+        ] {
+            if let Err(e) = crate::search_input::init(&cc.egui_ctx, field, hint, max_len) {
+                log::error!("入力欄を作れません: {e}");
+            }
         }
 
         let ctx = cc.egui_ctx.clone();
@@ -162,7 +177,7 @@ impl PaperReaderApp {
             feedback_content_h: 300.0,
             mobile: None,
             focus_input: false,
-            search_input_placed: false,
+            placed_inputs: Vec::new(),
             open_palette,
         }
     }
@@ -601,38 +616,20 @@ impl PaperReaderApp {
     fn input_bar(&mut self, ui: &mut egui::Ui) {
         let p = theme::palette(ui.ctx());
         let loading = matches!(self.shared.borrow().paper, PaperStatus::Loading);
-        self.input = crate::search_input::value();
+        self.input = crate::search_input::value(Field::Search);
         let is_paper = paper_url_from_input(&self.input).is_some();
         let label = if is_paper { "開く" } else { "検索" };
-        let mut submit = crate::search_input::take_submitted() && !self.input.trim().is_empty();
+        let mut submit =
+            crate::search_input::take_submitted(Field::Search) && !self.input.trim().is_empty();
         ui.horizontal(|ui| {
             let button_width = 64.0;
             let size = egui::vec2(ui.available_width() - button_width - 8.0, 34.0);
             let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-            let covered = {
-                let s = self.shared.borrow();
-                s.feedback.open || s.store_warning.is_some() || egui::Popup::is_any_open(ui.ctx())
-            };
-            if covered {
-                ui.painter().rect_filled(rect, 8.0, p.card);
-                let (text, color) = if self.input.is_empty() {
-                    (SEARCH_HINT, p.weak)
-                } else {
-                    (self.input.as_str(), p.text)
-                };
-                ui.painter().with_clip_rect(rect.shrink(10.0)).text(
-                    rect.left_center() + egui::vec2(10.0, 0.0),
-                    egui::Align2::LEFT_CENTER,
-                    text,
-                    theme::body_font(14.0),
-                    color,
-                );
-            } else if ui.is_rect_visible(rect) {
-                crate::search_input::place(rect, ui.ctx().zoom_factor());
-                self.search_input_placed = true;
-                if std::mem::take(&mut self.focus_input) {
-                    crate::search_input::focus();
-                }
+            let text = std::mem::take(&mut self.input);
+            let placed = self.overlay_input(ui, &p, Field::Search, rect, &text, SEARCH_HINT);
+            self.input = text;
+            if placed && std::mem::take(&mut self.focus_input) {
+                crate::search_input::focus(Field::Search);
             }
             ui.scope(|ui| {
                 ui.set_min_size(egui::vec2(button_width, 34.0));
@@ -652,6 +649,189 @@ impl PaperReaderApp {
         if submit && !(is_paper && loading) {
             state::submit_input(&self.shared, ui.ctx(), &self.input);
         }
+    }
+
+    /// `rect` に HTML の入力欄を重ねる。重ねたら true。
+    /// メニューやモーダルが重なるあいだは重ねず、下地に入力中の文字（空なら案内文）を描く。
+    fn overlay_input(
+        &mut self,
+        ui: &mut egui::Ui,
+        p: &Palette,
+        field: Field,
+        rect: egui::Rect,
+        text: &str,
+        hint: &str,
+    ) -> bool {
+        let covered = {
+            let s = self.shared.borrow();
+            s.feedback.open || s.store_warning.is_some() || egui::Popup::is_any_open(ui.ctx())
+        };
+        if covered {
+            ui.painter().rect_filled(rect, 8.0, p.card);
+            let (text, color) = if text.is_empty() {
+                (hint, p.weak)
+            } else {
+                (text, p.text)
+            };
+            ui.painter().with_clip_rect(rect.shrink(10.0)).text(
+                rect.left_center() + egui::vec2(10.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                text,
+                theme::body_font(14.0),
+                color,
+            );
+            return false;
+        }
+        if !ui.is_rect_visible(rect) {
+            return false;
+        }
+        crate::search_input::place(field, rect, ui.ctx().zoom_factor());
+        self.placed_inputs.push(field);
+        true
+    }
+
+    /// チャットの質問欄と送信ボタン（回答の生成中は停止ボタン）。
+    fn chat_bar(&mut self, ui: &mut egui::Ui) {
+        let p = theme::palette(ui.ctx());
+        let ctx = ui.ctx().clone();
+        let (running, restore) = {
+            let mut s = self.shared.borrow_mut();
+            let chat = &mut s.explain.chat;
+            (chat.phase.is_running(), chat.restore_input.take())
+        };
+        if let Some(text) = restore {
+            crate::search_input::set_value(Field::Chat, &text);
+        }
+        let text = crate::search_input::value(Field::Chat);
+        let mut submit = crate::search_input::take_submitted(Field::Chat);
+        ui.horizontal(|ui| {
+            let button_width = 64.0;
+            let size = egui::vec2(ui.available_width() - button_width - 8.0, 34.0);
+            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            let placed = self.overlay_input(ui, &p, Field::Chat, rect, &text, CHAT_HINT);
+            // スマホでは勝手にキーボードを出さない（会話が隠れるため）
+            if placed
+                && std::mem::take(&mut self.shared.borrow_mut().explain.chat.focus_input)
+                && !self.is_mobile()
+            {
+                crate::search_input::focus(Field::Chat);
+            }
+            ui.scope(|ui| {
+                ui.set_min_size(egui::vec2(button_width, 34.0));
+                if running {
+                    if theme::subtle_button(ui, "停止").clicked() {
+                        state::stop_chat(&self.shared);
+                    }
+                } else if theme::primary_button(ui, "送信", !text.trim().is_empty()).clicked() {
+                    submit = true;
+                }
+            });
+        });
+        // 生成中に Enter を押した質問は入力欄に残る
+        if submit && state::send_chat(&self.shared, &ctx, &text) {
+            crate::search_input::set_value(Field::Chat, "");
+        }
+    }
+
+    /// チャットの会話。
+    fn chat_card(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let ctx = ui.ctx().clone();
+        let (turns, answer, phase, scroll) = {
+            let mut s = self.shared.borrow_mut();
+            let chat = &mut s.explain.chat;
+            (
+                chat.turns.clone(),
+                chat.answer.clone(),
+                chat.phase.clone(),
+                std::mem::take(&mut chat.scroll_to_question),
+            )
+        };
+        let card_top = ui.cursor().top();
+        let mut question_top = None;
+        theme::card(ui, |ui| {
+            let header = ui.horizontal(|ui| {
+                theme::section_title(ui, "チャット");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if theme::subtle_button(ui, "閉じる")
+                        .on_hover_text("質問欄を閉じます（別の単語や英文を選ぶまで会話は残ります）")
+                        .clicked()
+                    {
+                        state::close_chat(&self.shared);
+                    }
+                });
+            });
+            // 開いた直後は、解説の下にあるチャットまで送る
+            if scroll && turns.is_empty() {
+                header.response.scroll_to_me(Some(egui::Align::TOP));
+            }
+            if turns.is_empty() {
+                ui.label(
+                    RichText::new("この解説について、続けて質問できます。")
+                        .size(13.5)
+                        .color(p.weak),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    for q in CHAT_SUGGESTIONS {
+                        if theme::subtle_button(ui, q).clicked() {
+                            state::send_chat(&self.shared, &ctx, q);
+                        }
+                    }
+                });
+            }
+            let last_question = turns.iter().rposition(|t| t.role == ChatRole::User);
+            for (i, turn) in turns.iter().enumerate() {
+                ui.add_space(6.0);
+                match turn.role {
+                    ChatRole::User => {
+                        let r = question_bubble(ui, p, &turn.content);
+                        if Some(i) == last_question {
+                            question_top = Some(r.rect.top());
+                            if scroll {
+                                r.scroll_to_me(Some(egui::Align::TOP));
+                            }
+                        }
+                    }
+                    ChatRole::Assistant => self.answer_view(ui, i, &turn.content),
+                }
+            }
+            if !answer.is_empty() {
+                ui.add_space(6.0);
+                self.answer_view(ui, turns.len(), &answer);
+            }
+            let waiting = match &phase {
+                ExplainPhase::Connecting => Some("回答を準備中…"),
+                ExplainPhase::Queued => Some("順番待ち中…（LLM がほかの処理をしています）"),
+                ExplainPhase::Streaming => Some("生成中…"),
+                ExplainPhase::Idle | ExplainPhase::Done => None,
+                ExplainPhase::Error(msg) => {
+                    notice(ui, p, msg);
+                    if let Some(i) = last_question
+                        && theme::subtle_button(ui, "再試行").clicked()
+                    {
+                        state::send_chat(&self.shared, &ctx, &turns[i].content);
+                    }
+                    None
+                }
+            };
+            if let Some(text) = waiting {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(RichText::new(text).size(12.5).color(p.weak));
+                });
+            }
+        });
+        // 開いた直後のチャットや最後の質問を上端まで送れるよう下に余白を取る（回答はその余白に流れる）
+        if let Some(top) = question_top.or_else(|| turns.is_empty().then_some(card_top)) {
+            let below = ui.cursor().top() - top;
+            ui.add_space((ui.clip_rect().height() - below - 24.0).max(0.0));
+        }
+    }
+
+    fn answer_view(&mut self, ui: &mut egui::Ui, index: usize, markdown: &str) {
+        let markdown = plain_arrows(markdown);
+        ui.push_id(("chat-answer", index), |ui| {
+            CommonMarkViewer::new().show(ui, &mut self.markdown_cache, &markdown);
+        });
     }
 
     fn paper_card(&mut self, ui: &mut egui::Ui) {
@@ -894,6 +1074,11 @@ impl PaperReaderApp {
 
         ui.add_space(10.0);
         self.explain_card(ui, &p);
+
+        if self.shared.borrow().explain.chat.open {
+            ui.add_space(10.0);
+            self.chat_card(ui, &p);
+        }
 
         if self.shared.borrow().local.enabled {
             ui.add_space(10.0);
@@ -1172,6 +1357,27 @@ impl PaperReaderApp {
                     .clicked()
                 {
                     state::start_explain(&self.shared, &ctx, true);
+                }
+            }
+
+            // 最後まで（または途中まで）読める解説があれば、続けて質問できる
+            let can_chat = !running && !markdown.is_empty();
+            let (chat_open, chat_turns) = {
+                let s = self.shared.borrow();
+                (s.explain.chat.open, s.explain.chat.turns.len())
+            };
+            if can_chat && !chat_open {
+                ui.add_space(6.0);
+                let label = if chat_turns == 0 {
+                    "💬 続けて質問する"
+                } else {
+                    "💬 会話の続きを表示"
+                };
+                if theme::primary_button(ui, label, true)
+                    .on_hover_text("この解説について、AI に続けて質問できます")
+                    .clicked()
+                {
+                    state::open_chat(&self.shared);
                 }
             }
 
@@ -1751,7 +1957,7 @@ impl eframe::App for PaperReaderApp {
             set_theme(&ctx, theme);
         }
         let p = theme::palette(&ctx);
-        self.search_input_placed = false;
+        self.placed_inputs.clear();
         egui::CentralPanel::default_margins()
             .frame(egui::Frame::new().fill(p.bg).inner_margin(if mobile {
                 // つまみの下から始まるので上は詰める
@@ -1813,7 +2019,34 @@ impl eframe::App for PaperReaderApp {
                 } else if show_input_bar(has_paper, tab) {
                     ui.add_space(8.0);
                 }
-                let tab = self.shared.borrow().tab;
+                let (tab, chatting) = {
+                    let s = self.shared.borrow();
+                    (s.tab, s.selection.is_some() && s.explain.chat.open)
+                };
+                if tab == Tab::Explain && chatting {
+                    // PC では下端に置く。スマホではキーボードに隠れないよう会話の上に置く
+                    let (panel, margin) = if mobile {
+                        (
+                            egui::Panel::top("chat-bar"),
+                            Margin {
+                                bottom: 8,
+                                ..Margin::ZERO
+                            },
+                        )
+                    } else {
+                        (
+                            egui::Panel::bottom("chat-bar"),
+                            Margin {
+                                top: 8,
+                                ..Margin::ZERO
+                            },
+                        )
+                    };
+                    panel
+                        .show_separator_line(false)
+                        .frame(egui::Frame::new().fill(p.bg).inner_margin(margin))
+                        .show(ui, |ui| self.chat_bar(ui));
+                }
                 egui::ScrollArea::vertical()
                     .id_salt(tab_salt(tab))
                     .auto_shrink([false, false])
@@ -1829,9 +2062,7 @@ impl eframe::App for PaperReaderApp {
                     });
             });
 
-        if !self.search_input_placed {
-            crate::search_input::hide();
-        }
+        crate::search_input::hide_unplaced(&self.placed_inputs);
 
         if feedback_open {
             self.feedback_modal(&ctx);
@@ -2384,6 +2615,19 @@ fn empty_explain(ui: &mut egui::Ui, p: &Palette, has_paper: bool, mobile: bool) 
 }
 
 /// 選択を含む段落（開くと読める）。
+/// チャットの自分の質問。
+fn question_bubble(ui: &mut egui::Ui, p: &Palette, text: &str) -> egui::Response {
+    egui::Frame::new()
+        .fill(p.accent_soft)
+        .corner_radius(8)
+        .inner_margin(Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(RichText::new(text).size(14.5).color(p.strong));
+        })
+        .response
+}
+
 fn context_view(ui: &mut egui::Ui, p: &Palette, sel: &dom::SelectionInfo) {
     if sel.context == sel.text {
         return;

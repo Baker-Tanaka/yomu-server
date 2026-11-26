@@ -19,7 +19,7 @@ use paper_reader_shared::{
     ExplainRequest, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, SseParser, sse_event,
 };
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedSemaphorePermit, mpsc};
 
 use crate::AppState;
 use crate::cache::cache_key;
@@ -30,7 +30,7 @@ use crate::prompts::{self, GrammarNote};
 use crate::tagger::Tagger;
 
 /// 1 回の解説の上限時間（順番待ちは含まない）
-const GENERATION_TIMEOUT: Duration = Duration::from_secs(300);
+pub(crate) const GENERATION_TIMEOUT: Duration = Duration::from_secs(300);
 /// 生成する最大トークン数
 const MAX_TOKENS: u32 = 1_500;
 /// 和訳の最大トークン数（英文は 2,000 文字まで）
@@ -235,7 +235,7 @@ fn tags_event(g: &GrammarData, detected: &[DetectedTag]) -> String {
 
 /// 生成を止めた理由。
 #[derive(Debug)]
-enum StreamError {
+pub(crate) enum StreamError {
     /// クライアントが切断した（何も送らずに終わる）
     ClientGone,
     /// LLM 側の失敗（error イベントで知らせる）
@@ -243,32 +243,15 @@ enum StreamError {
 }
 
 /// LLM の生成結果。
-struct Completion {
-    text: String,
+pub(crate) struct Completion {
+    pub text: String,
     /// `[DONE]` まで受け取り、長さの上限で打ち切られてもいない
-    complete: bool,
+    pub complete: bool,
 }
 
 async fn run(state: AppState, req: ExplainRequest, key: String, tx: mpsc::Sender<Event>) {
-    let gate = state.llm_gate.clone();
-    let _permit = match gate.clone().try_acquire_owned() {
-        Ok(p) => p,
-        Err(_) => {
-            if send(&tx, sse_event::QUEUED, "").await.is_err() {
-                return;
-            }
-            tokio::select! {
-                p = gate.acquire_owned() => match p {
-                    Ok(p) => p,
-                    Err(_) => return,
-                },
-                // 待っている間に切断されたら並ばない
-                _ = tx.closed() => {
-                    tracing::debug!("client left while queued");
-                    return;
-                }
-            }
-        }
+    let Some(_permit) = acquire_gate(&state, &tx).await else {
+        return;
     };
     if send(&tx, sse_event::STARTED, "").await.is_err() {
         return;
@@ -314,7 +297,31 @@ async fn run(state: AppState, req: ExplainRequest, key: String, tx: mpsc::Sender
     }
 }
 
-async fn send(tx: &mpsc::Sender<Event>, event: &str, data: &str) -> Result<(), StreamError> {
+/// LLM の順番を取る。空いていなければ `queued` を送って待つ。待つ間に切断されたら None。
+pub(crate) async fn acquire_gate(
+    state: &AppState,
+    tx: &mpsc::Sender<Event>,
+) -> Option<OwnedSemaphorePermit> {
+    let gate = state.llm_gate.clone();
+    if let Ok(p) = gate.clone().try_acquire_owned() {
+        return Some(p);
+    }
+    send(tx, sse_event::QUEUED, "").await.ok()?;
+    tokio::select! {
+        p = gate.acquire_owned() => p.ok(),
+        // 待っている間に切断されたら並ばない
+        _ = tx.closed() => {
+            tracing::debug!("client left while queued");
+            None
+        }
+    }
+}
+
+pub(crate) async fn send(
+    tx: &mpsc::Sender<Event>,
+    event: &str,
+    data: &str,
+) -> Result<(), StreamError> {
     tx.send(Event::default().event(event).data(data))
         .await
         .map_err(|_| StreamError::ClientGone)
@@ -412,7 +419,7 @@ async fn generate(
 }
 
 /// LLM にストリーミングで問い合わせ、断片を token イベントとして送る。生成した全文を返す。
-async fn stream_llm(
+pub(crate) async fn stream_llm(
     state: &AppState,
     body: &Value,
     tx: &mpsc::Sender<Event>,

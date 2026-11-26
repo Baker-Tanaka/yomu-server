@@ -35,6 +35,11 @@
   - 最後まで生成できた解説は `explain_cache` に保存します。キーは `sha256(LLM_MODEL, mode, text, context, プロンプトのバージョン)`。
     次に同じ解説を頼まれたら LLM を呼ばずに `event: cached` → `event: token`（全文）→ `event: done` を返します。
     `regenerate: true` ならキャッシュを使わずに生成し、結果で上書きします
+- `POST /api/chat` body: `{ mode, text, context, explanation, messages: [{ role: "user" | "assistant", content }] }` → `text/event-stream`
+  - 解説のあとの質問。`messages` は質問と回答が交互で、最後が今回の質問（21 件まで）。会話はサーバーに保存せず、画面が毎回送ります
+  - イベントは `queued` → `started` → `token`… → `done`（失敗は `error`）。LLM の同時実行 1 件の枠は解説と共通で、クライアントが切断すると生成も止めます
+  - text は 2,000 文字、context は 4,000 文字、質問は 1,000 文字、解説・回答は 12,000 文字まで
+  - LLM に渡す分は、コンテキスト長（Ollama の既定は 4096 トークン）に収まるようにサーバーが切り詰めます（解説と文脈を短くし、古いやり取りから除く）
 - `GET /api/papers` → `{ papers: [{ id, title, source_url, last_opened_at, open_count, word_count, sentence_count, cached, bookmarked }], cache: { papers, html_bytes, assets, asset_bytes } }`
   - 開いた論文の記録（paper_visits）。同じ論文の版違い（`2509.19480` と `2509.19480v1`）は 1 件にまとめる
 - `DELETE /api/papers?id=<論文 ID>&purge=<true|false>` → 204（版違いも含めて外す。付箋も消す。purge なら本文と図のキャッシュも消す。単語・英文の履歴は残す）

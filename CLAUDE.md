@@ -63,6 +63,8 @@ POST /api/explain               … body: { mode: "word" | "sentence", text, con
                                    イベント: queued / started / token / tags / done / error
                                    （mode=sentence は token で和訳を先に流し、tags（文法タグ）を送ってから残りの解説の token を流す）
                                    （キャッシュのヒット時は cached → tags → token → done）
+POST /api/chat                  … 解説のあとに続けて質問する。body: { mode, text, context, explanation, messages }。SSE（queued / started / token / done / error）。
+                                   会話は保存せず、LLM のコンテキスト長に収まるようサーバーが古いやり取りと資料を切り詰める。LLM の枠は解説と共通
 GET  /api/grammar-tags          … 文法タグ一覧・カテゴリ・履歴での出現回数
 POST /api/admin/reload-grammar  … 文法タグを読み直す（127.0.0.1 から直接の要求のみ。転送ヘッダー付きは拒否）
 GET  /api/feedback              … 送信先の設定（GitHub）・ラベル定義・送ったフィードバックの一覧

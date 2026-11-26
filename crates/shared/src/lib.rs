@@ -460,6 +460,53 @@ pub struct ExplainRequest {
     pub slash: bool,
 }
 
+/// チャットの質問 1 件の上限（文字数）
+pub const MAX_CHAT_QUESTION_CHARS: usize = 1_000;
+/// チャットの回答 1 件・解説の上限（文字数。LLM に渡す分はサーバーがさらに切り詰める）
+pub const MAX_CHAT_ANSWER_CHARS: usize = 12_000;
+/// 一度に送るやり取りの上限（件数。質問と回答を 1 件ずつ数える）
+pub const MAX_CHAT_MESSAGES: usize = 21;
+
+/// チャットの発言者。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatRole {
+    User,
+    Assistant,
+}
+
+/// チャットの発言 1 件。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatMessage {
+    pub role: ChatRole,
+    pub content: String,
+}
+
+/// `POST /api/chat` の body。解説のあとに続けて質問する。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatRequest {
+    /// 解説した対象が単語か英文か
+    pub mode: Mode,
+    /// 解説した対象
+    pub text: String,
+    #[serde(default)]
+    pub context: String,
+    /// 表示した解説（Markdown）
+    #[serde(default)]
+    pub explanation: String,
+    /// これまでのやり取り。質問と回答が交互で、最後が今回の質問
+    pub messages: Vec<ChatMessage>,
+}
+
+/// 送る件数の上限に収まるよう、古いやり取りから除く（先頭は質問のまま）。
+pub fn recent_chat_messages(messages: &[ChatMessage]) -> &[ChatMessage] {
+    let mut start = messages.len().saturating_sub(MAX_CHAT_MESSAGES);
+    while start < messages.len() && messages[start].role != ChatRole::User {
+        start += 1;
+    }
+    &messages[start..]
+}
+
 /// 英文の解説のスラッシュリーディングの見出し。
 pub const SLASH_READING_HEADING: &str = "## スラッシュリーディング";
 

@@ -1,6 +1,7 @@
 mod arxiv;
 mod bookmark;
 mod cache;
+mod chat;
 mod config;
 mod db;
 mod dict;
@@ -189,6 +190,7 @@ fn router(state: AppState, config: &Config) -> Router {
         .route("/words/prune", post(words::post_prune))
         .route("/search", get(search::get_search))
         .route("/explain", post(explain::post_explain))
+        .route("/chat", post(chat::post_chat))
         .route(
             "/history",
             get(history::get_history).post(history::post_history),

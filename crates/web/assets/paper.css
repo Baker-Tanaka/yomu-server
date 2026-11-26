@@ -216,7 +216,7 @@ body.resizing #paper, body.resizing #explain-pane {
 
 /* 検索欄。長押しのコピー・ペーストが使えるよう、canvas の上に HTML の入力欄を重ねる
    （位置と大きさは search_input.rs が egui のレイアウトに合わせて指定する） */
-#search-input {
+.pane-input {
   display: none;
   position: absolute;
   box-sizing: border-box;
@@ -233,8 +233,8 @@ body.resizing #paper, body.resizing #explain-pane {
   -webkit-appearance: none;
   appearance: none;
 }
-#search-input::placeholder { color: var(--placeholder); }
-#search-input:focus { border-color: var(--accent); }
+.pane-input::placeholder { color: var(--placeholder); }
+.pane-input:focus { border-color: var(--accent); }
 
 /* 本文 */
 #paper > * {

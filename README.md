@@ -78,6 +78,7 @@ ollama serve                      # このターミナルは開いたままに�
 ```sh
 # 別のターミナルで、yomu-server に移動してから
 ollama pull gemma4:e4b-it-qat
+ollama pull embeddinggemma        # 知識（RAG）の検索用。使わないなら .env で EMBED_MODEL= を空にする
 
 # 辞書
 git clone --depth 1 https://github.com/kujirahand/EJDict data/EJDict

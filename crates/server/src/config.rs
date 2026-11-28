@@ -25,6 +25,10 @@ pub struct Config {
     pub github_token: Option<Secret>,
     /// 単語帳（検索回数・カタカナの読み・辞書に無い語の訳）に残す語数の上限
     pub word_store_max: i64,
+    /// 知識（RAG）の埋め込みモデル（LLM_BASE_URL の /embeddings で使う）。空なら知識は使わない
+    pub embed_model: String,
+    /// 解説に知識を添える、類似度（コサイン）の下限
+    pub embed_min_score: f32,
 }
 
 /// ログなどに出してはいけない値。Debug では伏せ字になる。
@@ -64,6 +68,8 @@ impl Config {
                 .filter(|t| !t.is_empty())
                 .map(Secret),
             word_store_max: parse_word_store_max(&get("WORD_STORE_MAX", "20000"))?,
+            embed_model: get("EMBED_MODEL", "embeddinggemma").trim().to_string(),
+            embed_min_score: parse_min_score(&get("EMBED_MIN_SCORE", "0.33"))?,
         })
     }
 }
@@ -102,6 +108,19 @@ fn parse_word_store_max(s: &str) -> Result<i64> {
     Ok(n)
 }
 
+/// 類似度の下限（0 〜 1）。
+fn parse_min_score(s: &str) -> Result<f32> {
+    let v: f32 = s
+        .trim()
+        .parse()
+        .with_context(|| format!("EMBED_MIN_SCORE は 0 〜 1 の数で指定してください: {s}"))?;
+    anyhow::ensure!(
+        (0.0..=1.0).contains(&v),
+        "EMBED_MIN_SCORE は 0 〜 1 の範囲で指定してください: {v}"
+    );
+    Ok(v)
+}
+
 fn parse_bool(s: &str) -> bool {
     !matches!(
         s.trim().to_ascii_lowercase().as_str(),
@@ -118,6 +137,14 @@ fn parse_hosts(s: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn min_score() {
+        assert_eq!(super::parse_min_score(" 0.4 ").unwrap(), 0.4);
+        for bad in ["", "x", "-0.1", "1.5"] {
+            assert!(super::parse_min_score(bad).is_err(), "{bad}");
+        }
+    }
+
     #[test]
     fn hosts() {
         assert_eq!(

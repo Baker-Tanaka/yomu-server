@@ -7,10 +7,11 @@ use eframe::egui;
 use paper_reader_shared::{
     ChatMessage, ChatRequest, ChatRole, DictResponse, ExplainRequest, ExplainTag, FeedbackContext,
     FeedbackDraft, FeedbackItem, FeedbackListResponse, FeedbackPreview, FeedbackSubmit,
-    GrammarTagsResponse, HealthResponse, HistoryEntry, HistoryRecord, MAX_CHAT_ANSWER_CHARS,
-    MAX_CHAT_QUESTION_CHARS, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, ReadLaterItem,
-    SEARCH_PAGE_SIZE, SearchItem, SearchSort, WordListResponse, WordNote, WordSort, WordStoreStats,
-    WordUpsert, clip_context, paper_url_from_input, recent_chat_messages, sse_event,
+    GrammarTagsResponse, HealthResponse, HistoryEntry, HistoryRecord, KnowledgeAdd,
+    KnowledgeListResponse, KnowledgeRef, MAX_CHAT_ANSWER_CHARS, MAX_CHAT_QUESTION_CHARS,
+    MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, ReadLaterItem, SEARCH_PAGE_SIZE, SearchItem,
+    SearchSort, WordListResponse, WordNote, WordSort, WordStoreStats, WordUpsert, clip_context,
+    paper_url_from_input, recent_chat_messages, sse_event,
 };
 use web_sys::AbortController;
 
@@ -176,6 +177,10 @@ pub struct Explain {
     pub selected_tag: Option<usize>,
     /// 選んだ文法項目を本文で見つけてハイライトできたか
     pub highlight_found: bool,
+    /// 解説に添えた知識（knowledge イベント）
+    pub knowledge: Vec<KnowledgeRef>,
+    /// この解説を知識に登録する操作の状態
+    pub knowledge_add: KnowledgeAddPhase,
     pub chat: Chat,
     /// 解説ごとに増える番号。中止した解説から遅れて届いたイベントを捨てる
     seq: u64,
@@ -199,6 +204,8 @@ impl Explain {
         self.target = None;
         self.from_cache = false;
         self.clear_tags();
+        self.knowledge.clear();
+        self.knowledge_add = KnowledgeAddPhase::Idle;
         self.chat.reset();
     }
 
@@ -209,6 +216,27 @@ impl Explain {
         self.highlight_found = false;
         dom::clear_highlight();
     }
+}
+
+/// 解説を知識に登録する操作の状態。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum KnowledgeAddPhase {
+    #[default]
+    Idle,
+    Adding,
+    /// 登録した用語
+    Added(String),
+    Error(String),
+}
+
+/// 知識（RAG）の一覧（設定画面）。
+#[derive(Default)]
+pub struct Knowledge {
+    pub list: Option<KnowledgeListResponse>,
+    pub loading: bool,
+    pub error: Option<String>,
+    /// 次に設定画面を開いたときに読み直す
+    pub stale: bool,
 }
 
 /// 文法項目タブのデータの状態。
@@ -440,6 +468,7 @@ pub struct Shared {
     /// 出現回数などが変わったので、次に文法項目タブを表示するときに読み直す
     pub grammar_stale: bool,
     pub feedback: Feedback,
+    pub knowledge: Knowledge,
 }
 
 impl Shared {
@@ -457,6 +486,10 @@ impl Shared {
             },
             grammar_stale: true,
             papers_stale: true,
+            knowledge: Knowledge {
+                stale: true,
+                ..Knowledge::default()
+            },
             read_later: ReadLater {
                 stale: true,
                 ..ReadLater::default()
@@ -904,6 +937,8 @@ fn begin_explain(this: &SharedRef, ctx: &egui::Context, regenerate: bool) {
         s.explain.markdown.clear();
         s.explain.from_cache = false;
         s.explain.clear_tags();
+        s.explain.knowledge.clear();
+        s.explain.knowledge_add = KnowledgeAddPhase::Idle;
         s.explain.chat.reset();
         s.explain.target = Some((sel.mode, sel.text.clone()));
 
@@ -947,6 +982,16 @@ fn begin_explain(this: &SharedRef, ctx: &egui::Context, regenerate: bool) {
             let this = this.clone();
             let ctx = ctx.clone();
             move |ev: paper_reader_shared::SseEvent| {
+                if ev.event == sse_event::KNOWLEDGE {
+                    let refs: Vec<KnowledgeRef> =
+                        serde_json::from_str(&ev.data).unwrap_or_default();
+                    let mut s = this.borrow_mut();
+                    if s.explain.seq == seq {
+                        s.explain.knowledge = refs;
+                        ctx.request_repaint();
+                    }
+                    return;
+                }
                 if ev.event == sse_event::TAGS {
                     let tags: Vec<ExplainTag> = serde_json::from_str(&ev.data).unwrap_or_default();
                     let ids: Vec<String> = tags.iter().map(|t| t.tag_id.clone()).collect();
@@ -1023,6 +1068,97 @@ fn begin_explain(this: &SharedRef, ctx: &egui::Context, regenerate: bool) {
             // LLM が止まっている可能性があるのでステータスを更新する
             refresh_health(&this, &ctx);
         }
+    });
+}
+
+/// 表示中の解説から、LLM が用語と要点を整理して知識に登録する。
+pub fn add_knowledge(this: &SharedRef, ctx: &egui::Context) {
+    let (req, seq) = {
+        let mut s = this.borrow_mut();
+        let paper_id = s.paper_ref().map(|(id, _)| id);
+        let Some(sel) = s.selection.clone() else {
+            return;
+        };
+        let e = &mut s.explain;
+        if e.phase != ExplainPhase::Done
+            || e.markdown.trim().is_empty()
+            || e.knowledge_add == KnowledgeAddPhase::Adding
+        {
+            return;
+        }
+        e.knowledge_add = KnowledgeAddPhase::Adding;
+        let req = KnowledgeAdd {
+            mode: sel.mode,
+            context: clip_context(&sel.context, &sel.text, MAX_CONTEXT_CHARS),
+            text: sel.text,
+            explanation: e.markdown.chars().take(MAX_CHAT_ANSWER_CHARS).collect(),
+            paper_id,
+        };
+        (req, e.seq)
+    };
+    ctx.request_repaint();
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::add_knowledge(&req).await;
+        let mut s = this.borrow_mut();
+        s.knowledge.stale = true;
+        // 別の解説に移っていたら、結果は一覧にだけ反映する
+        if s.explain.seq != seq {
+            return;
+        }
+        s.explain.knowledge_add = match result {
+            Ok(item) => KnowledgeAddPhase::Added(item.term),
+            Err(e) => KnowledgeAddPhase::Error(e),
+        };
+        ctx.request_repaint();
+    });
+}
+
+/// 知識の一覧を読み直す。
+pub fn refresh_knowledge(this: &SharedRef, ctx: &egui::Context) {
+    {
+        let mut s = this.borrow_mut();
+        if s.knowledge.loading {
+            return;
+        }
+        s.knowledge.loading = true;
+        s.knowledge.stale = false;
+    }
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::fetch_knowledge().await;
+        let mut s = this.borrow_mut();
+        s.knowledge.loading = false;
+        match result {
+            Ok(list) => {
+                s.knowledge.list = Some(list);
+                s.knowledge.error = None;
+            }
+            Err(e) => s.knowledge.error = Some(e),
+        }
+        ctx.request_repaint();
+    });
+}
+
+/// 知識を 1 件消す。
+pub fn delete_knowledge(this: &SharedRef, ctx: &egui::Context, id: i64) {
+    let this = this.clone();
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::delete_knowledge(id).await;
+        let mut s = this.borrow_mut();
+        match result {
+            Ok(()) => {
+                if let Some(list) = &mut s.knowledge.list {
+                    list.items.retain(|i| i.id != id);
+                }
+                s.knowledge.error = None;
+            }
+            Err(e) => s.knowledge.error = Some(e),
+        }
+        ctx.request_repaint();
     });
 }
 

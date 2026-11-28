@@ -45,6 +45,7 @@ cargo run -p import-dict --release
 ```sh
 brew install ollama
 ollama pull gemma4:e4b-it-qat
+ollama pull embeddinggemma   # 知識（RAG）の埋め込み（約 600MB。EMBED_MODEL を空にすれば不要）
 ollama serve          # 127.0.0.1:11434 で待ち受け（外部には公開しない）
 ```
 

@@ -888,6 +888,59 @@ pub mod sse_event {
     pub const CACHED: &str = "cached";
     /// 英文で使われている文法項目。data は `Vec<ExplainTag>` の JSON（mode=sentence のときだけ、解説の前に送る）
     pub const TAGS: &str = "tags";
+    /// 解説に添えた知識（RAG）。data は `Vec<KnowledgeRef>` の JSON（添えたときだけ、最初に送る）
+    pub const KNOWLEDGE: &str = "knowledge";
+}
+
+/// 知識（RAG）1 件の上限（文字数）
+pub const MAX_KNOWLEDGE_TERM_CHARS: usize = 80;
+pub const MAX_KNOWLEDGE_SUMMARY_CHARS: usize = 600;
+
+/// 解説に添えた知識（表示用）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnowledgeRef {
+    pub id: i64,
+    pub term: String,
+}
+
+/// 知識（RAG）1 件。解説から LLM が整理して登録する。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnowledgeItem {
+    pub id: i64,
+    /// 中心となる用語
+    pub term: String,
+    /// 日本語の要点
+    pub summary: String,
+    /// 登録したときに選んでいた語・英文・数式
+    #[serde(default)]
+    pub source_text: String,
+    #[serde(default)]
+    pub paper_id: Option<String>,
+    pub created_at: i64,
+}
+
+/// `GET /api/knowledge` の応答。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnowledgeListResponse {
+    /// 新しい順
+    pub items: Vec<KnowledgeItem>,
+    /// 登録できる上限
+    pub max: i64,
+    /// 埋め込みモデル（空なら知識は使えない）
+    pub embed_model: String,
+}
+
+/// `POST /api/knowledge` の body。表示中の解説から知識を作って登録する。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnowledgeAdd {
+    pub mode: Mode,
+    pub text: String,
+    #[serde(default)]
+    pub context: String,
+    /// 表示した解説（Markdown）
+    pub explanation: String,
+    #[serde(default)]
+    pub paper_id: Option<String>,
 }
 
 /// SSE の 1 イベント。

@@ -86,6 +86,20 @@ pub async fn retry_feedback(id: i64) -> Result<FeedbackItem, String> {
     post_json::<FeedbackItem, ()>(&format!("/api/feedback/{id}/retry"), None).await
 }
 
+pub async fn fetch_knowledge() -> Result<paper_reader_shared::KnowledgeListResponse, String> {
+    get_json("/api/knowledge").await
+}
+
+pub async fn add_knowledge(
+    req: &paper_reader_shared::KnowledgeAdd,
+) -> Result<paper_reader_shared::KnowledgeItem, String> {
+    post_json("/api/knowledge", Some(req)).await
+}
+
+pub async fn delete_knowledge(id: i64) -> Result<(), String> {
+    send_without_body("DELETE", &format!("/api/knowledge?id={id}"), None).await
+}
+
 /// JSON を POST して JSON を受け取る。
 async fn post_json<T: DeserializeOwned, B: Serialize>(
     path: &str,

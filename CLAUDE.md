@@ -13,7 +13,8 @@
 MacBook Air
   ├─ Rust サーバー（axum, 127.0.0.1:8080）… 静的配信 / 論文取得 / 辞書 / LLM 中継
   ├─ LLM ランタイム（Ollama または llama.cpp の llama-server, 127.0.0.1 のみ）
-  └─ SQLite（辞書・解説キャッシュ・論文キャッシュ）
+  ├─ 埋め込みモデル（EMBED_MODEL。知識（RAG）の検索用。LLM ランタイムの /embeddings を使う）
+  └─ SQLite（辞書・解説キャッシュ・論文キャッシュ・知識）
 外部: arxiv.org（サーバーからのみアクセス）
 実験モード（既定オフ）: 端末の WebGPU で小さな LLM を動かす。WebLLM とモデルは scripts/fetch_webllm.py で Mac に置き、
   サーバーが /webllm/ で配信する（端末から外部へは直接アクセスしない）。オフのあいだは関係するファイルを読み込まない
@@ -61,11 +62,15 @@ POST /api/words/prune           … 検索回数の少ない語から消す（�
 POST /api/explain               … body: { mode: "word" | "sentence" | "formula", text, context, slash?, style? }（slash ならスラッシュリーディングも付ける。formula の text は数式の LaTeX。
                                    style は "standard"（既定。英語／数式の解説）か "academic"（学術的な解説。利用者が選んだときだけ））
                                    レスポンスは text/event-stream（SSE 形式）で解説を逐次送る
-                                   イベント: queued / started / token / tags / done / error
+                                   イベント: knowledge / queued / started / token / tags / done / error
                                    （mode=sentence は token で和訳を先に流し、tags（文法タグ）を送ってから残りの解説の token を流す）
                                    （キャッシュのヒット時は cached → tags → token → done）
 POST /api/chat                  … 解説のあとに続けて質問する。body: { mode, text, context, explanation, messages }。SSE（queued / started / token / done / error）。
                                    会話は保存せず、LLM のコンテキスト長に収まるようサーバーが古いやり取りと資料を切り詰める。LLM の枠は解説と共通
+GET  /api/knowledge             … 知識（RAG）の一覧
+POST /api/knowledge             … 表示中の解説から LLM が用語と要点を整理し、埋め込みを作って知識に登録する
+DELETE /api/knowledge?id=       … 知識を消す
+                                   （解説・チャットでは意味の近い知識を添え、explain は knowledge イベントで知らせる。添えた知識は解説キャッシュのキーに含める）
 GET  /api/grammar-tags          … 文法タグ一覧・カテゴリ・履歴での出現回数
 POST /api/admin/reload-grammar  … 文法タグを読み直す（127.0.0.1 から直接の要求のみ。転送ヘッダー付きは拒否）
 GET  /api/feedback              … 送信先の設定（GitHub）・ラベル定義・送ったフィードバックの一覧
@@ -88,6 +93,8 @@ GRAMMAR_TAGS_PATH=data/grammar_tags.yaml                # 文法タグのマス�
 WORD_STORE_MAX=20000                                    # 単語帳に残す語数の上限
 GITHUB_REPO=<owner/name>                                # フィードバックを Issue にするリポジトリ（未設定なら保存だけ）
 GITHUB_TOKEN=<fine-grained token>                       # そのリポジトリの Issues: Read and write だけを持つトークン
+EMBED_MODEL=embeddinggemma                              # 知識（RAG）の埋め込みモデル（空なら知識は使わない）
+EMBED_MIN_SCORE=0.33                                    # 知識を添える類似度（コサイン）の下限
 
 # 開発方針: 速さを最優先し、品質は落とさない
 UI の反応と結果の表示をできるだけ速くする。ただし速さのために正確さ・安全性・解説の質を削らない。

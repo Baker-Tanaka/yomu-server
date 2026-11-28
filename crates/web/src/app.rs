@@ -65,6 +65,8 @@ pub struct PaperReaderApp {
     theme: dom::ThemeChoice,
     /// フィードバックの画面の大きさ
     feedback_size: ModalSize,
+    /// 設定画面で、知識（RAG）の一覧を開いているか
+    knowledge_open: bool,
     /// 設定の画面を開いているか
     settings_open: bool,
     /// 設定の画面の大きさ
@@ -221,6 +223,7 @@ impl PaperReaderApp {
             markdown_cache: CommonMarkCache::default(),
             theme,
             feedback_size: ModalSize::default(),
+            knowledge_open: false,
             settings_open: false,
             settings_size: ModalSize::default(),
             settings_return: None,
@@ -328,6 +331,13 @@ impl PaperReaderApp {
             s.local.enabled.hash(&mut h);
             std::mem::discriminant(&s.local.phase).hash(&mut h);
             std::mem::discriminant(&s.health).hash(&mut h);
+            s.knowledge
+                .list
+                .as_ref()
+                .map(|l| l.items.len())
+                .hash(&mut h);
+            s.knowledge.error.is_some().hash(&mut h);
+            self.knowledge_open.hash(&mut h);
             h.finish()
         };
         let mut size = std::mem::take(&mut self.settings_size);
@@ -451,6 +461,8 @@ impl PaperReaderApp {
                 open();
             }
         }
+        self.knowledge_settings(ui, p);
+        ui.separator();
         if ui
             .button("💬 不具合・要望を送る…")
             .on_hover_text("GitHub の Issue になります（送る前に内容を確認できます）")
@@ -1547,6 +1559,7 @@ impl PaperReaderApp {
                 });
             });
 
+            self.knowledge_used(ui, p);
             if is_sentence && phase != ExplainPhase::Idle {
                 self.grammar_chips(ui, p);
             }
@@ -1635,6 +1648,10 @@ impl PaperReaderApp {
                 }
             }
 
+            if phase == ExplainPhase::Done && !markdown.is_empty() {
+                self.knowledge_add_row(ui, p);
+            }
+
             ui.add_space(4.0);
             ui.separator();
             let mut slash = show_slash;
@@ -1659,6 +1676,145 @@ impl PaperReaderApp {
                 self.shared.borrow_mut().auto_explain = auto;
             }
         });
+    }
+
+    /// 解説に添えた知識（RAG）の用語。
+    fn knowledge_used(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let terms: Vec<String> = {
+            let s = self.shared.borrow();
+            s.explain.knowledge.iter().map(|k| k.term.clone()).collect()
+        };
+        if terms.is_empty() {
+            return;
+        }
+        ui.label(
+            RichText::new(format!("📚 参考にした知識: {}", terms.join("、")))
+                .size(12.0)
+                .color(p.weak),
+        )
+        .on_hover_text("登録した知識のうち、この対象に近いものを AI に添えました（⚙ の「知識」で確認・削除できます）");
+    }
+
+    /// 「📚 知識に登録」と、その結果。
+    fn knowledge_add_row(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let phase = self.shared.borrow().explain.knowledge_add.clone();
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| match &phase {
+            state::KnowledgeAddPhase::Idle | state::KnowledgeAddPhase::Error(_) => {
+                if theme::subtle_button(ui, "📚 知識に登録")
+                    .on_hover_text(
+                        "この解説から AI が用語と要点を整理して保存し、あとの解説・質問で近い内容のときに参考にします",
+                    )
+                    .clicked()
+                {
+                    state::add_knowledge(&self.shared, ui.ctx());
+                }
+                if let state::KnowledgeAddPhase::Error(e) = &phase {
+                    ui.label(RichText::new(e).size(12.0).color(p.error));
+                }
+            }
+            state::KnowledgeAddPhase::Adding => {
+                ui.spinner();
+                ui.label(
+                    RichText::new("AI が知識を整理しています…")
+                        .size(12.5)
+                        .color(p.weak),
+                );
+            }
+            state::KnowledgeAddPhase::Added(term) => {
+                ui.label(
+                    RichText::new(format!("📚 「{term}」を知識に登録しました"))
+                        .size(12.5)
+                        .color(p.ok),
+                );
+            }
+        });
+    }
+
+    /// 設定画面の、登録した知識の一覧。
+    fn knowledge_settings(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let ctx = ui.ctx().clone();
+        let (stale, loading) = {
+            let s = self.shared.borrow();
+            (s.knowledge.stale, s.knowledge.loading)
+        };
+        if stale && !loading {
+            state::refresh_knowledge(&self.shared, &ctx);
+        }
+        let (list, error) = {
+            let s = self.shared.borrow();
+            (s.knowledge.list.clone(), s.knowledge.error.clone())
+        };
+        let count = list.as_ref().map_or(0, |l| l.items.len());
+        let header = match &list {
+            Some(l) => format!("📚 知識（RAG） {count} / {} 件", l.max),
+            None => "📚 知識（RAG）".to_string(),
+        };
+        let mut open = self.knowledge_open;
+        let arrow = if open { "⏷" } else { "⏵" };
+        if ui
+            .selectable_label(false, format!("{arrow} {header}"))
+            .on_hover_text("解説から登録した知識を確認・削除します")
+            .clicked()
+        {
+            open = !open;
+            self.knowledge_open = open;
+        }
+        if !open {
+            return;
+        }
+        ui.indent("knowledge_settings", |ui| {
+                if let Some(e) = &error {
+                    notice(ui, p, e);
+                }
+                let Some(list) = list else {
+                    ui.spinner();
+                    return;
+                };
+                if list.embed_model.is_empty() {
+                    ui.label(
+                        RichText::new("サーバーの EMBED_MODEL が空のため、知識は使えません")
+                            .size(12.0)
+                            .color(p.weak),
+                    );
+                    return;
+                }
+                if list.items.is_empty() {
+                    ui.label(
+                        RichText::new(
+                            "まだありません。解説の下の「📚 知識に登録」で、AI が用語と要点を整理して保存します",
+                        )
+                        .size(12.0)
+                        .color(p.weak),
+                    );
+                    return;
+                }
+                let mut delete = None;
+                egui::ScrollArea::vertical()
+                    .id_salt("knowledge_list")
+                    .max_height(260.0)
+                    .show(ui, |ui| {
+                        for item in &list.items {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(&item.term).strong().color(p.strong));
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if theme::subtle_button(ui, "削除").clicked() {
+                                            delete = Some(item.id);
+                                        }
+                                    },
+                                );
+                            });
+                            ui.label(RichText::new(&item.summary).size(12.5).color(p.text))
+                                .on_hover_text(format!("登録したときの選択: {}", item.source_text));
+                            ui.add_space(4.0);
+                        }
+                    });
+                if let Some(id) = delete {
+                    state::delete_knowledge(&self.shared, &ctx, id);
+                }
+            });
     }
 
     /// 解説の Markdown。`$…$` の数式は組んで描く。

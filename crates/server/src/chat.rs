@@ -24,6 +24,7 @@ use crate::error::{AppError, AppResult};
 use crate::explain::{
     GENERATION_TIMEOUT, StreamError, acquire_gate, chat_stream_body, send, stream_llm,
 };
+use crate::knowledge;
 use crate::prompts;
 
 /// 回答の最大トークン数
@@ -83,7 +84,16 @@ async fn generate(
             "LLM_MODEL が設定されていません（.env を確認してください）".into(),
         ));
     }
-    let (system, history) = fit(req);
+    // 対象と今回の質問に近い知識を添える（知識が無ければ問い合わせない）
+    let question = req.messages.last().map_or("", |m| m.content.as_str());
+    let notes = knowledge::retrieve(
+        state,
+        &format!("{}\n{question}", req.text),
+        knowledge::CHAT_TOP_K,
+        knowledge::CHAT_NOTE_CHARS,
+    )
+    .await;
+    let (system, history) = fit(req, &notes.prompt_section());
     let question = history.last().map(|m| m.content.as_str()).unwrap_or("");
     let mut body = chat_stream_body(
         &cfg.llm_model,
@@ -187,10 +197,11 @@ fn head_within(s: &str, budget: usize) -> String {
 ///
 /// 指示・解説の対象・今回の質問は必ず入れる。解説と文脈は上限まで切り詰め、
 /// 残りに新しいやり取りから順に（質問と回答の組で）入れる。
-fn fit(req: &ChatRequest) -> (String, Vec<ChatMessage>) {
+/// `knowledge` は添える知識の節（空なら無し）で、指示と同じく必ず入れる。
+fn fit(req: &ChatRequest, knowledge: &str) -> (String, Vec<ChatMessage>) {
     let fixed = estimate_tokens(&prompts::chat_system_prompt(
         req.mode, req.style, &req.text, "", "",
-    ));
+    )) + estimate_tokens(knowledge);
     let last = req.messages.len().saturating_sub(1);
     let question = req
         .messages
@@ -237,8 +248,9 @@ fn fit(req: &ChatRequest) -> (String, Vec<ChatMessage>) {
             history = previous;
         }
     }
-    let system =
+    let mut system =
         prompts::chat_system_prompt(req.mode, req.style, &req.text, &context, &explanation);
+    system.push_str(knowledge);
     (system, history)
 }
 
@@ -300,7 +312,7 @@ mod tests {
     #[test]
     fn fit_keeps_everything_when_small() {
         let r = req(talk(2, "短い回答"));
-        let (system, history) = fit(&r);
+        let (system, history) = fit(&r, "");
         assert_eq!(history, r.messages);
         assert!(system.contains("We propose a method.") && system.contains("主語: We"));
         assert!(system.contains("Intro."));
@@ -311,7 +323,7 @@ mod tests {
         let mut r = req(talk(8, &"長い回答です。".repeat(80)));
         r.explanation = "解説".repeat(3_000);
         r.context = "context ".repeat(500);
-        let (system, history) = fit(&r);
+        let (system, history) = fit(&r, "");
         let total: usize = estimate_tokens(&system)
             + history
                 .iter()
@@ -327,9 +339,24 @@ mod tests {
     }
 
     #[test]
+    fn fit_counts_knowledge_within_budget() {
+        let mut r = req(talk(8, &"長い回答です。".repeat(80)));
+        r.explanation = "解説".repeat(3_000);
+        let knowledge = format!("\n\n参考知識:\n- t: {}", "あ".repeat(500));
+        let (system, history) = fit(&r, &knowledge);
+        assert!(system.ends_with(&knowledge));
+        let total: usize = estimate_tokens(&system)
+            + history
+                .iter()
+                .map(|m| estimate_tokens(&m.content))
+                .sum::<usize>();
+        assert!(total <= PROMPT_BUDGET, "{total}");
+    }
+
+    #[test]
     fn fit_keeps_head_of_a_huge_previous_answer() {
         let r = req(talk(1, &"とても長い回答。".repeat(1_000)));
-        let (_, history) = fit(&r);
+        let (_, history) = fit(&r, "");
         assert_eq!(history.len(), 3);
         assert!(history[1].content.ends_with('…'));
     }

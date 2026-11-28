@@ -5,6 +5,8 @@
 //! - 最後まで生成できた解説は explain_cache に保存し、次回は LLM を呼ばずに同じ SSE 形式で返す
 //! - mode=sentence では、和訳を先に流してから文法タグ付けを行い `tags` イベントを送り、続けて残りの解説を流す
 //!   （和訳・タグ付け・解説で Semaphore 1 件）。タグ付けに失敗してもタグ無しで解説を続ける
+//! - 登録した知識（RAG）が対象に近ければ、解説のユーザーメッセージに添え、`knowledge` イベントで知らせる。
+//!   添えた知識はキャッシュのキーに含める（和訳には添えない。最初の文字が出るまでを延ばさないため）
 
 use std::convert::Infallible;
 use std::sync::atomic::Ordering;
@@ -26,6 +28,7 @@ use crate::cache::cache_key;
 use crate::db;
 use crate::error::{AppError, AppResult};
 use crate::grammar::{DetectedTag, GrammarData};
+use crate::knowledge::{self, Notes};
 use crate::prompts::{self, GrammarNote};
 use crate::tagger::Tagger;
 
@@ -45,9 +48,21 @@ pub async fn post_explain(
     let Json(req) =
         body.map_err(|e| AppError::BadRequest(format!("リクエストを解釈できません: {e}")))?;
     let req = validate(req)?;
-    let key = key_for(&state, &req);
+    // キャッシュのキーに含めるので、キャッシュを見る前に引く（知識が無ければ問い合わせない）
+    let notes = knowledge::retrieve(
+        &state,
+        &knowledge::query_for(req.mode, &req.text, &req.context),
+        knowledge::TOP_K,
+        knowledge::MAX_NOTE_CHARS,
+    )
+    .await;
+    let key = key_with_notes(&state, &req, &notes);
 
     let (tx, rx) = mpsc::channel::<Event>(64);
+    if !notes.is_empty() {
+        let data = serde_json::to_string(&notes.refs()).unwrap_or_else(|_| "[]".into());
+        let _ = tx.try_send(Event::default().event(sse_event::KNOWLEDGE).data(data));
+    }
     let cached = if req.regenerate {
         None
     } else {
@@ -55,12 +70,13 @@ pub async fn post_explain(
         // web は設定に合わせて表示を切り替え、足りなければ「付けて解説し直す」を出す
         let mut keys = vec![key.clone()];
         if has_grammar(&req) {
-            keys.push(key_for(
+            keys.push(key_with_notes(
                 &state,
                 &ExplainRequest {
                     slash: !req.slash,
                     ..req.clone()
                 },
+                &notes,
             ));
         }
         let mut hit = None;
@@ -105,7 +121,7 @@ pub async fn post_explain(
             drop(tx);
         }
         None => {
-            tokio::spawn(run(state, req, key, tx));
+            tokio::spawn(run(state, req, notes, key, tx));
         }
     }
 
@@ -219,15 +235,24 @@ fn has_grammar(req: &ExplainRequest) -> bool {
     req.mode == Mode::Sentence && req.style == ExplainStyle::Standard
 }
 
-/// この解説のキャッシュキー。
+/// 知識を添えない解説のキャッシュキー（履歴の「解説あり」の確認に使う）。
 pub fn key_for(state: &AppState, req: &ExplainRequest) -> String {
+    key_with_notes(state, req, &Notes::default())
+}
+
+/// この解説のキャッシュキー。知識を添えるなら、その内容も含める（無ければ添えないときと同じキー）。
+fn key_with_notes(state: &AppState, req: &ExplainRequest, notes: &Notes) -> String {
     cache_key(
         &state.config.llm_model,
         req.mode,
         &req.text,
         &req.context,
         prompts::PROMPT_VERSION,
-        &key_variant(req, &state.grammar().tags_hash),
+        &format!(
+            "{}{}",
+            key_variant(req, &state.grammar().tags_hash),
+            notes.key_part()
+        ),
     )
 }
 
@@ -264,7 +289,13 @@ pub(crate) struct Completion {
     pub complete: bool,
 }
 
-async fn run(state: AppState, req: ExplainRequest, key: String, tx: mpsc::Sender<Event>) {
+async fn run(
+    state: AppState,
+    req: ExplainRequest,
+    notes: Notes,
+    key: String,
+    tx: mpsc::Sender<Event>,
+) {
     let Some(_permit) = acquire_gate(&state, &tx).await else {
         return;
     };
@@ -272,10 +303,11 @@ async fn run(state: AppState, req: ExplainRequest, key: String, tx: mpsc::Sender
         return;
     }
 
-    let result = match tokio::time::timeout(GENERATION_TIMEOUT, generate(&state, &req, &tx)).await {
-        Ok(r) => r,
-        Err(_) => Err(StreamError::Llm("解説の生成がタイムアウトしました".into())),
-    };
+    let result =
+        match tokio::time::timeout(GENERATION_TIMEOUT, generate(&state, &req, &notes, &tx)).await {
+            Ok(r) => r,
+            Err(_) => Err(StreamError::Llm("解説の生成がタイムアウトしました".into())),
+        };
     match result {
         Ok((c, detected)) => {
             tracing::info!(
@@ -351,8 +383,10 @@ pub(crate) async fn send(
 async fn generate(
     state: &AppState,
     req: &ExplainRequest,
+    notes: &Notes,
     tx: &mpsc::Sender<Event>,
 ) -> Result<(Completion, Option<Vec<DetectedTag>>), StreamError> {
+    let knowledge = notes.prompt_section();
     let cfg = &state.config;
     if cfg.llm_model.is_empty() {
         return Err(StreamError::Llm(
@@ -372,7 +406,7 @@ async fn generate(
     if req.style == ExplainStyle::Academic {
         let b = body(
             prompts::academic_system_prompt(),
-            prompts::user_message(req, &[], None),
+            format!("{}{knowledge}", prompts::user_message(req, &[], None)),
             MAX_TOKENS,
         );
         return Ok((stream_llm(state, &b, tx).await?, None));
@@ -381,7 +415,7 @@ async fn generate(
     if req.mode != Mode::Sentence {
         let b = body(
             prompts::system_prompt(req.mode, false),
-            prompts::user_message(req, &[], None),
+            format!("{}{knowledge}", prompts::user_message(req, &[], None)),
             MAX_TOKENS,
         );
         return Ok((stream_llm(state, &b, tx).await?, None));
@@ -411,7 +445,7 @@ async fn generate(
         _ = tx.closed() => return Err(StreamError::ClientGone),
     };
     send(tx, sse_event::TAGS, &tags_event(&grammar, &tags)).await?;
-    let notes: Vec<GrammarNote<'_>> = tags
+    let grammar_notes: Vec<GrammarNote<'_>> = tags
         .iter()
         .filter_map(|d| {
             grammar.tag(&d.tag_id).map(|t| GrammarNote {
@@ -424,7 +458,10 @@ async fn generate(
     // ③ 文構造・文法ポイント・語句
     let b = body(
         prompts::system_prompt(Mode::Sentence, req.slash),
-        prompts::user_message(req, &notes, Some(&translation.text)),
+        format!(
+            "{}{knowledge}",
+            prompts::user_message(req, &grammar_notes, Some(&translation.text))
+        ),
         MAX_TOKENS,
     );
     let rest = stream_llm(state, &b, tx).await?;

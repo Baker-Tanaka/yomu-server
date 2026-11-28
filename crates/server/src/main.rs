@@ -11,6 +11,7 @@ mod feedback;
 mod grammar;
 mod grammar_api;
 mod history;
+mod knowledge;
 mod llm;
 mod paper;
 mod papers;
@@ -64,6 +65,8 @@ pub struct AppState {
     /// GitHub API 用（フィードバックを Issue にする）
     pub github_http: reqwest::Client,
     pub feedback: Arc<feedback::FeedbackState>,
+    /// 知識（RAG）の索引
+    pub knowledge: knowledge::SharedIndex,
 }
 
 impl AppState {
@@ -133,7 +136,13 @@ async fn main() -> Result<()> {
         structured_output: Arc::new(AtomicBool::new(true)),
         github_http: feedback::build_client()?,
         feedback: Arc::default(),
+        knowledge: Arc::default(),
     };
+    if !config.embed_model.is_empty() {
+        knowledge::load(&state)
+            .await
+            .context("知識（RAG）の読み込みに失敗しました")?;
+    }
     match &config.github_repo {
         Some(repo) if config.github_token.is_some() => {
             tracing::info!(%repo, "feedback will be sent to GitHub issues");
@@ -191,6 +200,12 @@ fn router(state: AppState, config: &Config) -> Router {
         .route("/search", get(search::get_search))
         .route("/explain", post(explain::post_explain))
         .route("/chat", post(chat::post_chat))
+        .route(
+            "/knowledge",
+            get(knowledge::get_knowledge)
+                .post(knowledge::post_knowledge)
+                .delete(knowledge::delete_knowledge),
+        )
         .route(
             "/history",
             get(history::get_history).post(history::post_history),

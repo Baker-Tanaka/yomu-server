@@ -12,11 +12,13 @@ use paper_reader_shared::{
     FeedbackListResponse, GIT_HASH, GrammarTagInfo, GrammarTagsResponse, HistoryEntry,
     MAX_CHAT_QUESTION_CHARS, MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode,
     ReadLaterItem, ReadLaterPut, SLASH_READING_HEADING, SearchItem, SearchSort, TagGuide,
-    WordSource, build_version_label, paper_url_from_input, parse_slash_reading, plain_arrows,
-    pos_groups, pos_summary, readable_math, tex_to_text, version_label, without_section,
+    WordSource, build_version_label, normalize_math_delimiters, paper_url_from_input,
+    parse_slash_reading, plain_arrows, pos_groups, pos_summary, readable_math, tex_to_text,
+    version_label, without_section,
 };
 
 use crate::dom;
+use crate::math_view;
 use crate::search_input::Field;
 use crate::slash_view;
 use crate::state::{
@@ -1024,9 +1026,8 @@ impl PaperReaderApp {
 
     fn answer_view(&mut self, ui: &mut egui::Ui, index: usize, markdown: &str) {
         let markdown = plain_arrows(markdown);
-        let markdown = readable_math(&markdown, true);
         ui.push_id(("chat-answer", index), |ui| {
-            CommonMarkViewer::new().show(ui, &mut self.markdown_cache, &markdown);
+            self.markdown_with_math(ui, &markdown);
         });
     }
 
@@ -1223,7 +1224,7 @@ impl PaperReaderApp {
                         ui.label(RichText::new(&sel.text).size(22.0).strong().color(p.strong));
                     }
                     Mode::Sentence => {
-                        let shown = readable_math(&sel.text, false);
+                        let shown = readable_math(&sel.text);
                         let text = RichText::new(&*shown).size(15.5).color(p.strong);
                         if mobile {
                             // 長い英文で解説が画面の外に出ないよう、数行にまとめる
@@ -1240,15 +1241,7 @@ impl PaperReaderApp {
                         }
                     }
                     Mode::Formula => {
-                        // 式の見た目は本文で分かるので、ここには 1 行の文字にしたものを出す
-                        let mut job = egui::text::LayoutJob::simple(
-                            tex_to_text(&sel.text),
-                            theme::body_font(15.5),
-                            p.strong,
-                            ui.available_width(),
-                        );
-                        job.wrap.max_rows = SELECTION_PREVIEW_ROWS;
-                        ui.label(job)
+                        math_view::math(ui, &sel.text, false)
                             .on_hover_text(format!("元の LaTeX: {}", sel.text));
                     }
                 }
@@ -1616,40 +1609,40 @@ impl PaperReaderApp {
         });
     }
 
-    /// 解説の本文。スラッシュリーディングの節は専用の表示にする（読み替えられない形なら Markdown のまま）。
-    fn explanation_view(&mut self, ui: &mut egui::Ui, p: &Palette, markdown: &str, running: bool) {
-        // 解説に残る `$…$` の数式は、読める文字にして出す
-        let Some(mut slash) = parse_slash_reading(markdown, running) else {
-            CommonMarkViewer::new().show(
+    /// 解説の Markdown。`$…$` の数式は組んで描く。
+    fn markdown_with_math(&mut self, ui: &mut egui::Ui, markdown: &str) {
+        CommonMarkViewer::new()
+            .render_math_fn(Some(&math_view::show))
+            .show(
                 ui,
                 &mut self.markdown_cache,
-                &readable_math(markdown, true),
+                &normalize_math_delimiters(markdown),
             );
+    }
+
+    /// 解説の本文。スラッシュリーディングの節は専用の表示にする（読み替えられない形なら Markdown のまま）。
+    fn explanation_view(&mut self, ui: &mut egui::Ui, p: &Palette, markdown: &str, running: bool) {
+        let Some(mut slash) = parse_slash_reading(markdown, running) else {
+            self.markdown_with_math(ui, markdown);
             return;
         };
+        // 区切った英文と直訳は 1 行ずつの文字なので、数式は読める文字にする
         for chunk in &mut slash.chunks {
             if chunk.en.contains('$') || chunk.ja.contains('$') {
-                chunk.en = readable_math(&chunk.en, false).into_owned();
-                chunk.ja = readable_math(&chunk.ja, false).into_owned();
+                chunk.en = readable_math(&chunk.en).into_owned();
+                chunk.ja = readable_math(&chunk.ja).into_owned();
             }
         }
-        let head = format!(
-            "{}{SLASH_READING_HEADING}",
-            readable_math(slash.before, true)
-        );
+        let head = format!("{}{SLASH_READING_HEADING}", slash.before);
         ui.push_id("explain-head", |ui| {
-            CommonMarkViewer::new().show(ui, &mut self.markdown_cache, &head);
+            self.markdown_with_math(ui, &head);
         });
         ui.add_space(6.0);
         slash_view::show(ui, p, &slash.chunks);
         ui.add_space(6.0);
         if !slash.after.is_empty() {
             ui.push_id("explain-rest", |ui| {
-                CommonMarkViewer::new().show(
-                    ui,
-                    &mut self.markdown_cache,
-                    &readable_math(slash.after, true),
-                );
+                self.markdown_with_math(ui, slash.after);
             });
         }
     }
@@ -2839,7 +2832,7 @@ pub(crate) fn notice(ui: &mut egui::Ui, p: &Palette, text: &str) {
 fn shown_selection(text: &str, mode: Mode) -> Cow<'_, str> {
     match mode {
         Mode::Word => Cow::Borrowed(text),
-        Mode::Sentence => readable_math(text, false),
+        Mode::Sentence => readable_math(text),
         Mode::Formula => Cow::Owned(tex_to_text(text)),
     }
 }

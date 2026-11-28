@@ -69,6 +69,42 @@ fn map_math(text: &str, f: impl Fn(&str) -> String) -> String {
     out
 }
 
+/// LLM が `\(…\)` や `\[…\]` で書いた数式を、Markdown が数式とみなす `$…$`・`$$…$$` にする。
+pub fn normalize_math_delimiters(text: &str) -> Cow<'_, str> {
+    if !text.contains("\\(") && !text.contains("\\[") {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find('\\') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i..];
+        let pair = [("\\(", "\\)", "$"), ("\\[", "\\]", "$$")]
+            .into_iter()
+            .find_map(|(open, close, mark)| {
+                let body = after.strip_prefix(open)?;
+                let end = body.find(close)?;
+                Some((body[..end].trim(), &body[end + close.len()..], mark))
+            });
+        match pair {
+            Some((body, next, mark)) => {
+                for part in [mark, body, mark] {
+                    out.push_str(part);
+                }
+                rest = next;
+            }
+            None => {
+                // 次の文字まで写す（「\\」の並びを半分で切らない）
+                let step = 1 + after[1..].chars().next().map_or(0, char::len_utf8);
+                out.push_str(&after[..step]);
+                rest = &after[step..];
+            }
+        }
+    }
+    out.push_str(rest);
+    Cow::Owned(out)
+}
+
 /// 読み上げる文字列。数式は記号の羅列になるので「formula」に置き換える。
 pub fn speakable(text: &str) -> String {
     if !text.contains('$') {
@@ -77,28 +113,13 @@ pub fn speakable(text: &str) -> String {
     map_math(text, |_| "formula".into())
 }
 
-/// 画面に出す文字列。数式の組版はできないので、`$…$` の LaTeX を読みやすい Unicode の文字にする。
-/// `markdown` なら、添字の `_` などが Markdown の記号とみなされないようにする。
-pub fn readable_math(text: &str, markdown: bool) -> Cow<'_, str> {
+/// 1 行の文字として出すところ（選択中の英文の表示など）向けに、`$…$` の LaTeX を読みやすい
+/// Unicode の文字にする。解説の Markdown では、組んで描く（web の `math_view.rs`）。
+pub fn readable_math(text: &str) -> Cow<'_, str> {
     if !text.contains('$') {
         return Cow::Borrowed(text);
     }
-    Cow::Owned(map_math(text, |tex| {
-        let plain = tex_to_text(tex);
-        if !markdown {
-            return plain;
-        }
-        plain.chars().fold(String::new(), |mut out, c| {
-            if matches!(
-                c,
-                '\\' | '_' | '*' | '`' | '[' | ']' | '<' | '>' | '|' | '~'
-            ) {
-                out.push('\\');
-            }
-            out.push(c);
-            out
-        })
-    }))
+    Cow::Owned(map_math(text, tex_to_text))
 }
 
 /// LaTeX の数式を、1 行の読める文字にする（`\pi_{\theta}` → `π_θ`）。
@@ -264,7 +285,7 @@ fn accented(accent: &str, base: &str) -> String {
     format!("{accent}({base})")
 }
 
-fn symbol(name: &str) -> Option<&'static str> {
+pub(crate) fn symbol(name: &str) -> Option<&'static str> {
     Some(match name {
         "alpha" => "α",
         "beta" => "β",
@@ -373,6 +394,23 @@ mod tests {
     }
 
     #[test]
+    fn latex_delimiters_become_dollars() {
+        assert_eq!(
+            normalize_math_delimiters(r"値 \( x_i \) と \[ y \] です"),
+            r"値 $x_i$ と $$y$$ です"
+        );
+        // 対になっていないものと、ほかの命令はそのまま
+        assert_eq!(
+            normalize_math_delimiters(r"$\alpha$ \( 開きだけ \_"),
+            r"$\alpha$ \( 開きだけ \_"
+        );
+        assert!(matches!(
+            normalize_math_delimiters("数式なし"),
+            Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
     fn tex_becomes_readable_text() {
         assert_eq!(tex_to_text(r"\pi_{\theta}"), "π_θ");
         assert_eq!(tex_to_text(r"J_{obj}"), "J_obj");
@@ -404,24 +442,21 @@ mod tests {
     #[test]
     fn readable_math_converts_only_formulas() {
         assert_eq!(
-            readable_math(r"$J$：目的関数。$\pi_{\theta}$ を学習する", false),
+            readable_math(r"$J$：目的関数。$\pi_{\theta}$ を学習する"),
             "J：目的関数。π_θ を学習する"
         );
         assert_eq!(
-            readable_math(r"**$J_{il}$**：主な目的", true),
-            r"**J\_il**：主な目的"
+            readable_math(r"**$J_{il}$**：主な目的"),
+            "**J_il**：主な目的"
         );
+        assert_eq!(readable_math("it costs $5 or $10"), "it costs $5 or $10");
+        assert_eq!(readable_math("$$x^{2}$$"), "x^2");
         assert_eq!(
-            readable_math("it costs $5 or $10", true),
-            "it costs $5 or $10"
-        );
-        assert_eq!(readable_math("$$x^{2}$$", false), "x^2");
-        assert_eq!(
-            readable_math("例:\n$$\nJ = 0.03\n$$\n以上", false),
+            readable_math("例:\n$$\nJ = 0.03\n$$\n以上"),
             "例:\nJ = 0.03\n以上"
         );
-        assert_eq!(readable_math("$a_1$$b_2$", false), "a_1b_2");
-        assert_eq!(readable_math("$$ と $x_1$", false), "$$ と x_1");
-        assert!(matches!(readable_math("数式なし", true), Cow::Borrowed(_)));
+        assert_eq!(readable_math("$a_1$$b_2$"), "a_1b_2");
+        assert_eq!(readable_math("$$ と $x_1$"), "$$ と x_1");
+        assert!(matches!(readable_math("数式なし"), Cow::Borrowed(_)));
     }
 }

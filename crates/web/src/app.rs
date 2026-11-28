@@ -28,6 +28,8 @@ use crate::theme::{self, Palette};
 /// タブの余白を詰める幅（これより狭いと、いつもの余白では 5 つのタブが入らない）
 const NARROW_TABS_WIDTH: f32 = 340.0;
 /// ヘッダーの副題（for arXiv）を出すのに要る、題名の右の残り幅
+/// ⚙ のボタンの幅
+const GEAR_WIDTH: f32 = 36.0;
 const SUBTITLE_MIN_WIDTH: f32 = 56.0;
 /// スマホ用の下端のタブの高さと、文字を小さくするタブの幅
 const BOTTOM_TAB_HEIGHT: f32 = 38.0;
@@ -52,20 +54,53 @@ pub struct PaperReaderApp {
     input: String,
     markdown_cache: CommonMarkCache,
     theme: dom::ThemeChoice,
-    /// フィードバックの画面の中身が変わったか調べるための値（変わったら大きさを測り直す）
-    feedback_layout: u64,
-    /// 大きさを測り直す残りの描画回数
-    feedback_resize_frames: u8,
-    /// 前の描画で測ったフィードバックの画面の中身の高さ
-    feedback_content_h: f32,
+    /// フィードバックの画面の大きさ
+    feedback_size: ModalSize,
+    /// 設定の画面を開いているか
+    settings_open: bool,
+    /// 設定の画面の大きさ
+    settings_size: ModalSize,
+    /// 設定を開く前のシートの高さ（スマホ。閉じたら戻す）
+    settings_return: Option<dom::Sheet>,
     /// スマホ用レイアウトか（画面幅で決まる。変わったら文字の大きさなどを切り替える）
     mobile: Option<bool>,
     /// 次の描画で入力欄にフォーカスを移す（「別の論文を開く」を押したとき）
     focus_input: bool,
     /// この描画で重ねた HTML の入力欄。重ねなかった欄は隠す
     placed_inputs: Vec<Field>,
-    /// コマンドパレットを開く（⚙ のメニューから）
+    /// コマンドパレットを開く（⚙ の設定から）
     open_palette: Option<crate::command_palette::Opener>,
+}
+
+/// モーダルの大きさの測り直しに使う状態。
+struct ModalSize {
+    /// 中身が変わったか調べるための値（変わったら大きさを測り直す）
+    layout: u64,
+    /// 大きさを測り直す残りの描画回数
+    resize_frames: u8,
+    /// 前の描画で測った中身の高さ
+    content_h: f32,
+}
+
+impl Default for ModalSize {
+    fn default() -> Self {
+        Self {
+            layout: 0,
+            resize_frames: 0,
+            content_h: 300.0,
+        }
+    }
+}
+
+/// 設定を開くボタン。目立ちすぎないよう、枠のない弱い色にする。
+fn gear_button(ui: &mut egui::Ui, p: &Palette) -> bool {
+    ui.add(
+        egui::Button::new(RichText::new("⚙").size(18.0).color(p.weak))
+            .frame(false)
+            .min_size(egui::vec2(GEAR_WIDTH, 28.0)),
+    )
+    .on_hover_text("設定（不具合・要望の送信もここ）")
+    .clicked()
 }
 
 impl PaperReaderApp {
@@ -176,9 +211,10 @@ impl PaperReaderApp {
             input: String::new(),
             markdown_cache: CommonMarkCache::default(),
             theme,
-            feedback_layout: 0,
-            feedback_resize_frames: 0,
-            feedback_content_h: 300.0,
+            feedback_size: ModalSize::default(),
+            settings_open: false,
+            settings_size: ModalSize::default(),
+            settings_return: None,
             mobile: None,
             focus_input: false,
             placed_inputs: Vec::new(),
@@ -243,129 +279,179 @@ impl PaperReaderApp {
                     dom::apply_theme(next);
                     set_theme(ui.ctx(), next);
                 }
-                self.settings_menu(ui);
-                self.bookmark_menu(ui, &p);
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("💬").size(if mobile {
-                            17.0
-                        } else {
-                            14.0
-                        }))
-                        .frame(false),
-                    )
-                    .on_hover_text("不具合・要望を送る（GitHub の Issue になります）")
-                    .clicked()
-                {
-                    state::open_feedback(&self.shared, ui.ctx());
+                // スマホの ⚙ は、見出しを隠すときにも押せるように下のタブの右端に置く
+                if !mobile && gear_button(ui, &p) {
+                    self.open_settings();
                 }
+                self.bookmark_menu(ui, &p);
                 self.llm_status(ui, &p);
             });
     }
 
-    /// 設定（⚙）。
-    fn settings_menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button(RichText::new("⚙").size(15.0), |ui| {
-            ui.set_min_width(240.0);
-            ui.label(RichText::new("設定").strong());
-            ui.separator();
-            let mut s = self.shared.borrow_mut();
-            let mut auto = s.auto_explain;
-            if ui.checkbox(&mut auto, "選択したら自動で解説").changed() {
-                s.auto_explain = auto;
-            }
-            let mut slash = s.show_slash;
+    fn open_settings(&mut self) {
+        // 本文の上に残る操作メニューは閉じる
+        crate::selection_menu::hide();
+        // スマホは設定が収まるようシートを全体にする
+        if self.is_mobile() {
+            self.settings_return = Some(dom::sheet());
+            dom::set_sheet(dom::Sheet::Full);
+        }
+        self.settings_open = true;
+    }
+
+    /// 設定を閉じる。`restore` ならシートを開く前の高さに戻す。
+    fn close_settings(&mut self, restore: bool) {
+        self.settings_open = false;
+        if let Some(sheet) = self.settings_return.take()
+            && restore
+        {
+            dom::set_sheet(sheet);
+        }
+    }
+
+    /// 設定（⚙）の画面。
+    fn settings_modal(&mut self, ctx: &egui::Context) {
+        let layout = {
+            use std::hash::{Hash, Hasher};
+            let s = self.shared.borrow();
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            s.recent.is_empty().hash(&mut h);
+            s.local.enabled.hash(&mut h);
+            std::mem::discriminant(&s.local.phase).hash(&mut h);
+            std::mem::discriminant(&s.health).hash(&mut h);
+            h.finish()
+        };
+        let mut size = std::mem::take(&mut self.settings_size);
+        let resp = self.app_modal(
+            ctx,
+            "settings_modal",
+            layout,
+            &mut size,
+            Self::settings_body,
+        );
+        self.settings_size = size;
+        let esc = resp.is_top_modal && ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        if self.settings_open && (esc || resp.backdrop_response.clicked()) {
+            self.close_settings(true);
+            ctx.request_repaint();
+        }
+    }
+
+    fn settings_body(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("設定").size(18.0).strong().color(p.strong));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if theme::subtle_button(ui, "✕ 閉じる").clicked() {
+                    self.close_settings(true);
+                    ui.ctx().request_repaint();
+                }
+            });
+        });
+        ui.separator();
+        let mut s = self.shared.borrow_mut();
+        let mut auto = s.auto_explain;
+        if ui.checkbox(&mut auto, "選択したら自動で解説").changed() {
+            s.auto_explain = auto;
+        }
+        let mut slash = s.show_slash;
+        if ui
+            .checkbox(&mut slash, "スラッシュリーディングを表示する")
+            .on_hover_text(
+                "英文の解説に、意味のまとまりごとの区切り（/）と語順どおりの直訳を付けます",
+            )
+            .changed()
+        {
+            s.set_show_slash(slash);
+        }
+        let mut kana = s.show_kana;
+        if ui
+            .checkbox(&mut kana, "単語の読みをカタカナで表示する")
+            .on_hover_text(
+                "ローカル LLM が発音をカタカナで推定します（一度推定した語は単語帳に保存され、次からはすぐ出ます）",
+            )
+            .changed()
+        {
+            s.set_show_kana(kana);
+        }
+        let mut recent = s.show_recent;
+        if ui
+            .checkbox(&mut recent, "直近の単語のメモを表示する")
+            .on_hover_text(
+                "本文の上の 1 行に、最近引いた 10 語と訳を出します（このブラウザにだけ保存）",
+            )
+            .changed()
+        {
+            s.set_show_recent(recent);
+        }
+        if !s.recent.is_empty() && ui.button("直近の単語のメモを消す").clicked() {
+            s.recent.clear();
+        }
+        let local_on = s.local.enabled;
+        drop(s);
+        if crate::touch_select::is_touch_device() {
+            let mut app_select = crate::touch_select::setting();
             if ui
-                .checkbox(&mut slash, "スラッシュリーディングを表示する")
-                .on_hover_text("英文の解説に、意味のまとまりごとの区切り（/）と語順どおりの直訳を付けます")
-                .changed()
-            {
-                s.set_show_slash(slash);
-            }
-            let mut kana = s.show_kana;
-            if ui
-                .checkbox(&mut kana, "単語の読みをカタカナで表示する")
+                .checkbox(&mut app_select, "長押しはアプリのメニューだけ出す")
                 .on_hover_text(
-                    "ローカル LLM が発音をカタカナで推定します（一度推定した語は単語帳に保存され、次からはすぐ出ます）",
+                    "本文の長押しで単語を選び、ドラッグかつまみで範囲を広げます。端末標準の「コピー・調べる」のメニューは出ません。オフにすると端末標準の選択に戻ります",
                 )
                 .changed()
             {
-                s.set_show_kana(kana);
+                crate::touch_select::set_setting(app_select);
             }
-            let mut recent = s.show_recent;
-            if ui
-                .checkbox(&mut recent, "直近の単語のメモを表示する")
-                .on_hover_text("本文の上の 1 行に、最近引いた 10 語と訳を出します（このブラウザにだけ保存）")
-                .changed()
-            {
-                s.set_show_recent(recent);
-            }
-            if !s.recent.is_empty() && ui.button("直近の単語のメモを消す").clicked() {
-                s.recent.clear();
-            }
-            let local_on = s.local.enabled;
-            drop(s);
-            if crate::touch_select::is_touch_device() {
-                let mut app_select = crate::touch_select::setting();
-                if ui
-                    .checkbox(&mut app_select, "長押しはアプリのメニューだけ出す")
-                    .on_hover_text(
-                        "本文の長押しで単語を選び、ドラッグかつまみで範囲を広げます。端末標準の「コピー・調べる」のメニューは出ません。オフにすると端末標準の選択に戻ります",
-                    )
-                    .changed()
-                {
-                    crate::touch_select::set_setting(app_select);
+        }
+        ui.separator();
+        let mut on = local_on;
+        if ui
+            .checkbox(&mut on, "🧪 実験: 端末で LLM を動かす")
+            .on_hover_text(
+                "この端末の GPU（WebGPU）で小さな LLM を動かし、Mac の LLM と比べます。オンにするとモデル（数百 MB〜1.4 GB）を Mac からダウンロードします",
+            )
+            .changed()
+        {
+            crate::local_llm::set_enabled(&self.shared, ui.ctx(), on);
+        }
+        if on {
+            use crate::local_llm::LocalPhase;
+            let status = match &self.shared.borrow().local.phase {
+                LocalPhase::Off => String::new(),
+                LocalPhase::Unsupported => "この端末は WebGPU に未対応です".into(),
+                LocalPhase::Preparing => "準備しています…".into(),
+                LocalPhase::Loading { progress, .. } => {
+                    format!("モデルを読み込み中… {:.0}%", progress * 100.0)
                 }
-            }
-            ui.separator();
-            let mut on = local_on;
-            if ui
-                .checkbox(&mut on, "🧪 実験: 端末で LLM を動かす")
-                .on_hover_text(
-                    "この端末の GPU（WebGPU）で小さな LLM を動かし、Mac の LLM と比べます。オンにするとモデル（数百 MB〜1.4 GB）を Mac からダウンロードします",
-                )
-                .changed()
-            {
-                crate::local_llm::set_enabled(&self.shared, ui.ctx(), on);
-            }
-            if on {
-                use crate::local_llm::LocalPhase;
-                let status = match &self.shared.borrow().local.phase {
-                    LocalPhase::Off => String::new(),
-                    LocalPhase::Unsupported => "この端末は WebGPU に未対応です".into(),
-                    LocalPhase::Preparing => "準備しています…".into(),
-                    LocalPhase::Loading { progress, .. } => {
-                        format!("モデルを読み込み中… {:.0}%", progress * 100.0)
-                    }
-                    LocalPhase::Ready { .. } => {
-                        "準備完了（解説タブで単語・英文を選んで「端末で訳す」）".into()
-                    }
-                    LocalPhase::Error(e) => format!("エラー: {e}"),
-                };
-                if !status.is_empty() {
-                    ui.label(RichText::new(status).small().weak());
+                LocalPhase::Ready { .. } => {
+                    "準備完了（解説タブで単語・英文を選んで「端末で訳す」）".into()
                 }
+                LocalPhase::Error(e) => format!("エラー: {e}"),
+            };
+            if !status.is_empty() {
+                ui.label(RichText::new(status).small().weak());
             }
-            ui.separator();
-            if !self.is_mobile()
-                && let Some(open) = &self.open_palette
-                && ui
-                    .button("⌨ コマンドパレット（⌘K / Ctrl+K）")
-                    .on_hover_text("操作・節・論文を文字で絞り込んで実行します")
-                    .clicked()
-            {
-                ui.close();
+        }
+        ui.separator();
+        if !self.is_mobile()
+            && self.open_palette.is_some()
+            && ui
+                .button("⌨ コマンドパレット（⌘K / Ctrl+K）")
+                .on_hover_text("操作・節・論文を文字で絞り込んで実行します")
+                .clicked()
+        {
+            self.close_settings(true);
+            if let Some(open) = &self.open_palette {
                 open();
             }
-            if ui.button("💬 不具合・要望を送る…").clicked() {
-                state::open_feedback(&self.shared, ui.ctx());
-                ui.close();
-            }
-            ui.separator();
-            self.version_info(ui);
-        })
-        .response
-        .on_hover_text("設定");
+        }
+        if ui
+            .button("💬 不具合・要望を送る…")
+            .on_hover_text("GitHub の Issue になります（送る前に内容を確認できます）")
+            .clicked()
+        {
+            self.close_settings(false);
+            state::open_feedback(&self.shared, ui.ctx());
+        }
+        ui.separator();
+        self.version_info(ui);
     }
 
     /// 付箋（📌）。論文を開いているときだけ出す。
@@ -598,16 +684,12 @@ impl PaperReaderApp {
             },
             (DictStatus::Idle, _) => (String::new(), true),
         };
-        let resp = ui.add(
-            egui::Label::new(RichText::new(text).size(14.5).color(if weak {
-                p.weak
-            } else {
-                p.text
-            }))
-            .truncate()
-            .sense(egui::Sense::click()),
-        );
-        if expand || resp.clicked() {
+        let label = egui::Label::new(RichText::new(text).size(14.5).color(if weak {
+            p.weak
+        } else {
+            p.text
+        }));
+        if self.strip_line(ui, p, label) || expand {
             self.shared.borrow_mut().tab = Tab::Explain;
             dom::set_sheet(dom::Sheet::Half);
         }
@@ -649,19 +731,16 @@ impl PaperReaderApp {
             },
         );
         // 選べている範囲が分かるように、終わりの方を出す
-        let resp = ui.add(
-            egui::Label::new(
-                RichText::new(selection_ends(&text))
-                    .size(14.5)
-                    .color(p.text),
-            )
-            .truncate()
-            .sense(egui::Sense::click()),
+        let label = egui::Label::new(
+            RichText::new(selection_ends(&text))
+                .size(14.5)
+                .color(p.text),
         );
+        let line_clicked = self.strip_line(ui, p, label);
         if explain {
             self.shared.borrow_mut().tab = Tab::Explain;
             state::start_explain(&self.shared, ui.ctx(), false);
-        } else if open || resp.clicked() {
+        } else if open || line_clicked {
             self.shared.borrow_mut().tab = Tab::Explain;
             dom::set_sheet(if phase == ExplainPhase::Idle {
                 dom::Sheet::Half
@@ -669,6 +748,25 @@ impl PaperReaderApp {
                 dom::Sheet::Full
             });
         }
+    }
+
+    /// 小さな表示の 2 行目。右端には、下のタブと同じように ⚙ を置く。文が押されたら true。
+    fn strip_line(&mut self, ui: &mut egui::Ui, p: &Palette, label: egui::Label) -> bool {
+        let mut clicked = false;
+        let mut settings = false;
+        egui::Sides::new().shrink_left().truncate().show(
+            ui,
+            |ui| {
+                clicked = ui
+                    .add(label.truncate().sense(egui::Sense::click()))
+                    .clicked();
+            },
+            |ui| settings = gear_button(ui, p),
+        );
+        if settings {
+            self.open_settings();
+        }
+        clicked
     }
 
     /// 直近に引いた単語のメモを、本文の上の 1 行に反映する。
@@ -738,7 +836,10 @@ impl PaperReaderApp {
     ) -> bool {
         let covered = {
             let s = self.shared.borrow();
-            s.feedback.open || s.store_warning.is_some() || egui::Popup::is_any_open(ui.ctx())
+            self.settings_open
+                || s.feedback.open
+                || s.store_warning.is_some()
+                || egui::Popup::is_any_open(ui.ctx())
         };
         if covered {
             ui.painter().rect_filled(rect, 8.0, p.card);
@@ -1011,7 +1112,7 @@ impl PaperReaderApp {
             (Tab::Grammar, "文法項目"),
             (Tab::Words, "単語帳"),
         ];
-        let width = ui.available_width() / tabs.len() as f32;
+        let width = (ui.available_width() - GEAR_WIDTH) / tabs.len() as f32;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             for (tab, label) in tabs {
@@ -1040,6 +1141,9 @@ impl PaperReaderApp {
                     // 小さくしているときにタブを押したら、中身が見える高さにする
                     dom::raise_sheet(dom::Sheet::Half);
                 }
+            }
+            if gear_button(ui, &p) {
+                self.open_settings();
             }
         });
     }
@@ -2029,7 +2133,7 @@ impl eframe::App for PaperReaderApp {
             dom::raise_sheet(dom::Sheet::Full);
         }
         let feedback_open = self.shared.borrow().feedback.open;
-        if !feedback_open && !ctx.egui_wants_keyboard_input() {
+        if !feedback_open && !self.settings_open && !ctx.egui_wants_keyboard_input() {
             let (explain, clear) = ctx.input(|i| {
                 (
                     i.key_pressed(egui::Key::E) && i.modifiers.is_none(),
@@ -2164,7 +2268,11 @@ impl eframe::App for PaperReaderApp {
         crate::search_input::hide_unplaced(&self.placed_inputs);
 
         if feedback_open {
+            // コマンドパレットなどから開いたときは、設定を閉じる
+            self.close_settings(false);
             self.feedback_modal(&ctx);
+        } else if self.settings_open {
+            self.settings_modal(&ctx);
         } else {
             crate::words_view::store_warning_modal(&self.shared, &ctx);
         }
@@ -2172,39 +2280,39 @@ impl eframe::App for PaperReaderApp {
 }
 
 impl PaperReaderApp {
-    /// 不具合・要望を送る画面（モーダル）。
-    fn feedback_modal(&mut self, ctx: &egui::Context) {
+    /// 画面の上寄せに出すモーダル。中身は収まらなければスクロールする。
+    /// `layout` は中身が変わったかを調べるための値。
+    fn app_modal(
+        &mut self,
+        ctx: &egui::Context,
+        name: &'static str,
+        layout: u64,
+        size: &mut ModalSize,
+        body: fn(&mut Self, &mut egui::Ui, &Palette),
+    ) -> egui::ModalResponse<f32> {
         let p = theme::palette(ctx);
         // 枠の内側の幅（左右の余白 18 + 画面端からの 16 を引く）
         let mobile = self.is_mobile();
         let edge = if mobile { 8.0 } else { 16.0 };
         let width = (ctx.content_rect().width() - edge * 2.0 - 36.0).clamp(200.0, 520.0);
-        let id = egui::Id::unique("feedback_modal");
+        let id = egui::Id::unique(name);
         // 中央に置くと下半分しか使えず切れるので、上寄せにする
         let top = if mobile { 8.0 } else { 24.0 };
         let max_h = (ctx.content_rect().height() - top * 2.0 - 36.0).max(160.0);
         // Area は前の描画の大きさを中身の上限にするので、段階などが変わったら測り直す
         let layout = {
             use std::hash::{Hash, Hasher};
-            let s = self.shared.borrow();
-            let f = &s.feedback;
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            std::mem::discriminant(&f.stage).hash(&mut h);
-            f.error.is_some().hash(&mut h);
-            f.list
-                .as_ref()
-                .map(|l| (l.items.len(), l.configured))
-                .hash(&mut h);
-            (width as u32, max_h as u32).hash(&mut h);
+            (layout, width as u32, max_h as u32).hash(&mut h);
             h.finish()
         };
-        if layout != self.feedback_layout {
-            self.feedback_layout = layout;
-            self.feedback_resize_frames = 3;
+        if layout != size.layout {
+            size.layout = layout;
+            size.resize_frames = 3;
         }
-        let resize = self.feedback_resize_frames > 0;
+        let resize = size.resize_frames > 0;
         if resize {
-            self.feedback_resize_frames -= 1;
+            size.resize_frames -= 1;
             ctx.request_repaint();
         }
         let area = egui::Modal::default_area(id)
@@ -2212,15 +2320,13 @@ impl PaperReaderApp {
             .default_size(egui::vec2(width + 36.0, max_h + 36.0))
             .sizing_pass(resize);
         // Modal の背景の暗幕は Area の範囲でしか塗られないので、画面全体を下の層で暗くする
-        ctx.layer_painter(egui::LayerId::new(
-            egui::Order::Middle,
-            egui::Id::unique("feedback_backdrop"),
-        ))
-        .rect_filled(
-            ctx.content_rect(),
-            0.0,
-            egui::Color32::from_black_alpha(110),
-        );
+        ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, id.with("backdrop")))
+            .rect_filled(
+                ctx.content_rect(),
+                0.0,
+                egui::Color32::from_black_alpha(110),
+            );
+        let content_h = size.content_h;
         let resp = egui::Modal::new(id)
             .area(area)
             .backdrop_color(egui::Color32::TRANSPARENT)
@@ -2234,24 +2340,51 @@ impl PaperReaderApp {
             .show(ctx, |ui| {
                 ui.set_width(width);
                 // 中身の高さ（前の描画で測ったもの）に合わせ、画面に収まらなければスクロールする
-                let h = self.feedback_content_h.clamp(120.0, max_h);
+                let h = content_h.clamp(120.0, max_h);
                 egui::ScrollArea::vertical()
                     .min_scrolled_height(h)
                     .max_height(h)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        self.feedback_body(ui, &p);
+                        body(self, ui, &p);
                         ui.min_rect().height()
                     })
                     .inner
             });
         // 中身の高さは表示した描画でだけ測る（測り直しの描画では値がずれる）。変わったら測り直す
         let measured = resp.inner.ceil();
-        if !resize && (measured - self.feedback_content_h).abs() > 1.0 {
-            self.feedback_content_h = measured;
-            self.feedback_resize_frames = 1;
+        if !resize && (measured - size.content_h).abs() > 1.0 {
+            size.content_h = measured;
+            size.resize_frames = 1;
             ctx.request_repaint();
         }
+        resp
+    }
+
+    /// 不具合・要望を送る画面（モーダル）。
+    fn feedback_modal(&mut self, ctx: &egui::Context) {
+        let layout = {
+            use std::hash::{Hash, Hasher};
+            let s = self.shared.borrow();
+            let f = &s.feedback;
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            std::mem::discriminant(&f.stage).hash(&mut h);
+            f.error.is_some().hash(&mut h);
+            f.list
+                .as_ref()
+                .map(|l| (l.items.len(), l.configured))
+                .hash(&mut h);
+            h.finish()
+        };
+        let mut size = std::mem::take(&mut self.feedback_size);
+        let resp = self.app_modal(
+            ctx,
+            "feedback_modal",
+            layout,
+            &mut size,
+            Self::feedback_body,
+        );
+        self.feedback_size = size;
         let busy = matches!(
             self.shared.borrow().feedback.stage,
             FeedbackStage::Labeling | FeedbackStage::Sending

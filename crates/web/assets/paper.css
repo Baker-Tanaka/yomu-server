@@ -516,7 +516,8 @@ body.resizing #paper, body.resizing #explain-pane {
     /* ダブルタップでの拡大を止める（ピンチでの拡大はできる） */
     touch-action: manipulation;
   }
-  #layout { flex-direction: column; }
+  /* キーボードが出ているあいだは、dom.rs が見えている高さを --app-h に入れる */
+  #layout { flex-direction: column; height: var(--app-h, 100dvh); }
   /* iOS 26 以降は、ステータスバーの下まで本文がスクロールすると上端をぼかす（ホーム画面から開いたとき）。
      背景色のある固定の要素が上端を覆っていると、ぼかさない。安全領域が 0 の環境では高さも 0 になる。
      重なり順は本文と脚注より上、選択メニューより下。pointer-events: none は付けない

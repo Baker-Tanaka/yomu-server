@@ -61,6 +61,7 @@ pub async fn get_history(
                     context: context.clone(),
                     regenerate: false,
                     slash,
+                    style: Default::default(),
                 },
             );
             if db::explanation_exists(&state.db, &key)

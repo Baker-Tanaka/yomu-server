@@ -8,9 +8,9 @@ use std::sync::Arc;
 use eframe::egui::{self, Margin, RichText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use paper_reader_shared::{
-    APP_VERSION, ChatRole, DictEntry, DictResponse, ExplainTag, FeedbackItem, FeedbackLabel,
-    FeedbackListResponse, GIT_HASH, GrammarTagInfo, GrammarTagsResponse, HistoryEntry,
-    MAX_CHAT_QUESTION_CHARS, MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode,
+    APP_VERSION, ChatRole, DictEntry, DictResponse, ExplainStyle, ExplainTag, FeedbackItem,
+    FeedbackLabel, FeedbackListResponse, GIT_HASH, GrammarTagInfo, GrammarTagsResponse,
+    HistoryEntry, MAX_CHAT_QUESTION_CHARS, MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode,
     ReadLaterItem, ReadLaterPut, SLASH_READING_HEADING, SearchItem, SearchSort, TagGuide,
     WordSource, build_version_label, normalize_math_delimiters, paper_url_from_input,
     parse_slash_reading, plain_arrows, pos_groups, pos_summary, readable_math, tex_to_text,
@@ -1442,19 +1442,33 @@ impl PaperReaderApp {
 
     fn explain_card(&mut self, ui: &mut egui::Ui, p: &Palette) {
         let ctx = ui.ctx().clone();
-        let (phase, running, from_cache, markdown, is_sentence, show_slash) = {
+        let (phase, running, from_cache, markdown, is_sentence, show_slash, style, sel_mode) = {
             let s = self.shared.borrow();
+            let style = s.explain.style;
             (
                 s.explain.phase.clone(),
                 s.explain.phase.is_running(),
                 s.explain.from_cache,
                 s.explain.markdown.clone(),
-                s.explain
-                    .target
-                    .as_ref()
-                    .is_some_and(|(m, _)| *m == Mode::Sentence),
+                // 和訳・文法項目・スラッシュリーディングは、英文の英語の解説のときだけ
+                style == ExplainStyle::Standard
+                    && s.explain
+                        .target
+                        .as_ref()
+                        .is_some_and(|(m, _)| *m == Mode::Sentence),
                 s.show_slash,
+                style,
+                s.selection.as_ref().map_or(Mode::Sentence, |sel| sel.mode),
             )
+        };
+        let (base_label, base_hint) = if sel_mode == Mode::Formula {
+            ("数式", "記号の意味と式の読み解きを解説します")
+        } else {
+            ("英語", "和訳・文構造・文法を解説します")
+        };
+        let hint = match style {
+            ExplainStyle::Standard => base_hint,
+            ExplainStyle::Academic => ACADEMIC_HINT,
         };
         // スラッシュリーディングを表示しない設定なら、その節を隠す（生成し直さない）
         let markdown = if show_slash {
@@ -1472,6 +1486,18 @@ impl PaperReaderApp {
         theme::card(ui, |ui| {
             ui.horizontal(|ui| {
                 theme::section_title(ui, "AI 解説");
+                // 解説の種類。選択に合わせた解説（英語・数式）が既定で、学術は選んだときだけ
+                let mut picked = style;
+                if theme::segmented(
+                    ui,
+                    &mut picked,
+                    &[
+                        (ExplainStyle::Standard, base_label),
+                        (ExplainStyle::Academic, "学術"),
+                    ],
+                ) {
+                    state::set_explain_style(&self.shared, &ctx, picked);
+                }
                 if from_cache && phase == ExplainPhase::Done {
                     theme::chip(ui, "キャッシュ", p.weak, p.card_stroke)
                         .on_hover_text("保存済みの解説を表示しています");
@@ -1497,7 +1523,7 @@ impl PaperReaderApp {
                         },
                         true,
                     )
-                    .on_hover_text("和訳・文構造・文法を解説します（E キー）")
+                    .on_hover_text(format!("{hint}（E キー）"))
                     .clicked()
                     {
                         state::start_explain(&self.shared, &ctx, false);
@@ -1512,9 +1538,19 @@ impl PaperReaderApp {
             match &phase {
                 ExplainPhase::Idle => {
                     ui.label(
-                        RichText::new("「解説する」を押すと、和訳や文法の解説がここに流れます。")
-                            .size(13.5)
-                            .color(p.weak),
+                        RichText::new(match style {
+                            ExplainStyle::Standard if sel_mode == Mode::Formula => {
+                                "「解説する」を押すと、数式の解説がここに流れます。"
+                            }
+                            ExplainStyle::Standard => {
+                                "「解説する」を押すと、和訳や文法の解説がここに流れます。"
+                            }
+                            ExplainStyle::Academic => {
+                                "「解説する」を押すと、概念や背景の解説がここに流れます。"
+                            }
+                        })
+                        .size(13.5)
+                        .color(p.weak),
                     );
                 }
                 ExplainPhase::Connecting => {
@@ -2838,6 +2874,9 @@ fn shown_selection(text: &str, mode: Mode) -> Cow<'_, str> {
 }
 
 /// 選択の種類の札。
+/// 学術的な解説の説明（切り替えとボタンのヒント）。
+const ACADEMIC_HINT: &str = "概念・背景・論文の中での位置づけを解説します";
+
 fn mode_chip(ui: &mut egui::Ui, p: &Palette, mode: Mode) {
     match mode {
         Mode::Word => theme::chip(ui, "単語", p.word, p.word_soft),

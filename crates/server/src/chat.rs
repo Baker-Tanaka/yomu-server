@@ -188,7 +188,9 @@ fn head_within(s: &str, budget: usize) -> String {
 /// 指示・解説の対象・今回の質問は必ず入れる。解説と文脈は上限まで切り詰め、
 /// 残りに新しいやり取りから順に（質問と回答の組で）入れる。
 fn fit(req: &ChatRequest) -> (String, Vec<ChatMessage>) {
-    let fixed = estimate_tokens(&prompts::chat_system_prompt(req.mode, &req.text, "", ""));
+    let fixed = estimate_tokens(&prompts::chat_system_prompt(
+        req.mode, req.style, &req.text, "", "",
+    ));
     let last = req.messages.len().saturating_sub(1);
     let question = req
         .messages
@@ -235,7 +237,8 @@ fn fit(req: &ChatRequest) -> (String, Vec<ChatMessage>) {
             history = previous;
         }
     }
-    let system = prompts::chat_system_prompt(req.mode, &req.text, &context, &explanation);
+    let system =
+        prompts::chat_system_prompt(req.mode, req.style, &req.text, &context, &explanation);
     (system, history)
 }
 
@@ -257,6 +260,7 @@ mod tests {
             text: "We propose a method.".into(),
             context: "Intro. We propose a method. Outro.".into(),
             explanation: "## 文構造\n- 主語: We".into(),
+            style: Default::default(),
             messages,
         }
     }

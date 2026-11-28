@@ -453,6 +453,25 @@ impl Mode {
     }
 }
 
+/// 解説の種類。`Standard` は対象に合わせた解説（単語・英文は英語の解説、数式は数式の解説）、
+/// `Academic` は内容（概念・背景・論文の中での役割）の解説で、利用者が選んだときだけ使う。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum ExplainStyle {
+    #[default]
+    Standard,
+    Academic,
+}
+
+impl ExplainStyle {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExplainStyle::Standard => "standard",
+            ExplainStyle::Academic => "academic",
+        }
+    }
+}
+
 /// LLM に渡す選択文字列の上限（文字数）
 pub const MAX_TEXT_CHARS: usize = 2_000;
 /// LLM に渡す文脈の上限（文字数）
@@ -471,6 +490,9 @@ pub struct ExplainRequest {
     /// 英文の解説にスラッシュリーディング（意味のまとまりごとの区切りと直訳）を入れる
     #[serde(default)]
     pub slash: bool,
+    /// 解説の種類（省略時は対象に合わせた解説）
+    #[serde(default)]
+    pub style: ExplainStyle,
 }
 
 /// チャットの質問 1 件の上限（文字数）
@@ -507,6 +529,9 @@ pub struct ChatRequest {
     /// 表示した解説（Markdown）
     #[serde(default)]
     pub explanation: String,
+    /// 表示した解説の種類
+    #[serde(default)]
+    pub style: ExplainStyle,
     /// これまでのやり取り。質問と回答が交互で、最後が今回の質問
     pub messages: Vec<ChatMessage>,
 }
@@ -1045,6 +1070,18 @@ mod tests {
             "\"formula\""
         );
         assert_eq!(Mode::Formula.as_str(), "formula");
+    }
+
+    #[test]
+    fn explain_style_defaults_to_standard() {
+        // 古い web（style を送らない）からの要求は、これまでどおりの解説にする
+        let r: ExplainRequest =
+            serde_json::from_str(r#"{"mode":"sentence","text":"We propose X."}"#).unwrap();
+        assert_eq!(r.style, ExplainStyle::Standard);
+        let r: ExplainRequest =
+            serde_json::from_str(r#"{"mode":"word","text":"X","style":"academic"}"#).unwrap();
+        assert_eq!(r.style, ExplainStyle::Academic);
+        assert_eq!(ExplainStyle::Academic.as_str(), "academic");
     }
 
     fn feed(p: &mut SseParser, chunks: &[&str]) -> Vec<SseEvent> {

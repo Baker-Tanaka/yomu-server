@@ -16,7 +16,7 @@ use axum::extract::rejection::JsonRejection;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::Stream;
 use paper_reader_shared::{
-    ExplainRequest, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, SseParser, sse_event,
+    ExplainRequest, ExplainStyle, MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, SseParser, sse_event,
 };
 use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, mpsc};
@@ -54,7 +54,7 @@ pub async fn post_explain(
         // 英文でスラッシュリーディングの有無だけが違う解説があれば、それを返す（LLM を待たせない）。
         // web は設定に合わせて表示を切り替え、足りなければ「付けて解説し直す」を出す
         let mut keys = vec![key.clone()];
-        if req.mode == Mode::Sentence {
+        if has_grammar(&req) {
             keys.push(key_for(
                 &state,
                 &ExplainRequest {
@@ -82,9 +82,13 @@ pub async fn post_explain(
     };
     match cached {
         Some((markdown, tags)) => {
-            tracing::info!(mode = req.mode.as_str(), "explain cache hit");
+            tracing::info!(
+                mode = req.mode.as_str(),
+                style = req.style.as_str(),
+                "explain cache hit"
+            );
             let mut events = vec![(sse_event::CACHED, String::new())];
-            if req.mode == Mode::Sentence {
+            if has_grammar(&req) {
                 // 保存するのはタグの id と該当箇所だけなので、名前と説明を付け直す
                 let detected: Vec<DetectedTag> = tags
                     .as_deref()
@@ -210,23 +214,33 @@ pub fn validate(mut req: ExplainRequest) -> AppResult<ExplainRequest> {
     Ok(req)
 }
 
-/// この解説のキャッシュキー。英文なら grammar_tags.yaml の内容のハッシュも含める。
+/// 英文の英語の解説か（和訳・文法タグ・スラッシュリーディングを付ける解説）。
+fn has_grammar(req: &ExplainRequest) -> bool {
+    req.mode == Mode::Sentence && req.style == ExplainStyle::Standard
+}
+
+/// この解説のキャッシュキー。
 pub fn key_for(state: &AppState, req: &ExplainRequest) -> String {
-    // 英文は文法タグの定義と、スラッシュリーディングの有無もキーに含める
-    let grammar = match req.mode {
-        Mode::Sentence if req.slash => format!("{}+slash", state.grammar().tags_hash),
-        Mode::Sentence => state.grammar().tags_hash.clone(),
-        Mode::Word => String::new(),
-        Mode::Formula => prompts::FORMULA_PROMPT.to_string(),
-    };
     cache_key(
         &state.config.llm_model,
         req.mode,
         &req.text,
         &req.context,
         prompts::PROMPT_VERSION,
-        &grammar,
+        &key_variant(req, &state.grammar().tags_hash),
     )
+}
+
+/// キャッシュキーのうち、解説の作り方で変わる部分。英文の英語の解説は、文法タグの定義
+/// （grammar_tags.yaml のハッシュ）と、スラッシュリーディングの有無も含める。
+fn key_variant(req: &ExplainRequest, tags_hash: &str) -> String {
+    match (req.style, req.mode) {
+        (ExplainStyle::Academic, _) => prompts::ACADEMIC_PROMPT.to_string(),
+        (ExplainStyle::Standard, Mode::Sentence) if req.slash => format!("{tags_hash}+slash"),
+        (ExplainStyle::Standard, Mode::Sentence) => tags_hash.to_string(),
+        (ExplainStyle::Standard, Mode::Word) => String::new(),
+        (ExplainStyle::Standard, Mode::Formula) => prompts::FORMULA_PROMPT.to_string(),
+    }
 }
 
 /// tags イベントの data（名前と説明を付けたタグの JSON 配列）。
@@ -266,6 +280,7 @@ async fn run(state: AppState, req: ExplainRequest, key: String, tx: mpsc::Sender
         Ok((c, detected)) => {
             tracing::info!(
                 mode = req.mode.as_str(),
+                style = req.style.as_str(),
                 chars = c.text.chars().count(),
                 complete = c.complete,
                 "explain done"
@@ -353,6 +368,15 @@ async fn generate(
             cfg.llm_disable_thinking,
         )
     };
+    // 学術的な解説は、対象によらず 1 回の生成で解説する
+    if req.style == ExplainStyle::Academic {
+        let b = body(
+            prompts::academic_system_prompt(),
+            prompts::user_message(req, &[], None),
+            MAX_TOKENS,
+        );
+        return Ok((stream_llm(state, &b, tx).await?, None));
+    }
     // 単語と数式は、1 回の生成で解説する
     if req.mode != Mode::Sentence {
         let b = body(
@@ -604,7 +628,30 @@ mod tests {
             context: context.into(),
             regenerate: false,
             slash: false,
+            style: ExplainStyle::Standard,
         }
+    }
+
+    #[test]
+    fn key_variant_separates_styles() {
+        let mut r = req("We propose X.", "");
+        assert_eq!(key_variant(&r, "h"), "h");
+        r.slash = true;
+        assert_eq!(key_variant(&r, "h"), "h+slash");
+        // 学術的な解説は英語の解説と別のキャッシュにし、スラッシュリーディングや文法タグの定義に左右されない
+        r.style = ExplainStyle::Academic;
+        let academic = key_variant(&r, "h");
+        assert_eq!(academic, prompts::ACADEMIC_PROMPT);
+        r.slash = false;
+        assert_eq!(key_variant(&r, "other"), academic);
+        assert!(!has_grammar(&r));
+        r.mode = Mode::Formula;
+        assert_eq!(key_variant(&r, "h"), academic);
+        r.style = ExplainStyle::Standard;
+        assert_eq!(key_variant(&r, "h"), prompts::FORMULA_PROMPT);
+        assert!(!has_grammar(&r));
+        r.mode = Mode::Word;
+        assert_eq!(key_variant(&r, "h"), "");
     }
 
     #[test]

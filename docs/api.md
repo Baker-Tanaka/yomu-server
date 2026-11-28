@@ -24,7 +24,9 @@
 - `POST /api/words` body: `{ word, kana, meanings }` → 保存した 1 語（自分で登録。空の項目は変えない。meanings は改行・「、」区切り）
 - `POST /api/words/delete` body: `{ words: [string] }` → `{ deleted, store }`（1,000 語まで）
 - `POST /api/words/prune` body: `{ count }` → `{ deleted, store }`（検索回数の少ない順・同じなら古い順に消す。自分で登録した語は残す）
-- `POST /api/explain` body: `{ mode: "word" | "sentence" | "formula", text, context, regenerate?, slash? }`（`formula` の `text` は数式の LaTeX。単語と同じく 1 回の生成で、`tags` は送らない） → `text/event-stream`
+- `POST /api/explain` body: `{ mode: "word" | "sentence" | "formula", text, context, regenerate?, slash?, style? }`（`formula` の `text` は数式の LaTeX。単語と同じく 1 回の生成で、`tags` は送らない） → `text/event-stream`
+  - `style`: `"standard"`（省略時。単語・英文は英語の解説、数式は数式の解説）か `"academic"`（学術的な解説: ひとことで・背景となる概念・論文の中での位置づけ・読むときのポイント）。
+    `academic` は対象によらず 1 回の生成で、和訳の先出し・`tags`・スラッシュリーディングは無い。キャッシュは `standard` と別に持つ
   - `slash: true` なら英文の解説の先頭（和訳の次）に「## スラッシュリーディング」を入れる。キャッシュのキーには有無を含めるが、
     片方しか無ければそれを返す（web は設定に合わせて節を隠すか、「付けて解説し直す」を出す）
   - `event: queued`（ほかの解説の生成待ち）→ `event: started` → `event: token`（data は追記する文字列）… → `event: done`
@@ -35,7 +37,7 @@
   - 最後まで生成できた解説は `explain_cache` に保存します。キーは `sha256(LLM_MODEL, mode, text, context, プロンプトのバージョン)`。
     次に同じ解説を頼まれたら LLM を呼ばずに `event: cached` → `event: token`（全文）→ `event: done` を返します。
     `regenerate: true` ならキャッシュを使わずに生成し、結果で上書きします
-- `POST /api/chat` body: `{ mode, text, context, explanation, messages: [{ role: "user" | "assistant", content }] }` → `text/event-stream`
+- `POST /api/chat` body: `{ mode, text, context, explanation, style?, messages: [{ role: "user" | "assistant", content }] }` → `text/event-stream`
   - 解説のあとの質問。`messages` は質問と回答が交互で、最後が今回の質問（21 件まで）。会話はサーバーに保存せず、画面が毎回送ります
   - イベントは `queued` → `started` → `token`… → `done`（失敗は `error`）。LLM の同時実行 1 件の枠は解説と共通で、クライアントが切断すると生成も止めます
   - text は 2,000 文字、context は 4,000 文字、質問は 1,000 文字、解説・回答は 12,000 文字まで

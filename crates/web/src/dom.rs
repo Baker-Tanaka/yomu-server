@@ -59,6 +59,8 @@ thread_local! {
     static LAST_RANGE: RefCell<Option<Range>> = const { RefCell::new(None) };
     /// 本文に付けている付箋の印
     static BOOKMARK: RefCell<Option<BookmarkLine>> = const { RefCell::new(None) };
+    /// いまの選択を確定して通知する処理（`watch_selection` が入れる）
+    static COMMIT: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
 }
 
 /// 文法項目のハイライトに使う要素のクラス
@@ -70,13 +72,25 @@ pub fn has_paper_selection() -> bool {
 }
 
 /// 本文の選択の画面上の位置と、本文の表示範囲。
-pub fn selection_rect() -> Option<(DomRect, DomRect)> {
-    let range = paper_selection_range()?;
+/// 選択の矩形は (左, 上, 右, 下)。
+pub fn selection_rect() -> Option<((f64, f64, f64, f64), DomRect)> {
     let area = paper_element()?.get_bounding_client_rect();
-    Some((range.get_bounding_client_rect(), area))
+    let selection = match crate::touch_select::bounds() {
+        Some(bounds) => bounds,
+        None => {
+            let r = native_selection_range()?.get_bounding_client_rect();
+            (r.left(), r.top(), r.right(), r.bottom())
+        }
+    };
+    Some((selection, area))
 }
 
+/// 本文の選択。アプリで選んでいれば（touch_select.rs）それ、無ければブラウザの選択。
 fn paper_selection_range() -> Option<Range> {
+    crate::touch_select::range().or_else(native_selection_range)
+}
+
+fn native_selection_range() -> Option<Range> {
     let selection = web_sys::window()?.get_selection().ok()??;
     if selection.is_collapsed() || selection.range_count() == 0 {
         return None;
@@ -91,6 +105,7 @@ pub fn clear_selection() {
     crate::selection_menu::hide();
     LAST_SELECTION.with(|l| *l.borrow_mut() = None);
     LAST_RANGE.with(|r| *r.borrow_mut() = None);
+    crate::touch_select::remove();
     if let Some(Ok(Some(sel))) = web_sys::window().map(|w| w.get_selection()) {
         let _ = sel.remove_all_ranges();
     }
@@ -100,6 +115,7 @@ pub fn clear_selection() {
 pub fn set_paper_html(html: &str, title: &str) {
     crate::selection_menu::hide();
     crate::cite_peek::close();
+    crate::touch_select::remove();
     LAST_SELECTION.with(|l| *l.borrow_mut() = None);
     CONTEXT_ELEMENT.with(|c| *c.borrow_mut() = None);
     LAST_RANGE.with(|r| *r.borrow_mut() = None);
@@ -129,17 +145,20 @@ pub fn show_fatal_error(message: &str) {
 /// 現在の選択が #paper 内にあれば、その内容を返す。
 fn capture_selection() -> Option<SelectionInfo> {
     let paper = paper_element()?;
-    let selection = web_sys::window()?.get_selection().ok()??;
-    if selection.is_collapsed() || selection.range_count() == 0 {
-        return None;
-    }
-    let range = selection.get_range_at(0).ok()?;
-    let common = range.common_ancestor_container().ok()?;
-    if !paper.contains(Some(&common)) {
-        return None;
-    }
+    let (range, raw) = match crate::touch_select::range() {
+        Some(range) => {
+            let text = crate::touch_select::range_text(&range);
+            (range, text)
+        }
+        None => {
+            let range = native_selection_range()?;
+            // 表示されていない文字を含めないよう、Range ではなく Selection の文字列を使う
+            let selection = web_sys::window()?.get_selection().ok()??;
+            (range, String::from(selection.to_string()))
+        }
+    };
 
-    let text = normalize_whitespace(&String::from(selection.to_string()));
+    let text = normalize_whitespace(&raw);
     if text.is_empty() {
         return None;
     }
@@ -209,6 +228,8 @@ pub fn watch_selection(on_select: impl Fn(SelectionInfo) + 'static) -> Result<()
         }
     });
 
+    COMMIT.with(|c| *c.borrow_mut() = Some(commit.clone()));
+
     let pending: Rc<Cell<Option<i32>>> = Rc::default();
 
     let on_timeout = {
@@ -257,6 +278,18 @@ pub fn watch_selection(on_select: impl Fn(SelectionInfo) + 'static) -> Result<()
     on_mouseup.forget();
 
     Ok(())
+}
+
+/// アプリで選んだ範囲（touch_select.rs）が決まったら、ブラウザの選択と同じように通知し、操作メニューを出す。
+pub fn commit_app_selection() {
+    if let Some(commit) = COMMIT.with(|c| c.borrow().clone()) {
+        commit();
+    }
+    // 通知の中で本文の要素が変わることがある（文法のハイライトを外すなど）
+    crate::touch_select::draw();
+    if let Some(info) = capture_selection() {
+        crate::selection_menu::show(&info.text);
+    }
 }
 
 /// キーボードショートカット。
@@ -739,7 +772,9 @@ pub fn clear_highlight() {
 /// その位置から後ろを優先して探す。空白の違いと大文字小文字は無視する。
 pub fn highlight_span(span: &str, anchor: &str) -> bool {
     clear_highlight();
-    // ブラウザの選択の色がハイライトを覆うので、選択だけ外す（右ペインの選択内容はそのまま）
+    // 選択の色がハイライトを覆うので、選択だけ外す（右ペインの選択内容はそのまま）
+    crate::touch_select::remove();
+    crate::selection_menu::hide();
     if let Some(Ok(Some(sel))) = web_sys::window().map(|w| w.get_selection()) {
         let _ = sel.remove_all_ranges();
     }
@@ -846,7 +881,7 @@ pub fn visible_text(el: &Element) -> String {
 }
 
 /// 要素の中のテキストノードを文書順に集める（数式の注釈など、表示されないものは除く）。
-fn collect_text_nodes(node: &Node, out: &mut Vec<Text>) {
+pub fn collect_text_nodes(node: &Node, out: &mut Vec<Text>) {
     let children = node.child_nodes();
     for i in 0..children.length() {
         let Some(child) = children.item(i) else {
@@ -992,10 +1027,12 @@ pub fn reading_line(use_selection: bool) -> Option<ReadingLine> {
     let visible_line =
         |rect: &DomRect| rect.bottom() > view.top() + LINE_SLACK_PX && rect.top() < view.bottom();
 
-    let live = web_sys::window()
-        .and_then(|w| w.get_selection().ok().flatten())
-        .filter(|s| s.range_count() > 0 && !s.is_collapsed())
-        .and_then(|s| s.get_range_at(0).ok());
+    let live = crate::touch_select::range().or_else(|| {
+        web_sys::window()
+            .and_then(|w| w.get_selection().ok().flatten())
+            .filter(|s| s.range_count() > 0 && !s.is_collapsed())
+            .and_then(|s| s.get_range_at(0).ok())
+    });
     let remembered = use_selection
         .then(|| LAST_RANGE.with(|r| r.borrow().clone()))
         .flatten();

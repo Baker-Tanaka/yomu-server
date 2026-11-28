@@ -114,6 +114,8 @@ html, body {
 }
 
 #paper {
+  /* 重ねる選択の色（#app-select-layer）の位置の基準 */
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -762,6 +764,57 @@ body.resizing #paper, body.resizing #explain-pane {
 }
 #command-palette .palette-group { flex: none; font-size: 11.5px; color: var(--muted); }
 #command-palette .palette-empty { padding: 14px 10px; font-size: 13.5px; color: var(--muted); }
+
+/* タッチ端末で本文の選択をアプリで行うとき（touch_select.rs）。標準の選択と、そのメニューを止める */
+body.app-select #paper {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+#paper > #app-select-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+  z-index: 3;
+}
+.app-select-mark {
+  position: absolute;
+  background: var(--accent);
+  opacity: 0.3;
+  pointer-events: none;
+}
+/* 選択の両端のつまみ。線は 1 行の高さで、丸は始めが上・終わりが下 */
+.app-select-handle {
+  position: absolute;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  touch-action: none;
+}
+.app-select-handle::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.app-select-handle[data-end="start"]::before { top: -12px; }
+.app-select-handle[data-end="end"]::before { bottom: -12px; }
+/* 指で触れる範囲は丸のまわりに広げる */
+.app-select-handle::after {
+  content: "";
+  position: absolute;
+  left: -17px;
+  width: 36px;
+  height: 36px;
+}
+.app-select-handle[data-end="start"]::after { top: -26px; }
+.app-select-handle[data-end="end"]::after { bottom: -26px; }
 
 /* 選択した語・文のそばの操作メニュー（位置は selection_menu.rs が指定する） */
 #selection-menu {

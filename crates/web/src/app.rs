@@ -8,9 +8,9 @@ use std::sync::Arc;
 use eframe::egui::{self, Margin, RichText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use paper_reader_shared::{
-    APP_VERSION, ChatRole, DictEntry, DictResponse, ExplainTag, FeedbackItem, FeedbackLabel,
-    FeedbackListResponse, GIT_HASH, GrammarTagInfo, GrammarTagsResponse, HistoryEntry,
-    MAX_CHAT_QUESTION_CHARS, MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode,
+    APP_VERSION, ChatRole, DictEntry, DictResponse, ExplainStyle, ExplainTag, FeedbackItem,
+    FeedbackLabel, FeedbackListResponse, GIT_HASH, GrammarTagInfo, GrammarTagsResponse,
+    HistoryEntry, MAX_CHAT_QUESTION_CHARS, MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode,
     ReadLaterItem, ReadLaterPut, SLASH_READING_HEADING, SearchItem, SearchSort, TagGuide,
     WordSource, build_version_label, normalize_math_delimiters, paper_url_from_input,
     parse_slash_reading, plain_arrows, pos_groups, pos_summary, readable_math, tex_to_text,
@@ -1036,11 +1036,27 @@ impl PaperReaderApp {
         }
     }
 
+    /// AI の回答（左寄せの吹き出し）。
     fn answer_view(&mut self, ui: &mut egui::Ui, index: usize, markdown: &str) {
+        let p = theme::palette(ui.ctx());
         let markdown = plain_arrows(markdown);
-        ui.push_id(("chat-answer", index), |ui| {
-            self.markdown_with_math(ui, &markdown);
-        });
+        let max_w = ui.available_width() * ANSWER_BUBBLE_WIDTH;
+        egui::Frame::new()
+            .fill(p.bg)
+            .stroke(egui::Stroke::new(1.0, p.card_stroke))
+            .corner_radius(egui::CornerRadius {
+                nw: 4,
+                ne: 14,
+                sw: 14,
+                se: 14,
+            })
+            .inner_margin(Margin::symmetric(12, 8))
+            .show(ui, |ui| {
+                ui.set_max_width(max_w);
+                ui.push_id(("chat-answer", index), |ui| {
+                    self.markdown_with_math(ui, &markdown);
+                });
+            });
     }
 
     fn paper_card(&mut self, ui: &mut egui::Ui) {
@@ -1454,19 +1470,33 @@ impl PaperReaderApp {
 
     fn explain_card(&mut self, ui: &mut egui::Ui, p: &Palette) {
         let ctx = ui.ctx().clone();
-        let (phase, running, from_cache, markdown, is_sentence, show_slash) = {
+        let (phase, running, from_cache, markdown, is_sentence, show_slash, style, sel_mode) = {
             let s = self.shared.borrow();
+            let style = s.explain.style;
             (
                 s.explain.phase.clone(),
                 s.explain.phase.is_running(),
                 s.explain.from_cache,
                 s.explain.markdown.clone(),
-                s.explain
-                    .target
-                    .as_ref()
-                    .is_some_and(|(m, _)| *m == Mode::Sentence),
+                // 和訳・文法項目・スラッシュリーディングは、英文の英語の解説のときだけ
+                style == ExplainStyle::Standard
+                    && s.explain
+                        .target
+                        .as_ref()
+                        .is_some_and(|(m, _)| *m == Mode::Sentence),
                 s.show_slash,
+                style,
+                s.selection.as_ref().map_or(Mode::Sentence, |sel| sel.mode),
             )
+        };
+        let (base_label, base_hint) = if sel_mode == Mode::Formula {
+            ("数式", "記号の意味と式の読み解きを解説します")
+        } else {
+            ("英語", "和訳・文構造・文法を解説します")
+        };
+        let hint = match style {
+            ExplainStyle::Standard => base_hint,
+            ExplainStyle::Academic => ACADEMIC_HINT,
         };
         // スラッシュリーディングを表示しない設定なら、その節を隠す（生成し直さない）
         let markdown = if show_slash {
@@ -1484,6 +1514,18 @@ impl PaperReaderApp {
         theme::card(ui, |ui| {
             ui.horizontal(|ui| {
                 theme::section_title(ui, "AI 解説");
+                // 解説の種類。選択に合わせた解説（英語・数式）が既定で、学術は選んだときだけ
+                let mut picked = style;
+                if theme::segmented(
+                    ui,
+                    &mut picked,
+                    &[
+                        (ExplainStyle::Standard, base_label),
+                        (ExplainStyle::Academic, "学術"),
+                    ],
+                ) {
+                    state::set_explain_style(&self.shared, &ctx, picked);
+                }
                 if from_cache && phase == ExplainPhase::Done {
                     theme::chip(ui, "キャッシュ", p.weak, p.card_stroke)
                         .on_hover_text("保存済みの解説を表示しています");
@@ -1509,7 +1551,7 @@ impl PaperReaderApp {
                         },
                         true,
                     )
-                    .on_hover_text("和訳・文構造・文法を解説します（E キー）")
+                    .on_hover_text(format!("{hint}（E キー）"))
                     .clicked()
                     {
                         state::start_explain(&self.shared, &ctx, false);
@@ -1525,9 +1567,19 @@ impl PaperReaderApp {
             match &phase {
                 ExplainPhase::Idle => {
                     ui.label(
-                        RichText::new("「解説する」を押すと、和訳や文法の解説がここに流れます。")
-                            .size(13.5)
-                            .color(p.weak),
+                        RichText::new(match style {
+                            ExplainStyle::Standard if sel_mode == Mode::Formula => {
+                                "「解説する」を押すと、数式の解説がここに流れます。"
+                            }
+                            ExplainStyle::Standard => {
+                                "「解説する」を押すと、和訳や文法の解説がここに流れます。"
+                            }
+                            ExplainStyle::Academic => {
+                                "「解説する」を押すと、概念や背景の解説がここに流れます。"
+                            }
+                        })
+                        .size(13.5)
+                        .color(p.weak),
                     );
                 }
                 ExplainPhase::Connecting => {
@@ -2388,7 +2440,8 @@ impl eframe::App for PaperReaderApp {
                     }
                     return;
                 }
-                if mobile {
+                // キーボードが出ているあいだは、下のタブを隠して入力欄と会話を広く見せる
+                if mobile && !dom::keyboard_open() {
                     egui::Panel::bottom("bottom-tabs")
                         .show_separator_line(false)
                         .frame(egui::Frame::new().fill(p.bg).inner_margin(Margin {
@@ -2425,27 +2478,15 @@ impl eframe::App for PaperReaderApp {
                     (s.tab, s.selection.is_some() && s.explain.chat.open)
                 };
                 if tab == Tab::Explain && chatting {
-                    // PC では下端に置く。スマホではキーボードに隠れないよう会話の上に置く
-                    let (panel, margin) = if mobile {
-                        (
-                            egui::Panel::top("chat-bar"),
-                            Margin {
-                                bottom: 8,
-                                ..Margin::ZERO
-                            },
-                        )
-                    } else {
-                        (
-                            egui::Panel::bottom("chat-bar"),
-                            Margin {
-                                top: 8,
-                                ..Margin::ZERO
-                            },
-                        )
-                    };
-                    panel
+                    // チャットのアプリと同じく、質問欄は会話の下端に置く
+                    // （スマホでキーボードが出たら、dom.rs がレイアウトを見えている高さに縮める）
+                    egui::Panel::bottom("chat-bar")
                         .show_separator_line(false)
-                        .frame(egui::Frame::new().fill(p.bg).inner_margin(margin))
+                        .frame(egui::Frame::new().fill(p.bg).inner_margin(Margin {
+                            top: 8,
+                            bottom: if mobile { 6 } else { 0 },
+                            ..Margin::ZERO
+                        }))
                         .show(ui, |ui| self.chat_bar(ui));
                 }
                 egui::ScrollArea::vertical()
@@ -2719,12 +2760,34 @@ impl PaperReaderApp {
             &mut f.include_context,
             "状況を添付する（開いている論文・選択中のテキスト・ブラウザの種類）",
         );
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("AI 補完").size(12.5).color(p.weak));
+            theme::segmented(
+                ui,
+                &mut f.rewrite,
+                &[(true, "文章も整える"), (false, "ラベルだけ")],
+            );
+        });
+        ui.label(
+            RichText::new(if f.rewrite {
+                "誤字や言い回しを直し、伝わりやすい文章にします。確認画面で元の文章にも戻せます"
+            } else {
+                "書いた文章はそのままで、ラベルとタイトルだけを付けます"
+            })
+            .size(11.5)
+            .color(p.weak),
+        );
         ui.add_space(8.0);
         let can_go = !f.body.trim().is_empty();
+        let go_label = if f.rewrite {
+            "AI で整えて確認 →"
+        } else {
+            "AI でラベルを付けて確認 →"
+        };
         drop(s);
         ui.horizontal(|ui| {
-            if theme::primary_button(ui, "AI でラベルを付けて確認 →", can_go).clicked()
-            {
+            if theme::primary_button(ui, go_label, can_go).clicked() {
                 state::preview_feedback(&self.shared, ctx);
             }
             if theme::subtle_button(ui, "閉じる").clicked() {
@@ -2805,7 +2868,42 @@ impl PaperReaderApp {
             });
         }
         ui.add_space(8.0);
-        ui.label(RichText::new("送られる本文").size(12.5).color(p.weak));
+        let use_original = {
+            let mut s = self.shared.borrow_mut();
+            let f = &mut s.feedback;
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("送られる本文").size(12.5).color(p.weak));
+                if preview.rewritten {
+                    let mut original = f.use_original;
+                    if theme::segmented(
+                        ui,
+                        &mut original,
+                        &[(false, "AI が整えた文章"), (true, "元の文章")],
+                    ) {
+                        f.use_original = original;
+                        f.body = if original {
+                            f.original_body.clone()
+                        } else {
+                            preview.body.clone()
+                        };
+                    }
+                } else if f.rewrite && preview.llm_labeled {
+                    ui.label(
+                        RichText::new(
+                            "文章は書いたままです（AI が直すところは無いと判断しました）",
+                        )
+                        .size(11.5)
+                        .color(p.weak),
+                    );
+                }
+            });
+            preview.rewritten && f.use_original
+        };
+        let issue_body = if use_original {
+            &preview.original_issue_body
+        } else {
+            &preview.issue_body
+        };
         egui::Frame::new()
             .fill(p.bg)
             .corner_radius(egui::CornerRadius::same(8))
@@ -2817,7 +2915,7 @@ impl PaperReaderApp {
                     .max_height(220.0)
                     .show(ui, |ui| {
                         ui.label(
-                            RichText::new(&preview.issue_body)
+                            RichText::new(issue_body)
                                 .monospace()
                                 .size(12.0)
                                 .color(p.text),
@@ -2994,6 +3092,9 @@ fn shown_selection(text: &str, mode: Mode) -> Cow<'_, str> {
 }
 
 /// 選択の種類の札。
+/// 学術的な解説の説明（切り替えとボタンのヒント）。
+const ACADEMIC_HINT: &str = "概念・背景・論文の中での位置づけを解説します";
+
 fn mode_chip(ui: &mut egui::Ui, p: &Palette, mode: Mode) {
     match mode {
         Mode::Word => theme::chip(ui, "単語", p.word, p.word_soft),
@@ -3065,16 +3166,30 @@ fn empty_explain(ui: &mut egui::Ui, p: &Palette, has_paper: bool, mobile: bool) 
 }
 
 /// チャットの自分の質問。
+/// 吹き出しの幅の上限（会話の幅に対する割合）
+const QUESTION_BUBBLE_WIDTH: f32 = 0.82;
+const ANSWER_BUBBLE_WIDTH: f32 = 0.94;
+
+/// 自分の質問（右寄せの吹き出し）。
 fn question_bubble(ui: &mut egui::Ui, p: &Palette, text: &str) -> egui::Response {
-    egui::Frame::new()
-        .fill(p.accent_soft)
-        .corner_radius(8)
-        .inner_margin(Margin::symmetric(10, 6))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(text).size(14.5).color(p.strong));
-        })
-        .response
+    let max_w = ui.available_width() * QUESTION_BUBBLE_WIDTH;
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+        egui::Frame::new()
+            .fill(p.accent_soft)
+            .corner_radius(egui::CornerRadius {
+                nw: 14,
+                ne: 4,
+                sw: 14,
+                se: 14,
+            })
+            .inner_margin(Margin::symmetric(12, 8))
+            .show(ui, |ui| {
+                ui.set_max_width(max_w);
+                ui.add(egui::Label::new(RichText::new(text).size(14.5).color(p.strong)).wrap());
+            })
+            .response
+    })
+    .inner
 }
 
 /// 長い選択は、最初と最後の数語だけにする（どこからどこまで選べたかが分かるように）。

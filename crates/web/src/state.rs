@@ -5,9 +5,9 @@ use std::rc::Rc;
 
 use eframe::egui;
 use paper_reader_shared::{
-    ChatMessage, ChatRequest, ChatRole, DictResponse, ExplainRequest, ExplainTag, FeedbackContext,
-    FeedbackDraft, FeedbackItem, FeedbackListResponse, FeedbackPreview, FeedbackSubmit,
-    GrammarTagsResponse, HealthResponse, HistoryEntry, HistoryRecord, KnowledgeAdd,
+    ChatMessage, ChatRequest, ChatRole, DictResponse, ExplainRequest, ExplainStyle, ExplainTag,
+    FeedbackContext, FeedbackDraft, FeedbackItem, FeedbackListResponse, FeedbackPreview,
+    FeedbackSubmit, GrammarTagsResponse, HealthResponse, HistoryEntry, HistoryRecord, KnowledgeAdd,
     KnowledgeListResponse, KnowledgeRef, MAX_CHAT_ANSWER_CHARS, MAX_CHAT_QUESTION_CHARS,
     MAX_CONTEXT_CHARS, MAX_TEXT_CHARS, Mode, ReadLaterItem, SEARCH_PAGE_SIZE, SearchItem,
     SearchSort, WordListResponse, WordNote, WordSort, WordStoreStats, WordUpsert, clip_context,
@@ -167,6 +167,8 @@ pub struct Explain {
     pub markdown: String,
     /// 解説の対象（表示用）
     pub target: Option<(Mode, String)>,
+    /// 解説の種類。新しく選択したら対象に合わせた解説（英語・数式）に戻る
+    pub style: ExplainStyle,
     /// サーバーのキャッシュから返された解説か
     pub from_cache: bool,
     /// 英文で検出した文法項目（tags イベント）
@@ -202,6 +204,7 @@ impl Explain {
         self.phase = ExplainPhase::Idle;
         self.markdown.clear();
         self.target = None;
+        self.style = ExplainStyle::Standard;
         self.from_cache = false;
         self.clear_tags();
         self.knowledge.clear();
@@ -283,6 +286,12 @@ pub struct Feedback {
     pub include_context: bool,
     /// 確認画面で選んでいるラベル
     pub labels: Vec<String>,
+    /// AI 補完で本文の文章も整える（既定）。false ならラベルとタイトルだけ
+    pub rewrite: bool,
+    /// AI が整える前の、書いたままの本文（確認画面で元に戻す用）
+    pub original_body: String,
+    /// 確認画面で、整えた文章ではなく書いたままの文章を送る
+    pub use_original: bool,
     pub error: Option<String>,
     /// 送信先の設定と、送ったフィードバックの一覧
     pub list: Option<FeedbackListResponse>,
@@ -297,6 +306,9 @@ impl Default for Feedback {
             body: String::new(),
             include_context: true,
             labels: Vec::new(),
+            rewrite: true,
+            original_body: String::new(),
+            use_original: false,
             error: None,
             list: None,
         }
@@ -964,6 +976,7 @@ fn begin_explain(this: &SharedRef, ctx: &egui::Context, regenerate: bool) {
             text: sel.text,
             regenerate,
             slash: s.show_slash,
+            style: s.explain.style,
         };
         (req, s.explain.seq, signal)
     };
@@ -1162,6 +1175,18 @@ pub fn delete_knowledge(this: &SharedRef, ctx: &egui::Context, id: i64) {
     });
 }
 
+/// 解説の種類を切り替え、その種類で解説し直す（保存済みならすぐに出る）。同じ種類なら何もしない。
+pub fn set_explain_style(this: &SharedRef, ctx: &egui::Context, style: ExplainStyle) {
+    {
+        let mut s = this.borrow_mut();
+        if s.explain.style == style || s.selection.is_none() {
+            return;
+        }
+        s.explain.style = style;
+    }
+    start_explain(this, ctx, false);
+}
+
 /// 進行中の解説を止める（受信済みの部分は残す）。
 pub fn stop_explain(this: &SharedRef) {
     let mut s = this.borrow_mut();
@@ -1213,6 +1238,7 @@ pub fn send_chat(this: &SharedRef, ctx: &egui::Context, question: &str) -> bool 
             .chars()
             .take(MAX_CHAT_ANSWER_CHARS)
             .collect();
+        let style = s.explain.style;
         let chat = &mut s.explain.chat;
         chat.abort();
         if chat.turns.last().is_some_and(|t| t.role == ChatRole::User) {
@@ -1231,6 +1257,7 @@ pub fn send_chat(this: &SharedRef, ctx: &egui::Context, question: &str) -> bool 
             context: clip_context(&sel.context, &sel.text, MAX_CONTEXT_CHARS),
             text: sel.text,
             explanation,
+            style,
             messages: recent_chat_messages(&chat.turns).to_vec(),
         };
         (req, chat.seq, signal)
@@ -1811,6 +1838,7 @@ pub fn preview_feedback(this: &SharedRef, ctx: &egui::Context) {
             body: f.body.clone(),
             include_context: f.include_context,
             context,
+            rewrite: f.rewrite,
         }
     };
     ctx.request_repaint();
@@ -1827,6 +1855,12 @@ pub fn preview_feedback(this: &SharedRef, ctx: &egui::Context) {
             Ok(p) => {
                 f.title = p.title.clone();
                 f.labels = p.labels.clone();
+                // 整えた文章を送る内容にし、書いたままの文章は戻せるように残す
+                f.original_body = draft.body;
+                f.use_original = false;
+                if p.rewritten {
+                    f.body = p.body.clone();
+                }
                 f.stage = FeedbackStage::Review(p);
             }
             Err(e) => {
@@ -1867,6 +1901,7 @@ pub fn submit_feedback(this: &SharedRef, ctx: &egui::Context) {
                     // 送れたら（保存できたら）書いた内容は消す
                     f.title.clear();
                     f.body.clear();
+                    f.original_body.clear();
                     f.labels.clear();
                     f.stage = FeedbackStage::Done(item);
                 }

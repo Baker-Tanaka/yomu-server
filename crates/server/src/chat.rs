@@ -199,8 +199,9 @@ fn head_within(s: &str, budget: usize) -> String {
 /// 残りに新しいやり取りから順に（質問と回答の組で）入れる。
 /// `knowledge` は添える知識の節（空なら無し）で、指示と同じく必ず入れる。
 fn fit(req: &ChatRequest, knowledge: &str) -> (String, Vec<ChatMessage>) {
-    let fixed = estimate_tokens(&prompts::chat_system_prompt(req.mode, &req.text, "", ""))
-        + estimate_tokens(knowledge);
+    let fixed = estimate_tokens(&prompts::chat_system_prompt(
+        req.mode, req.style, &req.text, "", "",
+    )) + estimate_tokens(knowledge);
     let last = req.messages.len().saturating_sub(1);
     let question = req
         .messages
@@ -247,7 +248,8 @@ fn fit(req: &ChatRequest, knowledge: &str) -> (String, Vec<ChatMessage>) {
             history = previous;
         }
     }
-    let mut system = prompts::chat_system_prompt(req.mode, &req.text, &context, &explanation);
+    let mut system =
+        prompts::chat_system_prompt(req.mode, req.style, &req.text, &context, &explanation);
     system.push_str(knowledge);
     (system, history)
 }
@@ -270,6 +272,7 @@ mod tests {
             text: "We propose a method.".into(),
             context: "Intro. We propose a method. Outro.".into(),
             explanation: "## 文構造\n- 主語: We".into(),
+            style: Default::default(),
             messages,
         }
     }

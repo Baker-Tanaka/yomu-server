@@ -590,6 +590,65 @@ pub fn raise_sheet(min: Sheet) {
     }
 }
 
+thread_local! {
+    static KEYBOARD_OPEN: Cell<bool> = const { Cell::new(false) };
+}
+
+/// これより見えている高さが減ったら、画面のキーボードが出ているとみなす
+const KEYBOARD_MIN_PX: f64 = 120.0;
+
+/// スマホで画面のキーボードが出ているか。
+pub fn keyboard_open() -> bool {
+    KEYBOARD_OPEN.with(Cell::get)
+}
+
+/// キーボードの分だけ隠れた高さ。拡大表示中（ピンチ）やキーボードが無ければ None。
+fn keyboard_inset(inner_h: f64, visible_h: f64, offset_top: f64, scale: f64) -> Option<f64> {
+    let hidden = inner_h - visible_h - offset_top.max(0.0);
+    ((scale - 1.0).abs() < 0.01 && inner_h - visible_h >= KEYBOARD_MIN_PX)
+        .then_some(hidden.max(0.0))
+}
+
+/// スマホでキーボードが出ているあいだ、レイアウト（#layout）の高さを見えている高さにする。
+/// iOS の Safari はキーボードが出ても画面（layout viewport）の高さを変えず、入力欄が見えるよう画面ごとずらすため。
+fn fit_visual_viewport() {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let (Some(vv), Some(layout)) = (
+        window.visual_viewport(),
+        document()
+            .and_then(|d| d.get_element_by_id(LAYOUT_ID))
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok()),
+    ) else {
+        return;
+    };
+    let inner_h = window
+        .inner_height()
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let inset = is_mobile()
+        .then(|| keyboard_inset(inner_h, vv.height(), vv.offset_top(), vv.scale()))
+        .flatten();
+    let open = inset.is_some();
+    let was_open = KEYBOARD_OPEN.with(|c| c.replace(open));
+    if open {
+        let _ = layout
+            .style()
+            .set_property("--app-h", &format!("{:.0}px", vv.height()));
+        // ずらされた画面を戻し、縮めたレイアウトをちょうど見える位置に置く
+        if vv.offset_top() > 0.0 || window.scroll_y().unwrap_or(0.0) > 0.0 {
+            window.scroll_to_with_x_and_y(0.0, 0.0);
+        }
+    } else if was_open {
+        let _ = layout.style().remove_property("--app-h");
+    }
+    if open || was_open {
+        apply_sheet_px(None);
+    }
+}
+
 /// シートの高さを CSS 変数 `--sheet-h` に入れる。`px` が None なら今の状態の高さ。
 fn apply_sheet_px(px: Option<f64>) {
     let Some(layout) = document()
@@ -806,6 +865,16 @@ pub fn init_splitter() -> Result<(), String> {
         .add_event_listener_with_callback("resize", on_resize.as_ref().unchecked_ref())
         .map_err(|_| "resize を購読できません")?;
     on_resize.forget();
+    // スマホでキーボードが出たら、見えている範囲（visualViewport）にレイアウトを縮める
+    // （下端のチャットの入力欄がキーボードに隠れないように）
+    if let Some(vv) = window.visual_viewport() {
+        let on_viewport = Closure::<dyn FnMut()>::new(fit_visual_viewport);
+        for name in ["resize", "scroll"] {
+            vv.add_event_listener_with_callback(name, on_viewport.as_ref().unchecked_ref())
+                .map_err(|_| "visualViewport を購読できません")?;
+        }
+        on_viewport.forget();
+    }
 
     for (name, cb) in [
         ("pointerdown", on_down.as_ref()),

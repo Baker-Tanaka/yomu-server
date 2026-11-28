@@ -59,7 +59,8 @@ GET  /api/words                 … 単語帳の一覧（検索回数・読み�
 POST /api/words                 … 単語帳に自分で登録・編集する（自分で登録した語は自動では消さない）
 POST /api/words/delete          … 選んだ語を単語帳から消す
 POST /api/words/prune           … 検索回数の少ない語から消す（上限 WORD_STORE_MAX を超えたときも自動で同じ順に消す）
-POST /api/explain               … body: { mode: "word" | "sentence" | "formula", text, context, slash? }（slash ならスラッシュリーディングも付ける。formula の text は数式の LaTeX）
+POST /api/explain               … body: { mode: "word" | "sentence" | "formula", text, context, slash?, style? }（slash ならスラッシュリーディングも付ける。formula の text は数式の LaTeX。
+                                   style は "standard"（既定。英語／数式の解説）か "academic"（学術的な解説。利用者が選んだときだけ））
                                    レスポンスは text/event-stream（SSE 形式）で解説を逐次送る
                                    イベント: knowledge / queued / started / token / tags / done / error
                                    （mode=sentence は token で和訳を先に流し、tags（文法タグ）を送ってから残りの解説の token を流す）
@@ -74,6 +75,7 @@ GET  /api/grammar-tags          … 文法タグ一覧・カテゴリ・履歴�
 POST /api/admin/reload-grammar  … 文法タグを読み直す（127.0.0.1 から直接の要求のみ。転送ヘッダー付きは拒否）
 GET  /api/feedback              … 送信先の設定（GitHub）・ラベル定義・送ったフィードバックの一覧
 POST /api/feedback/preview      … 不具合・要望の下書きに LLM がラベル（種類・機能の場所）とタイトルを付け、Issue の本文を組み立てて返す（まだ送らない）
+                                   rewrite なら本文の文章も整える（既定。確認画面で書いたままの文章にも戻せる）
 POST /api/feedback              … 確認した内容を保存し、GitHub が設定されていれば Issue を作る（未設定・失敗なら未送信として残す）
 POST /api/feedback/{id}/retry   … 未送信のフィードバックを送り直す
 GET  /api/health                … サーバーと LLM ランタイムの疎通確認、サーバーのバージョンと Git ハッシュ

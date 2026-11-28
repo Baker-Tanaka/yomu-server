@@ -121,6 +121,9 @@ impl PaperReaderApp {
         }) {
             log::error!("直近の単語のメモを使えません: {e}");
         }
+        if let Err(e) = crate::touch_select::init() {
+            log::error!("本文の長押しの選択を使えません: {e}");
+        }
         if let Err(e) = crate::toc::init() {
             log::error!("目次を使えません: {e}");
         }
@@ -302,6 +305,18 @@ impl PaperReaderApp {
             }
             let local_on = s.local.enabled;
             drop(s);
+            if crate::touch_select::is_touch_device() {
+                let mut app_select = crate::touch_select::setting();
+                if ui
+                    .checkbox(&mut app_select, "長押しはアプリのメニューだけ出す")
+                    .on_hover_text(
+                        "本文の長押しで単語を選び、ドラッグかつまみで範囲を広げます。端末標準の「コピー・調べる」のメニューは出ません。オフにすると端末標準の選択に戻ります",
+                    )
+                    .changed()
+                {
+                    crate::touch_select::set_setting(app_select);
+                }
+            }
             ui.separator();
             let mut on = local_on;
             if ui

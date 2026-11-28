@@ -126,33 +126,32 @@ fn place() {
         return;
     };
     let style = menu.style();
-    let Some((selection, area)) = dom::selection_rect() else {
+    let Some(((sel_left, sel_top, sel_right, sel_bottom), area)) = dom::selection_rect() else {
         return;
     };
-    let visible = SETTLE_TIMER.get().is_none()
-        && selection.bottom() > area.top()
-        && selection.top() < area.bottom();
+    let visible =
+        SETTLE_TIMER.get().is_none() && sel_bottom > area.top() && sel_top < area.bottom();
     let _ = style.set_property("visibility", if visible { "visible" } else { "hidden" });
 
     let (width, height) = (
         f64::from(menu.offset_width()),
         f64::from(menu.offset_height()),
     );
-    let center = selection.left() + selection.width() / 2.0;
+    let center = (sel_left + sel_right) / 2.0;
     let left = (center - width / 2.0)
         .min(area.right() - EDGE_PX - width)
         .max(area.left() + EDGE_PX);
-    // スマホは選択の上に OS のメニューが出るので、下に出す。PC も下に出し、入らなければ上
+    // 標準の選択では、スマホは選択の上に OS のメニューが出るので、下に出す。PC も下に出し、入らなければ上
     let gap = if dom::is_mobile() {
         GAP_BELOW_TOUCH_PX
     } else {
         GAP_BELOW_PX
     };
-    let below = selection.bottom() + gap;
+    let below = sel_bottom + gap;
     let top = if below + height <= area.bottom() - EDGE_PX {
         below
     } else {
-        (selection.top() - GAP_ABOVE_PX - height).max(area.top() + EDGE_PX)
+        (sel_top - GAP_ABOVE_PX - height).max(area.top() + EDGE_PX)
     };
     let _ = style.set_property("left", &format!("{left:.0}px"));
     let _ = style.set_property("top", &format!("{top:.0}px"));
@@ -271,7 +270,8 @@ pub fn init(on_action: impl Fn(MenuAction) + 'static) -> Result<(), String> {
         if dom::has_paper_selection() {
             // 範囲を調整している間は追いかける
             cancel_hide();
-            if dom::is_mobile() {
+            // アプリで選ぶとき（touch_select.rs）は、指を離したときに出すので待たない
+            if dom::is_mobile() && crate::touch_select::range().is_none() {
                 settle();
             }
             place();

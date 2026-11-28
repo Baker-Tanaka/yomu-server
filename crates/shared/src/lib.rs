@@ -4,11 +4,13 @@ mod cite;
 mod palette;
 mod pos;
 mod slash;
+mod word;
 
 pub use cite::{cited_arxiv_id, cited_title, title_search_query};
 pub use palette::palette_matches;
 pub use pos::{PartOfSpeech, guess_pos, pos_groups, pos_summary};
 pub use slash::{SlashChunk, SlashReading, parse_slash_reading};
+pub use word::word_at;
 
 use serde::{Deserialize, Serialize};
 

@@ -507,6 +507,21 @@ body.resizing #paper, body.resizing #explain-pane {
     touch-action: manipulation;
   }
   #layout { flex-direction: column; }
+  /* iOS 26 以降は、ステータスバーの下まで本文がスクロールすると上端をぼかす（ホーム画面から開いたとき）。
+     背景色のある固定の要素が上端を覆っていると、ぼかさない。安全領域が 0 の環境では高さも 0 になる。
+     重なり順は本文と脚注より上、選択メニューより下。pointer-events: none は付けない
+     （当たり判定の無い要素は、OS が上端を覆う要素とみなさないおそれがある） */
+  #top-edge {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: env(safe-area-inset-top);
+    background: var(--paper-bg);
+    z-index: 11;
+  }
+  /* 直近の単語の行がいちばん上にあるときは、その行と同じ色にする */
+  body:has(#recent-words:not([hidden])) #top-edge { background: var(--pane-bg); }
   #paper-column {
     flex: 1 1 auto;
     min-height: 0;
@@ -566,6 +581,8 @@ body.resizing #paper, body.resizing #explain-pane {
     min-height: 0;
     padding-bottom: env(safe-area-inset-bottom);
     box-sizing: border-box;
+    /* 「全体」でも、つまみ（26px）が上の安全領域（#top-edge の帯）に入らないようにする */
+    max-height: calc(100% - 26px - env(safe-area-inset-top));
   }
   /* 指を離したら決まった高さまでなめらかに動かす（ドラッグ中は指に追従） */
   body:not(.resizing) #explain-pane {

@@ -1024,11 +1024,27 @@ impl PaperReaderApp {
         }
     }
 
+    /// AI の回答（左寄せの吹き出し）。
     fn answer_view(&mut self, ui: &mut egui::Ui, index: usize, markdown: &str) {
+        let p = theme::palette(ui.ctx());
         let markdown = plain_arrows(markdown);
-        ui.push_id(("chat-answer", index), |ui| {
-            self.markdown_with_math(ui, &markdown);
-        });
+        let max_w = ui.available_width() * ANSWER_BUBBLE_WIDTH;
+        egui::Frame::new()
+            .fill(p.bg)
+            .stroke(egui::Stroke::new(1.0, p.card_stroke))
+            .corner_radius(egui::CornerRadius {
+                nw: 4,
+                ne: 14,
+                sw: 14,
+                se: 14,
+            })
+            .inner_margin(Margin::symmetric(12, 8))
+            .show(ui, |ui| {
+                ui.set_max_width(max_w);
+                ui.push_id(("chat-answer", index), |ui| {
+                    self.markdown_with_math(ui, &markdown);
+                });
+            });
     }
 
     fn paper_card(&mut self, ui: &mut egui::Ui) {
@@ -2268,7 +2284,8 @@ impl eframe::App for PaperReaderApp {
                     }
                     return;
                 }
-                if mobile {
+                // キーボードが出ているあいだは、下のタブを隠して入力欄と会話を広く見せる
+                if mobile && !dom::keyboard_open() {
                     egui::Panel::bottom("bottom-tabs")
                         .show_separator_line(false)
                         .frame(egui::Frame::new().fill(p.bg).inner_margin(Margin {
@@ -2305,27 +2322,15 @@ impl eframe::App for PaperReaderApp {
                     (s.tab, s.selection.is_some() && s.explain.chat.open)
                 };
                 if tab == Tab::Explain && chatting {
-                    // PC では下端に置く。スマホではキーボードに隠れないよう会話の上に置く
-                    let (panel, margin) = if mobile {
-                        (
-                            egui::Panel::top("chat-bar"),
-                            Margin {
-                                bottom: 8,
-                                ..Margin::ZERO
-                            },
-                        )
-                    } else {
-                        (
-                            egui::Panel::bottom("chat-bar"),
-                            Margin {
-                                top: 8,
-                                ..Margin::ZERO
-                            },
-                        )
-                    };
-                    panel
+                    // チャットのアプリと同じく、質問欄は会話の下端に置く
+                    // （スマホでキーボードが出たら、dom.rs がレイアウトを見えている高さに縮める）
+                    egui::Panel::bottom("chat-bar")
                         .show_separator_line(false)
-                        .frame(egui::Frame::new().fill(p.bg).inner_margin(margin))
+                        .frame(egui::Frame::new().fill(p.bg).inner_margin(Margin {
+                            top: 8,
+                            bottom: if mobile { 6 } else { 0 },
+                            ..Margin::ZERO
+                        }))
                         .show(ui, |ui| self.chat_bar(ui));
                 }
                 egui::ScrollArea::vertical()
@@ -3005,16 +3010,30 @@ fn empty_explain(ui: &mut egui::Ui, p: &Palette, has_paper: bool, mobile: bool) 
 }
 
 /// チャットの自分の質問。
+/// 吹き出しの幅の上限（会話の幅に対する割合）
+const QUESTION_BUBBLE_WIDTH: f32 = 0.82;
+const ANSWER_BUBBLE_WIDTH: f32 = 0.94;
+
+/// 自分の質問（右寄せの吹き出し）。
 fn question_bubble(ui: &mut egui::Ui, p: &Palette, text: &str) -> egui::Response {
-    egui::Frame::new()
-        .fill(p.accent_soft)
-        .corner_radius(8)
-        .inner_margin(Margin::symmetric(10, 6))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(text).size(14.5).color(p.strong));
-        })
-        .response
+    let max_w = ui.available_width() * QUESTION_BUBBLE_WIDTH;
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+        egui::Frame::new()
+            .fill(p.accent_soft)
+            .corner_radius(egui::CornerRadius {
+                nw: 14,
+                ne: 4,
+                sw: 14,
+                se: 14,
+            })
+            .inner_margin(Margin::symmetric(12, 8))
+            .show(ui, |ui| {
+                ui.set_max_width(max_w);
+                ui.add(egui::Label::new(RichText::new(text).size(14.5).color(p.strong)).wrap());
+            })
+            .response
+    })
+    .inner
 }
 
 /// 長い選択は、最初と最後の数語だけにする（どこからどこまで選べたかが分かるように）。

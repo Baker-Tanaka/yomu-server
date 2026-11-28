@@ -259,6 +259,12 @@ pub struct Feedback {
     pub include_context: bool,
     /// 確認画面で選んでいるラベル
     pub labels: Vec<String>,
+    /// AI 補完で本文の文章も整える（既定）。false ならラベルとタイトルだけ
+    pub rewrite: bool,
+    /// AI が整える前の、書いたままの本文（確認画面で元に戻す用）
+    pub original_body: String,
+    /// 確認画面で、整えた文章ではなく書いたままの文章を送る
+    pub use_original: bool,
     pub error: Option<String>,
     /// 送信先の設定と、送ったフィードバックの一覧
     pub list: Option<FeedbackListResponse>,
@@ -273,6 +279,9 @@ impl Default for Feedback {
             body: String::new(),
             include_context: true,
             labels: Vec::new(),
+            rewrite: true,
+            original_body: String::new(),
+            use_original: false,
             error: None,
             list: None,
         }
@@ -1694,6 +1703,7 @@ pub fn preview_feedback(this: &SharedRef, ctx: &egui::Context) {
             body: f.body.clone(),
             include_context: f.include_context,
             context,
+            rewrite: f.rewrite,
         }
     };
     ctx.request_repaint();
@@ -1710,6 +1720,12 @@ pub fn preview_feedback(this: &SharedRef, ctx: &egui::Context) {
             Ok(p) => {
                 f.title = p.title.clone();
                 f.labels = p.labels.clone();
+                // 整えた文章を送る内容にし、書いたままの文章は戻せるように残す
+                f.original_body = draft.body;
+                f.use_original = false;
+                if p.rewritten {
+                    f.body = p.body.clone();
+                }
                 f.stage = FeedbackStage::Review(p);
             }
             Err(e) => {
@@ -1750,6 +1766,7 @@ pub fn submit_feedback(this: &SharedRef, ctx: &egui::Context) {
                     // 送れたら（保存できたら）書いた内容は消す
                     f.title.clear();
                     f.body.clear();
+                    f.original_body.clear();
                     f.labels.clear();
                     f.stage = FeedbackStage::Done(item);
                 }

@@ -2563,12 +2563,34 @@ impl PaperReaderApp {
             &mut f.include_context,
             "状況を添付する（開いている論文・選択中のテキスト・ブラウザの種類）",
         );
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("AI 補完").size(12.5).color(p.weak));
+            theme::segmented(
+                ui,
+                &mut f.rewrite,
+                &[(true, "文章も整える"), (false, "ラベルだけ")],
+            );
+        });
+        ui.label(
+            RichText::new(if f.rewrite {
+                "誤字や言い回しを直し、伝わりやすい文章にします。確認画面で元の文章にも戻せます"
+            } else {
+                "書いた文章はそのままで、ラベルとタイトルだけを付けます"
+            })
+            .size(11.5)
+            .color(p.weak),
+        );
         ui.add_space(8.0);
         let can_go = !f.body.trim().is_empty();
+        let go_label = if f.rewrite {
+            "AI で整えて確認 →"
+        } else {
+            "AI でラベルを付けて確認 →"
+        };
         drop(s);
         ui.horizontal(|ui| {
-            if theme::primary_button(ui, "AI でラベルを付けて確認 →", can_go).clicked()
-            {
+            if theme::primary_button(ui, go_label, can_go).clicked() {
                 state::preview_feedback(&self.shared, ctx);
             }
             if theme::subtle_button(ui, "閉じる").clicked() {
@@ -2649,7 +2671,42 @@ impl PaperReaderApp {
             });
         }
         ui.add_space(8.0);
-        ui.label(RichText::new("送られる本文").size(12.5).color(p.weak));
+        let use_original = {
+            let mut s = self.shared.borrow_mut();
+            let f = &mut s.feedback;
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("送られる本文").size(12.5).color(p.weak));
+                if preview.rewritten {
+                    let mut original = f.use_original;
+                    if theme::segmented(
+                        ui,
+                        &mut original,
+                        &[(false, "AI が整えた文章"), (true, "元の文章")],
+                    ) {
+                        f.use_original = original;
+                        f.body = if original {
+                            f.original_body.clone()
+                        } else {
+                            preview.body.clone()
+                        };
+                    }
+                } else if f.rewrite && preview.llm_labeled {
+                    ui.label(
+                        RichText::new(
+                            "文章は書いたままです（AI が直すところは無いと判断しました）",
+                        )
+                        .size(11.5)
+                        .color(p.weak),
+                    );
+                }
+            });
+            preview.rewritten && f.use_original
+        };
+        let issue_body = if use_original {
+            &preview.original_issue_body
+        } else {
+            &preview.issue_body
+        };
         egui::Frame::new()
             .fill(p.bg)
             .corner_radius(egui::CornerRadius::same(8))
@@ -2661,7 +2718,7 @@ impl PaperReaderApp {
                     .max_height(220.0)
                     .show(ui, |ui| {
                         ui.label(
-                            RichText::new(&preview.issue_body)
+                            RichText::new(issue_body)
                                 .monospace()
                                 .size(12.0)
                                 .color(p.text),

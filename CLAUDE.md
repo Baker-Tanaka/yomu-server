@@ -69,6 +69,7 @@ GET  /api/grammar-tags          … 文法タグ一覧・カテゴリ・履歴�
 POST /api/admin/reload-grammar  … 文法タグを読み直す（127.0.0.1 から直接の要求のみ。転送ヘッダー付きは拒否）
 GET  /api/feedback              … 送信先の設定（GitHub）・ラベル定義・送ったフィードバックの一覧
 POST /api/feedback/preview      … 不具合・要望の下書きに LLM がラベル（種類・機能の場所）とタイトルを付け、Issue の本文を組み立てて返す（まだ送らない）
+                                   rewrite なら本文の文章も整える（既定。確認画面で書いたままの文章にも戻せる）
 POST /api/feedback              … 確認した内容を保存し、GitHub が設定されていれば Issue を作る（未設定・失敗なら未送信として残す）
 POST /api/feedback/{id}/retry   … 未送信のフィードバックを送り直す
 GET  /api/health                … サーバーと LLM ランタイムの疎通確認、サーバーのバージョンと Git ハッシュ

@@ -693,6 +693,9 @@ pub struct FeedbackDraft {
     pub include_context: bool,
     #[serde(default)]
     pub context: FeedbackContext,
+    /// true なら、ラベルとタイトルに加えて本文の文章も LLM が整える（web の既定）
+    #[serde(default)]
+    pub rewrite: bool,
 }
 
 /// `POST /api/feedback/preview` の応答。この内容で Issue を作る。
@@ -705,6 +708,15 @@ pub struct FeedbackPreview {
     pub issue_body: String,
     /// ラベルを LLM が付けたか（失敗したら needs-triage だけ）
     pub llm_labeled: bool,
+    /// Issue の本文に使った内容（整えたなら整えた文章、そうでなければ書いたまま）
+    #[serde(default)]
+    pub body: String,
+    /// 本文の文章を LLM が整えたか
+    #[serde(default)]
+    pub rewritten: bool,
+    /// 整えたときの、書いたままの文章で組み立てた Issue の本文（元に戻す用。整えていなければ空）
+    #[serde(default)]
+    pub original_issue_body: String,
 }
 
 /// `POST /api/feedback` の body（プレビューを確認・修正したもの）。

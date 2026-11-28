@@ -60,8 +60,10 @@
     3 語以上でストップワードを含む入力は題名とみなし、まず語句として探して、0 件ならキーワードで探し直します。題名が完全に一致する論文は先頭に出します
   - arXiv API の利用規約に従って問い合わせは 3 秒に 1 回までにし、同じ検索は 10 分間メモリにキャッシュします
 - `GET /api/feedback` → `{ configured, repo, labels: [{ name, color, description, kind }], items: [{ id, created_at, title, labels, status, issue_url, issue_number, error }] }`
-- `POST /api/feedback/preview` body: `{ title, body, include_context, context: { paper_id, paper_title, selection, tab, user_agent } }`
-  → `{ title, labels, issue_body, llm_labeled }`（LLM のラベル付けは同時実行 1 件の枠を使い、20 秒待っても空かなければラベル無し）
+- `POST /api/feedback/preview` body: `{ title, body, include_context, context: { paper_id, paper_title, selection, tab, user_agent }, rewrite? }`
+  → `{ title, labels, issue_body, llm_labeled, body, rewritten, original_issue_body }`（LLM のラベル付けは同時実行 1 件の枠を使い、20 秒待っても空かなければラベル無し）
+  - `rewrite: true`（web の既定）なら、同じ 1 回の問い合わせで本文の文章も整える（意味を変えず、書いていない内容は足さない）。
+    整えたら `rewritten: true`、`body` と `issue_body` は整えた文章、`original_issue_body` は書いたままの文章で組んだ本文（確認画面で戻す用）
 - `POST /api/feedback` body: `{ title, body, labels, include_context, context }` → 保存した 1 件（`status` は `created` か `pending`）
 - `POST /api/feedback/<id>/retry` → 送り直した結果（GitHub 未設定なら 400）
 - `GET /api/grammar-tags` → `{ categories: [string], tags: [{ id, name, category, aliases, hint, guide, count }] }`（count は履歴の英文での出現回数）

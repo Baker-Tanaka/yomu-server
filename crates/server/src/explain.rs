@@ -216,7 +216,7 @@ pub fn key_for(state: &AppState, req: &ExplainRequest) -> String {
     let grammar = match req.mode {
         Mode::Sentence if req.slash => format!("{}+slash", state.grammar().tags_hash),
         Mode::Sentence => state.grammar().tags_hash.clone(),
-        Mode::Word => String::new(),
+        Mode::Word | Mode::Formula => String::new(),
     };
     cache_key(
         &state.config.llm_model,
@@ -352,9 +352,10 @@ async fn generate(
             cfg.llm_disable_thinking,
         )
     };
-    if req.mode == Mode::Word {
+    // 単語と数式は、1 回の生成で解説する
+    if req.mode != Mode::Sentence {
         let b = body(
-            prompts::system_prompt(Mode::Word, false),
+            prompts::system_prompt(req.mode, false),
             prompts::user_message(req, &[], None),
             MAX_TOKENS,
         );

@@ -17,6 +17,8 @@ mod formula;
 #[cfg(target_arch = "wasm32")]
 mod local_llm;
 #[cfg(target_arch = "wasm32")]
+mod math_view;
+#[cfg(target_arch = "wasm32")]
 mod recent;
 #[cfg(target_arch = "wasm32")]
 mod recent_bar;

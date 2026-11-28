@@ -216,7 +216,8 @@ pub fn key_for(state: &AppState, req: &ExplainRequest) -> String {
     let grammar = match req.mode {
         Mode::Sentence if req.slash => format!("{}+slash", state.grammar().tags_hash),
         Mode::Sentence => state.grammar().tags_hash.clone(),
-        Mode::Word | Mode::Formula => String::new(),
+        Mode::Word => String::new(),
+        Mode::Formula => prompts::FORMULA_PROMPT.to_string(),
     };
     cache_key(
         &state.config.llm_model,

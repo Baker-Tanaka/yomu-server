@@ -13,6 +13,8 @@ mod commands;
 #[cfg(target_arch = "wasm32")]
 mod dom;
 #[cfg(target_arch = "wasm32")]
+mod formula;
+#[cfg(target_arch = "wasm32")]
 mod local_llm;
 #[cfg(target_arch = "wasm32")]
 mod recent;

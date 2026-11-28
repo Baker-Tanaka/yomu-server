@@ -370,6 +370,14 @@ body.resizing #paper, body.resizing #explain-pane {
 #paper .ltx_eqn_center_padleft, #paper .ltx_eqn_center_padright { width: 50%; }
 #paper .ltx_tag_equation { font-size: 0.9em; color: var(--muted); }
 #paper annotation, #paper annotation-xml { display: none; }
+/* 数式はタップ（クリック）で選んで解説できる */
+#paper math, #paper .ltx_equation, #paper .ltx_equationgroup { cursor: pointer; }
+#paper .pr-formula {
+  background: var(--accent-soft);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
 
 /* LaTeXML の脚注・著者注はホバー時だけ表示 */
 #paper .ltx_note { position: relative; }
@@ -762,7 +770,7 @@ body.resizing #paper, body.resizing #explain-pane {
   -webkit-user-select: none;
   animation: pop-in 0.12s ease-out;
 }
-#selection-menu[hidden] { display: none; }
+#selection-menu[hidden], #selection-menu button[hidden] { display: none; }
 #selection-menu button {
   font: inherit;
   font-size: 13px;

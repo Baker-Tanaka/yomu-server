@@ -1,5 +1,6 @@
 //! egui の解説 UI。
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use paper_reader_shared::{
     MAX_CHAT_QUESTION_CHARS, MAX_FEEDBACK_BODY_CHARS, MAX_FEEDBACK_TITLE_CHARS, Mode,
     ReadLaterItem, ReadLaterPut, SLASH_READING_HEADING, SearchItem, SearchSort, TagGuide,
     WordSource, build_version_label, paper_url_from_input, parse_slash_reading, plain_arrows,
-    pos_groups, pos_summary, version_label, without_section,
+    pos_groups, pos_summary, readable_math, tex_to_text, version_label, without_section,
 };
 
 use crate::dom;
@@ -43,6 +44,12 @@ const CHAT_SUGGESTIONS: [&str; 3] = [
     "もっとやさしく説明して",
     "文法を詳しく説明して",
     "似た構文の例文を出して",
+];
+/// 数式の解説のあとの質問の例
+const FORMULA_CHAT_SUGGESTIONS: [&str; 3] = [
+    "もっとやさしく説明して",
+    "具体的な数値の例で説明して",
+    "この式がなぜ必要なのか教えて",
 ];
 /// 論文を開く前の画面に出す「後で読む」の件数
 const READ_LATER_PREVIEW: usize = 3;
@@ -601,14 +608,15 @@ impl PaperReaderApp {
     /// スマホでシートを下げたまま英文を選んだときの小さな表示。
     /// 範囲を調整している本文を隠さず、解説を始める・開くボタンだけを出す。
     fn sentence_strip(&mut self, ui: &mut egui::Ui, p: &Palette) {
-        let (text, phase) = {
+        let (text, mode, phase) = {
             let s = self.shared.borrow();
             let Some(sel) = &s.selection else {
                 return;
             };
-            (sel.text.clone(), s.explain.phase.clone())
+            (sel.text.clone(), sel.mode, s.explain.phase.clone())
         };
         let status = match &phase {
+            ExplainPhase::Idle if mode == Mode::Formula => "数式を選択中",
             ExplainPhase::Idle => "英文を選択中",
             ExplainPhase::Done => "解説ができました",
             ExplainPhase::Error(_) => "解説できませんでした",
@@ -618,7 +626,7 @@ impl PaperReaderApp {
         egui::Sides::new().shrink_left().truncate().show(
             ui,
             |ui| {
-                theme::chip(ui, "英文", p.sentence, p.sentence_soft);
+                mode_chip(ui, p, mode);
                 if phase.is_running() {
                     ui.spinner();
                 }
@@ -636,7 +644,7 @@ impl PaperReaderApp {
         // 選べている範囲が分かるように、終わりの方を出す
         let resp = ui.add(
             egui::Label::new(
-                RichText::new(selection_ends(&text))
+                RichText::new(selection_ends(&shown_selection(&text, mode)))
                     .size(14.5)
                     .color(p.text),
             )
@@ -830,7 +838,19 @@ impl PaperReaderApp {
                         .color(p.weak),
                 );
                 ui.horizontal_wrapped(|ui| {
-                    for q in CHAT_SUGGESTIONS {
+                    let formula = self
+                        .shared
+                        .borrow()
+                        .explain
+                        .target
+                        .as_ref()
+                        .is_some_and(|(m, _)| *m == Mode::Formula);
+                    let suggestions = if formula {
+                        FORMULA_CHAT_SUGGESTIONS
+                    } else {
+                        CHAT_SUGGESTIONS
+                    };
+                    for q in suggestions {
                         if theme::subtle_button(ui, q).clicked() {
                             state::send_chat(&self.shared, &ctx, q);
                         }
@@ -888,6 +908,7 @@ impl PaperReaderApp {
 
     fn answer_view(&mut self, ui: &mut egui::Ui, index: usize, markdown: &str) {
         let markdown = plain_arrows(markdown);
+        let markdown = readable_math(&markdown, true);
         ui.push_id(("chat-answer", index), |ui| {
             CommonMarkViewer::new().show(ui, &mut self.markdown_cache, &markdown);
         });
@@ -1071,10 +1092,7 @@ impl PaperReaderApp {
         if !dict_first {
             theme::card(ui, |ui| {
                 ui.horizontal(|ui| {
-                    match sel.mode {
-                        Mode::Word => theme::chip(ui, "単語", p.word, p.word_soft),
-                        Mode::Sentence => theme::chip(ui, "英文", p.sentence, p.sentence_soft),
-                    };
+                    mode_chip(ui, &p, sel.mode);
                     ui.label(RichText::new("選択中").size(12.0).color(p.weak));
                     if can_explain {
                         self.explain_button_at_right(ui);
@@ -1086,11 +1104,12 @@ impl PaperReaderApp {
                         ui.label(RichText::new(&sel.text).size(22.0).strong().color(p.strong));
                     }
                     Mode::Sentence => {
-                        let text = RichText::new(&sel.text).size(15.5).color(p.strong);
+                        let shown = readable_math(&sel.text, false);
+                        let text = RichText::new(&*shown).size(15.5).color(p.strong);
                         if mobile {
                             // 長い英文で解説が画面の外に出ないよう、数行にまとめる
                             let mut job = egui::text::LayoutJob::simple(
-                                sel.text.clone(),
+                                shown.clone().into_owned(),
                                 theme::body_font(15.5),
                                 p.strong,
                                 ui.available_width(),
@@ -1100,6 +1119,18 @@ impl PaperReaderApp {
                         } else {
                             ui.label(text);
                         }
+                    }
+                    Mode::Formula => {
+                        // 式の見た目は本文で分かるので、ここには 1 行の文字にしたものを出す
+                        let mut job = egui::text::LayoutJob::simple(
+                            tex_to_text(&sel.text),
+                            theme::body_font(15.5),
+                            p.strong,
+                            ui.available_width(),
+                        );
+                        job.wrap.max_rows = SELECTION_PREVIEW_ROWS;
+                        ui.label(job)
+                            .on_hover_text(format!("元の LaTeX: {}", sel.text));
                     }
                 }
                 context_view(ui, &p, &sel);
@@ -1139,7 +1170,7 @@ impl PaperReaderApp {
             self.chat_card(ui, &p);
         }
 
-        if self.shared.borrow().local.enabled {
+        if sel.mode != Mode::Formula && self.shared.borrow().local.enabled {
             ui.add_space(10.0);
             self.local_llm_card(ui, &p, &sel);
         }
@@ -1261,7 +1292,7 @@ impl PaperReaderApp {
                     ui,
                     match sel.mode {
                         Mode::Word => "端末で訳す",
-                        Mode::Sentence => "端末で和訳",
+                        Mode::Sentence | Mode::Formula => "端末で和訳",
                     },
                     true,
                 )
@@ -1468,11 +1499,25 @@ impl PaperReaderApp {
 
     /// 解説の本文。スラッシュリーディングの節は専用の表示にする（読み替えられない形なら Markdown のまま）。
     fn explanation_view(&mut self, ui: &mut egui::Ui, p: &Palette, markdown: &str, running: bool) {
-        let Some(slash) = parse_slash_reading(markdown, running) else {
-            CommonMarkViewer::new().show(ui, &mut self.markdown_cache, markdown);
+        // 解説に残る `$…$` の数式は、読める文字にして出す
+        let Some(mut slash) = parse_slash_reading(markdown, running) else {
+            CommonMarkViewer::new().show(
+                ui,
+                &mut self.markdown_cache,
+                &readable_math(markdown, true),
+            );
             return;
         };
-        let head = format!("{}{SLASH_READING_HEADING}", slash.before);
+        for chunk in &mut slash.chunks {
+            if chunk.en.contains('$') || chunk.ja.contains('$') {
+                chunk.en = readable_math(&chunk.en, false).into_owned();
+                chunk.ja = readable_math(&chunk.ja, false).into_owned();
+            }
+        }
+        let head = format!(
+            "{}{SLASH_READING_HEADING}",
+            readable_math(slash.before, true)
+        );
         ui.push_id("explain-head", |ui| {
             CommonMarkViewer::new().show(ui, &mut self.markdown_cache, &head);
         });
@@ -1481,7 +1526,11 @@ impl PaperReaderApp {
         ui.add_space(6.0);
         if !slash.after.is_empty() {
             ui.push_id("explain-rest", |ui| {
-                CommonMarkViewer::new().show(ui, &mut self.markdown_cache, slash.after);
+                CommonMarkViewer::new().show(
+                    ui,
+                    &mut self.markdown_cache,
+                    &readable_math(slash.after, true),
+                );
             });
         }
     }
@@ -2067,7 +2116,7 @@ impl eframe::App for PaperReaderApp {
                 {
                     match mode {
                         Mode::Word => self.word_strip(ui, &p),
-                        Mode::Sentence => self.sentence_strip(ui, &p),
+                        Mode::Sentence | Mode::Formula => self.sentence_strip(ui, &p),
                     }
                     return;
                 }
@@ -2638,6 +2687,24 @@ pub(crate) fn notice(ui: &mut egui::Ui, p: &Palette, text: &str) {
         });
 }
 
+/// 選んだ内容を画面に出す形（数式の LaTeX は読める文字にする）。
+fn shown_selection(text: &str, mode: Mode) -> Cow<'_, str> {
+    match mode {
+        Mode::Word => Cow::Borrowed(text),
+        Mode::Sentence => readable_math(text, false),
+        Mode::Formula => Cow::Owned(tex_to_text(text)),
+    }
+}
+
+/// 選択の種類の札。
+fn mode_chip(ui: &mut egui::Ui, p: &Palette, mode: Mode) {
+    match mode {
+        Mode::Word => theme::chip(ui, "単語", p.word, p.word_soft),
+        Mode::Sentence => theme::chip(ui, "英文", p.sentence, p.sentence_soft),
+        Mode::Formula => theme::chip(ui, "数式", p.accent, p.accent_soft),
+    };
+}
+
 /// 選択前の案内。
 fn empty_explain(ui: &mut egui::Ui, p: &Palette, has_paper: bool, mobile: bool) {
     theme::card(ui, |ui| {
@@ -2668,6 +2735,7 @@ fn empty_explain(ui: &mut egui::Ui, p: &Palette, has_paper: bool, mobile: bool) 
             &[
                 ("長押し", "単語 → 辞書の訳と AI の解説"),
                 ("つまみで範囲を広げる", "英文 → 和訳・文構造・文法"),
+                ("数式をタップ", "記号の意味と式の読み解き"),
                 ("解説する", "このパネルのボタンで解説"),
                 ("つまみ", "上下に動かすかタップで、パネルの大きさを変える"),
             ]
@@ -2675,6 +2743,7 @@ fn empty_explain(ui: &mut egui::Ui, p: &Palette, has_paper: bool, mobile: bool) 
             &[
                 ("ダブルクリック", "単語 → 辞書の訳と AI の解説"),
                 ("ドラッグ", "英文 → 和訳・文構造・文法"),
+                ("数式をクリック", "記号の意味と式の読み解き"),
                 ("E", "選択中のテキストを解説"),
                 ("Esc", "選択を解除"),
             ]
@@ -2960,10 +3029,7 @@ fn history_row(ui: &mut egui::Ui, p: &Palette, entry: &HistoryEntry) -> Option<H
     let mut action = None;
     theme::card(ui, |ui| {
         ui.horizontal(|ui| {
-            match entry.mode {
-                Mode::Word => theme::chip(ui, "単語", p.word, p.word_soft),
-                Mode::Sentence => theme::chip(ui, "英文", p.sentence, p.sentence_soft),
-            };
+            mode_chip(ui, p, entry.mode);
             ui.label(
                 RichText::new(format_time(entry.updated_at))
                     .size(12.0)
@@ -2982,8 +3048,9 @@ fn history_row(ui: &mut egui::Ui, p: &Palette, entry: &HistoryEntry) -> Option<H
                 }
             });
         });
-        let preview: String = entry.text.chars().take(160).collect();
-        let preview = if preview.len() < entry.text.len() {
+        let shown = shown_selection(&entry.text, entry.mode);
+        let preview: String = shown.chars().take(160).collect();
+        let preview = if preview.len() < shown.len() {
             format!("{preview}…")
         } else {
             preview
@@ -2991,6 +3058,7 @@ fn history_row(ui: &mut egui::Ui, p: &Palette, entry: &HistoryEntry) -> Option<H
         let text = match entry.mode {
             Mode::Word => RichText::new(preview).size(17.0).strong().color(p.strong),
             Mode::Sentence => RichText::new(preview).size(14.0).color(p.text),
+            Mode::Formula => RichText::new(preview).size(14.0).color(p.text),
         };
         let resp = ui
             .add(egui::Label::new(text).sense(egui::Sense::click()))
@@ -3285,6 +3353,8 @@ fn install_fonts(ctx: &egui::Context) {
     // 既定の欧文フォントの次に置き、和文はこちらで表示する
     if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
         list.insert(1.min(list.len()), NAME.to_owned());
+        // 数式の記号（⟨ ∼ ⊤ など）は、同梱の等幅フォントにだけあるものがある
+        list.push("Hack".to_owned());
     }
     if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
         list.push(NAME.to_owned());

@@ -24,7 +24,7 @@
 - `POST /api/words` body: `{ word, kana, meanings }` → 保存した 1 語（自分で登録。空の項目は変えない。meanings は改行・「、」区切り）
 - `POST /api/words/delete` body: `{ words: [string] }` → `{ deleted, store }`（1,000 語まで）
 - `POST /api/words/prune` body: `{ count }` → `{ deleted, store }`（検索回数の少ない順・同じなら古い順に消す。自分で登録した語は残す）
-- `POST /api/explain` body: `{ mode: "word" | "sentence", text, context, regenerate?, slash? }` → `text/event-stream`
+- `POST /api/explain` body: `{ mode: "word" | "sentence" | "formula", text, context, regenerate?, slash? }`（`formula` の `text` は数式の LaTeX。単語と同じく 1 回の生成で、`tags` は送らない） → `text/event-stream`
   - `slash: true` なら英文の解説の先頭（和訳の次）に「## スラッシュリーディング」を入れる。キャッシュのキーには有無を含めるが、
     片方しか無ければそれを返す（web は設定に合わせて節を隠すか、「付けて解説し直す」を出す）
   - `event: queued`（ほかの解説の生成待ち）→ `event: started` → `event: token`（data は追記する文字列）… → `event: done`

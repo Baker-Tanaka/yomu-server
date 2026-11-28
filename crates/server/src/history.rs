@@ -105,6 +105,7 @@ fn parse_mode(s: &str) -> Option<Mode> {
     match s {
         "word" => Some(Mode::Word),
         "sentence" => Some(Mode::Sentence),
+        "formula" => Some(Mode::Formula),
         _ => None,
     }
 }
@@ -174,6 +175,7 @@ mod tests {
     fn modes() {
         assert_eq!(parse_mode("word"), Some(Mode::Word));
         assert_eq!(parse_mode("sentence"), Some(Mode::Sentence));
+        assert_eq!(parse_mode("formula"), Some(Mode::Formula));
         assert_eq!(parse_mode("x"), None);
     }
 }

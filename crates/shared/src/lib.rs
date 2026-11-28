@@ -1,11 +1,13 @@
 //! server と web の両方で使う API の型。
 
 mod cite;
+mod formula;
 mod palette;
 mod pos;
 mod slash;
 
 pub use cite::{cited_arxiv_id, cited_title, title_search_query};
+pub use formula::{clean_tex, inline_tex, readable_math, speakable, tex_to_text};
 pub use palette::palette_matches;
 pub use pos::{PartOfSpeech, guess_pos, pos_groups, pos_summary};
 pub use slash::{SlashChunk, SlashReading, parse_slash_reading};
@@ -422,6 +424,8 @@ pub fn is_kana_reading(s: &str) -> bool {
 pub enum Mode {
     Word,
     Sentence,
+    /// 数式（`text` は LaTeX）。選び方で決まるので、`detect` はこれを返さない
+    Formula,
 }
 
 impl Mode {
@@ -438,6 +442,7 @@ impl Mode {
         match self {
             Mode::Word => "word",
             Mode::Sentence => "sentence",
+            Mode::Formula => "formula",
         }
     }
 }
@@ -1029,6 +1034,11 @@ mod tests {
         assert_eq!(serde_json::to_string(&Mode::Word).unwrap(), "\"word\"");
         let m: Mode = serde_json::from_str("\"sentence\"").unwrap();
         assert_eq!(m, Mode::Sentence);
+        assert_eq!(
+            serde_json::to_string(&Mode::Formula).unwrap(),
+            "\"formula\""
+        );
+        assert_eq!(Mode::Formula.as_str(), "formula");
     }
 
     fn feed(p: &mut SseParser, chunks: &[&str]) -> Vec<SseEvent> {

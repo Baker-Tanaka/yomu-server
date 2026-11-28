@@ -335,7 +335,8 @@ fn prompt(mode: Mode, text: &str, context: &str) -> (String, String, u32) {
             ),
             40,
         ),
-        Mode::Sentence => (
+        // 小さなモデルには数式を解説させない（画面にボタンを出さない）
+        Mode::Sentence | Mode::Formula => (
             "あなたは翻訳者です。英語論文の一文を、自然で正確な日本語に訳してください。訳文だけを出力してください。".into(),
             format!("英文: {text}"),
             400,

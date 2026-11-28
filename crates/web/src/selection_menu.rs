@@ -116,6 +116,11 @@ pub fn show(text: &str) {
         return;
     };
     set_copy_label(&menu, "コピー");
+    // 数式（LaTeX）は読み上げない
+    if let Ok(Some(button)) = menu.query_selector(&format!("[{ACTION_ATTR}=\"speak\"]")) {
+        let formula = dom::selected_mode() == Some(paper_reader_shared::Mode::Formula);
+        let _ = button.toggle_attribute_with_force("hidden", formula);
+    }
     let _ = menu.remove_attribute("hidden");
     place();
 }
@@ -250,7 +255,7 @@ pub fn init(on_action: impl Fn(MenuAction) + 'static) -> Result<(), String> {
         match action.as_str() {
             "copy" => copy(&text),
             "speak" => {
-                dom::speak(&text);
+                dom::speak(&paper_reader_shared::speakable(&text));
             }
             "explain" => {
                 hide();

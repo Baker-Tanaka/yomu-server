@@ -59,7 +59,12 @@ thread_local! {
     static LAST_RANGE: RefCell<Option<Range>> = const { RefCell::new(None) };
     /// 本文に付けている付箋の印
     static BOOKMARK: RefCell<Option<BookmarkLine>> = const { RefCell::new(None) };
+    /// タップ（クリック）で選んでいる数式の要素と LaTeX
+    static FORMULA: RefCell<Option<(Element, String)>> = const { RefCell::new(None) };
 }
+
+/// タップで選んだ数式に付ける印のクラス
+const FORMULA_CLASS: &str = "pr-formula";
 
 /// 文法項目のハイライトに使う要素のクラス
 const HIGHLIGHT_CLASS: &str = "grammar-hl";
@@ -76,7 +81,42 @@ pub fn selection_rect() -> Option<(DomRect, DomRect)> {
     Some((range.get_bounding_client_rect(), area))
 }
 
+/// 本文の選択。ブラウザの選択が無ければ、タップで選んだ数式。
 fn paper_selection_range() -> Option<Range> {
+    native_selection_range().or_else(formula_range)
+}
+
+fn formula_range() -> Option<Range> {
+    let (el, _) = FORMULA.with(|f| f.borrow().clone())?;
+    if !el.is_connected() {
+        return None;
+    }
+    let range = document()?.create_range().ok()?;
+    range.select_node(&el).ok()?;
+    Some(range)
+}
+
+/// タップで選んだ数式をやめる。選んでいたら true。
+fn clear_formula() -> bool {
+    let Some((el, _)) = FORMULA.with(|f| f.borrow_mut().take()) else {
+        return false;
+    };
+    let _ = el.class_list().remove_1(FORMULA_CLASS);
+    true
+}
+
+fn select_formula(el: Element, tex: String) {
+    clear_formula();
+    let _ = el.class_list().add_1(FORMULA_CLASS);
+    FORMULA.with(|f| *f.borrow_mut() = Some((el, tex)));
+}
+
+/// 最後に通知した選択の種類。
+pub fn selected_mode() -> Option<Mode> {
+    LAST_SELECTION.with(|l| l.borrow().as_ref().map(|s| s.mode))
+}
+
+fn native_selection_range() -> Option<Range> {
     let selection = web_sys::window()?.get_selection().ok()??;
     if selection.is_collapsed() || selection.range_count() == 0 {
         return None;
@@ -91,6 +131,7 @@ pub fn clear_selection() {
     crate::selection_menu::hide();
     LAST_SELECTION.with(|l| *l.borrow_mut() = None);
     LAST_RANGE.with(|r| *r.borrow_mut() = None);
+    clear_formula();
     if let Some(Ok(Some(sel))) = web_sys::window().map(|w| w.get_selection()) {
         let _ = sel.remove_all_ranges();
     }
@@ -100,6 +141,7 @@ pub fn clear_selection() {
 pub fn set_paper_html(html: &str, title: &str) {
     crate::selection_menu::hide();
     crate::cite_peek::close();
+    clear_formula();
     LAST_SELECTION.with(|l| *l.borrow_mut() = None);
     CONTEXT_ELEMENT.with(|c| *c.borrow_mut() = None);
     LAST_RANGE.with(|r| *r.borrow_mut() = None);
@@ -126,44 +168,148 @@ pub fn show_fatal_error(message: &str) {
     }
 }
 
-/// 現在の選択が #paper 内にあれば、その内容を返す。
+/// 現在の選択が #paper 内にあれば、その内容を返す。ブラウザの選択が無ければ、タップで選んだ数式。
 fn capture_selection() -> Option<SelectionInfo> {
     let paper = paper_element()?;
+    let Some(range) = native_selection_range() else {
+        let (el, tex) = FORMULA.with(|f| f.borrow().clone())?;
+        let range = formula_range()?;
+        LAST_RANGE.with(|r| *r.borrow_mut() = Some(range));
+        return Some(formula_info(&el, &paper, tex));
+    };
+    // 本文を選び直したら、タップで選んだ数式はやめる
+    clear_formula();
+    // 表示されていない文字を含めないよう、Range ではなく Selection の文字列を使う
     let selection = web_sys::window()?.get_selection().ok()??;
-    if selection.is_collapsed() || selection.range_count() == 0 {
-        return None;
-    }
-    let range = selection.get_range_at(0).ok()?;
-    let common = range.common_ancestor_container().ok()?;
-    if !paper.contains(Some(&common)) {
-        return None;
-    }
-
-    let text = normalize_whitespace(&String::from(selection.to_string()));
+    let plain = normalize_whitespace(&String::from(selection.to_string()));
+    let start = element_of(&range.start_container().ok()?)?;
+    let (text, mode) = match crate::formula::selected(&range) {
+        Some(crate::formula::Selected::Formula(tex)) => {
+            LAST_RANGE.with(|r| *r.borrow_mut() = Some(range.clone_range()));
+            let math = start.closest("math").ok().flatten().unwrap_or(start);
+            return Some(formula_info(&math, &paper, tex));
+        }
+        Some(crate::formula::Selected::Text(with_tex)) => {
+            let with_tex = normalize_whitespace(&with_tex);
+            match Mode::detect(&with_tex) {
+                // 空白の無いひとまとまり（N-gram の N が数式など）は、見たままの語として辞書を引く
+                Mode::Word => (plain, Mode::Word),
+                mode => (with_tex, mode),
+            }
+        }
+        None => {
+            let mode = Mode::detect(&plain);
+            (plain, mode)
+        }
+    };
     if text.is_empty() {
         return None;
     }
 
     LAST_RANGE.with(|r| *r.borrow_mut() = Some(range.clone_range()));
 
-    let start = range.start_container().ok()?;
-    let context_el = element_of(&start)
-        .and_then(|el| closest_in(&el, &paper, CONTEXT_SELECTOR))
-        .or_else(|| {
-            element_of(&start).and_then(|el| closest_in(&el, &paper, FALLBACK_CONTEXT_SELECTOR))
-        });
+    let context_el = context_element(&start, &paper);
     CONTEXT_ELEMENT.with(|c| *c.borrow_mut() = context_el.clone());
     let context = context_el
-        .and_then(|el| el.dyn_into::<HtmlElement>().ok())
-        .map(|el| normalize_whitespace(&el.inner_text()))
-        .filter(|c| !c.is_empty())
+        .and_then(|el| context_text(&el))
         .unwrap_or_else(|| text.clone());
 
     Some(SelectionInfo {
-        mode: Mode::detect(&text),
         text,
         context,
+        mode,
     })
+}
+
+/// 選択を含む段落の要素。
+fn context_element(el: &Element, paper: &Element) -> Option<Element> {
+    closest_in(el, paper, CONTEXT_SELECTOR)
+        .or_else(|| closest_in(el, paper, FALLBACK_CONTEXT_SELECTOR))
+}
+
+/// 段落の文字列（数式は `$…$` の LaTeX）。空なら None。
+fn context_text(el: &Element) -> Option<String> {
+    let text = crate::formula::element_text(el)
+        .or_else(|| el.dyn_ref::<HtmlElement>().map(HtmlElement::inner_text))?;
+    Some(normalize_whitespace(&text)).filter(|t| !t.is_empty())
+}
+
+/// 数式の解説に渡す内容。記号の定義は式の前後に書かれることが多いので、
+/// 別の行の数式は段落（LaTeXML の `.ltx_para`）と、その前後の段落を文脈にする。
+fn formula_info(el: &Element, paper: &Element, tex: String) -> SelectionInfo {
+    let block = el
+        .closest(".ltx_equationgroup, .ltx_equation, math[display=\"block\"]")
+        .ok()
+        .flatten()
+        .is_some();
+    let para = block.then(|| closest_in(el, paper, ".ltx_para")).flatten();
+    let (context_el, context) = match para {
+        Some(para) => {
+            let around = [
+                para.previous_element_sibling(),
+                Some(para.clone()),
+                para.next_element_sibling(),
+            ];
+            let text = around
+                .into_iter()
+                .flatten()
+                .filter(|e| e.class_list().contains("ltx_para"))
+                .filter_map(|e| context_text(&e))
+                .collect::<Vec<_>>()
+                .join(" ");
+            (Some(para), text)
+        }
+        None => {
+            // 数式の中の要素は段落とみなさない（表の数式は td が最も近くなるので、親の段落を探す）
+            let found =
+                closest_in(el, paper, "p, li, figcaption").or_else(|| context_element(el, paper));
+            let text = found.as_ref().and_then(context_text).unwrap_or_default();
+            (found, text)
+        }
+    };
+    CONTEXT_ELEMENT.with(|c| *c.borrow_mut() = context_el);
+    SelectionInfo {
+        context: if context.is_empty() {
+            tex.clone()
+        } else {
+            context
+        },
+        text: tex,
+        mode: Mode::Formula,
+    }
+}
+
+/// 本文の数式を押したら、式の全体を選ぶ。ほかの場所を押したらやめる。
+/// ドラッグで文を選んだときと、リンクを押したときは何もしない。
+fn watch_formula_taps(paper: &Element, commit: Rc<dyn Fn()>) -> Result<(), String> {
+    let on_click = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+        if native_selection_range().is_some() {
+            return;
+        }
+        let formula = ev
+            .target()
+            .and_then(|t| t.dyn_into::<Element>().ok())
+            .filter(|el| el.closest("a, button").ok().flatten().is_none())
+            .and_then(|el| crate::formula::at(&el));
+        match formula {
+            Some((el, tex)) => {
+                select_formula(el, tex.clone());
+                commit();
+                crate::selection_menu::show(&tex);
+            }
+            None => {
+                if clear_formula() {
+                    LAST_SELECTION.with(|l| *l.borrow_mut() = None);
+                    crate::selection_menu::hide();
+                }
+            }
+        }
+    });
+    paper
+        .add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref())
+        .map_err(|_| "click を購読できません")?;
+    on_click.forget();
+    Ok(())
 }
 
 /// テキストノードなら親要素、要素ならそのもの。
@@ -208,6 +354,8 @@ pub fn watch_selection(on_select: impl Fn(SelectionInfo) + 'static) -> Result<()
             on_select(info);
         }
     });
+
+    watch_formula_taps(&paper, commit.clone())?;
 
     let pending: Rc<Cell<Option<i32>>> = Rc::default();
 
